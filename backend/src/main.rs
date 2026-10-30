@@ -65,7 +65,7 @@ async fn import_paamonim(
     let client = paamonim::Client::login(&base, &user, &pass).await.map_err(internal)?;
     let html = client.activity_history_html(&req.from, &req.to).await.map_err(internal)?;
     let lines = paamonim::Client::parse_history(&html);
-    Ok(Json(lines.into_iter().map(|l| format!("{}: {}", l.line_id, l.text)).collect()))
+    Ok(Json(lines.into_iter().map(|l| format!("{}: {} {} {:?} {}", l.line_id, l.date, l.item_name, l.kind, l.amount_shekels)).collect()))
 }
 
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
