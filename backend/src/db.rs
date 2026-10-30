@@ -34,7 +34,10 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
         .prepare("SELECT 1 FROM pragma_table_info('categories') WHERE name = 'parent_id'")?
         .exists([])?;
     if !has_parent {
-        conn.execute("ALTER TABLE categories ADD COLUMN parent_id INTEGER REFERENCES categories(id)", [])?;
+        conn.execute(
+            "ALTER TABLE categories ADD COLUMN parent_id INTEGER REFERENCES categories(id)",
+            [],
+        )?;
     }
     Ok(conn)
 }

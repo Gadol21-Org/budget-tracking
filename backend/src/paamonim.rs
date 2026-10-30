@@ -113,11 +113,11 @@ impl Client {
     pub async fn activity_history_html(&self, from: &str, to: &str) -> Result<String> {
         // Same request as the recorded probe, which Paamonim answered with 200. An extra
         // `Accept: application/json` header made it respond with HTTP 500.
-        self.fragment("/rishumit/activity_history", &[("start_date", from), ("end_date", to)]).await
-    }
-
-    pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
-        parse_history(html)
+        self.fragment(
+            "/rishumit/activity_history",
+            &[("start_date", from), ("end_date", to)],
+        )
+        .await
     }
 
     /// Mirror a line to Paamonim. `amount_shekels` must already be rounded.
@@ -131,21 +131,21 @@ impl Client {
             .error_for_status()?;
         Ok(())
     }
-
-    pub async fn delete_history_line(&self, line_id: &str) -> Result<()> {
-        self.http
-            .post(format!("{}/rishumit/delete_history_line", self.base))
-            .header("X-Requested-With", "XMLHttpRequest")
-            .form(&[("line_id", line_id)])
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
 }
 
 const HEBREW_MONTHS: [&str; 12] = [
-    "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
+    "ינואר",
+    "פברואר",
+    "מרץ",
+    "אפריל",
+    "מאי",
+    "יוני",
+    "יולי",
+    "אוגוסט",
+    "ספטמבר",
+    "אוקטובר",
+    "נובמבר",
+    "דצמבר",
 ];
 
 fn squash(s: &str) -> String {
@@ -167,7 +167,10 @@ fn parse_date_row(text: &str) -> Option<NaiveDate> {
 
 /// Parses `1,234` (whole shekels).
 fn parse_amount(text: &str) -> Option<i64> {
-    let digits: String = text.chars().filter(|c| !c.is_whitespace() && *c != ',').collect();
+    let digits: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != ',')
+        .collect();
     digits.parse().ok()
 }
 
@@ -182,14 +185,26 @@ pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
     let mut date = None;
     let mut out = Vec::new();
     for row in doc.select(&rows) {
-        if row.value().has_class("date-row", scraper::CaseSensitivity::CaseSensitive) {
+        if row
+            .value()
+            .has_class("date-row", scraper::CaseSensitivity::CaseSensitive)
+        {
             date = parse_date_row(&squash(&row.text().collect::<String>()));
             continue;
         }
-        let (Some(date), Some(line_id)) = (date, row.value().attr("line_id")) else { continue };
-        let Some(amount_el) = row.select(&amount_sel).next() else { continue };
-        let Some(amount_shekels) = parse_amount(&amount_el.text().collect::<String>()) else { continue };
-        let kind = if amount_el.value().has_class("budgetPlus", scraper::CaseSensitivity::CaseSensitive) {
+        let (Some(date), Some(line_id)) = (date, row.value().attr("line_id")) else {
+            continue;
+        };
+        let Some(amount_el) = row.select(&amount_sel).next() else {
+            continue;
+        };
+        let Some(amount_shekels) = parse_amount(&amount_el.text().collect::<String>()) else {
+            continue;
+        };
+        let kind = if amount_el
+            .value()
+            .has_class("budgetPlus", scraper::CaseSensitivity::CaseSensitive)
+        {
             Kind::Income
         } else {
             Kind::Expense
@@ -199,7 +214,13 @@ pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
             .children()
             .filter_map(ElementRef::wrap)
             .next()
-            .map(|d| squash(&d.children().filter_map(|n| n.value().as_text().map(|t| t.to_string())).collect::<String>()))
+            .map(|d| {
+                squash(
+                    &d.children()
+                        .filter_map(|n| n.value().as_text().map(|t| t.to_string()))
+                        .collect::<String>(),
+                )
+            })
             .unwrap_or_default();
         let (mut plain, mut payment) = (Vec::new(), None);
         for small in row.select(&small_sel) {
@@ -250,7 +271,10 @@ pub fn parse_categories(html: &str) -> Vec<Category> {
     doc.select(&sel)
         .filter_map(|o| {
             let id = o.value().attr("value").filter(|v| !v.is_empty())?;
-            Some(Category { id: id.to_string(), name: squash(&o.text().collect::<String>()) })
+            Some(Category {
+                id: id.to_string(),
+                name: squash(&o.text().collect::<String>()),
+            })
         })
         .collect()
 }
@@ -264,7 +288,11 @@ pub fn parse_custom_items(html: &str) -> Vec<CustomItem> {
             Some(CustomItem {
                 item_id: e.value().attr("item_id")?.to_string(),
                 name: squash(&e.text().collect::<String>()),
-                category_id: e.value().attr("budget_category_id").filter(|v| !v.is_empty()).map(String::from),
+                category_id: e
+                    .value()
+                    .attr("budget_category_id")
+                    .filter(|v| !v.is_empty())
+                    .map(String::from),
             })
         })
         .collect()
@@ -272,10 +300,16 @@ pub fn parse_custom_items(html: &str) -> Vec<CustomItem> {
 
 /// Standard items are flat in `get_*_items`, but some are named `<category> - <item>`.
 /// Returns the category and the remaining item name when the prefix is a known category.
-pub fn split_category_prefix<'a>(name: &'a str, categories: &'a [Category]) -> Option<(&'a Category, &'a str)> {
+pub fn split_category_prefix<'a>(
+    name: &'a str,
+    categories: &'a [Category],
+) -> Option<(&'a Category, &'a str)> {
     let (prefix, rest) = name.split_once(" - ")?;
     let prefix = prefix.trim();
-    categories.iter().find(|c| c.name == prefix).map(|c| (c, rest.trim()))
+    categories
+        .iter()
+        .find(|c| c.name == prefix)
+        .map(|c| (c, rest.trim()))
 }
 
 /// Parses `income_items` / `expense_items` HTML into budget items.
@@ -369,7 +403,10 @@ mod tests {
 
     #[test]
     fn date_rows() {
-        assert_eq!(parse_date_row("שבת, 3 בספטמבר 2022"), NaiveDate::from_ymd_opt(2022, 9, 3));
+        assert_eq!(
+            parse_date_row("שבת, 3 בספטמבר 2022"),
+            NaiveDate::from_ymd_opt(2022, 9, 3)
+        );
         assert_eq!(parse_date_row("שבת, 31 בפברואר 2022"), None);
         assert_eq!(parse_date_row("garbage"), None);
     }
@@ -378,7 +415,13 @@ mod tests {
     fn parses_items() {
         let html = r##"<div class="list-group"><a href="#" class="list-group-item rishumitBudgetItem" item_id="12">מזון - סופר
             <span class="glyphicon"></span></a></div>"##;
-        assert_eq!(parse_items(html), vec![BudgetItem { item_id: "12".into(), name: "מזון - סופר".into() }]);
+        assert_eq!(
+            parse_items(html),
+            vec![BudgetItem {
+                item_id: "12".into(),
+                name: "מזון - סופר".into()
+            }]
+        );
     }
 
     /// Sanity check against a real `probe` dump: `PROBE_DIR=probe-out cargo test -- --ignored`.
@@ -395,9 +438,19 @@ mod tests {
         let history_html = html("activity_history");
         let entries = parse_history(&history_html);
         let raw_lines = history_html.matches("line_id=").count();
-        let items: Vec<_> = parse_items(&html("expense_items")).into_iter().chain(parse_items(&html("income_items"))).collect();
-        let unmatched = entries.iter().filter(|e| !items.iter().any(|i| i.name == e.item_name)).count();
-        println!("lines={raw_lines} parsed={} items={} unmatched={unmatched}", entries.len(), items.len());
+        let items: Vec<_> = parse_items(&html("expense_items"))
+            .into_iter()
+            .chain(parse_items(&html("income_items")))
+            .collect();
+        let unmatched = entries
+            .iter()
+            .filter(|e| !items.iter().any(|i| i.name == e.item_name))
+            .count();
+        println!(
+            "lines={raw_lines} parsed={} items={} unmatched={unmatched}",
+            entries.len(),
+            items.len()
+        );
         assert_eq!(raw_lines, entries.len());
         assert_eq!(unmatched, 0);
     }
@@ -409,15 +462,37 @@ mod tests {
             <a href="#" class="list-group-item customItem" item_id="90" budget_category_id="7">דלק</a>
             <a href="#" class="list-group-item customItem" item_id="91">אחר</a>"##;
         let cats = parse_categories(html);
-        assert_eq!(cats, vec![Category { id: "3".into(), name: "מזון".into() }, Category { id: "7".into(), name: "רכב".into() }]);
+        assert_eq!(
+            cats,
+            vec![
+                Category {
+                    id: "3".into(),
+                    name: "מזון".into()
+                },
+                Category {
+                    id: "7".into(),
+                    name: "רכב".into()
+                }
+            ]
+        );
         let items = parse_custom_items(html);
-        assert_eq!(items[0], CustomItem { item_id: "90".into(), name: "דלק".into(), category_id: Some("7".into()) });
+        assert_eq!(
+            items[0],
+            CustomItem {
+                item_id: "90".into(),
+                name: "דלק".into(),
+                category_id: Some("7".into())
+            }
+        );
         assert_eq!(items[1].category_id, None);
     }
 
     #[test]
     fn splits_category_prefix() {
-        let cats = vec![Category { id: "3".into(), name: "מזון".into() }];
+        let cats = vec![Category {
+            id: "3".into(),
+            name: "מזון".into(),
+        }];
         let (c, rest) = split_category_prefix("מזון - סופר", &cats).unwrap();
         assert_eq!((c.id.as_str(), rest), ("3", "סופר"));
         assert!(split_category_prefix("רכב - דלק", &cats).is_none());

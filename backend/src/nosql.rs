@@ -19,7 +19,10 @@ use oracle_nosql_rust_sdk::{
 
 use std::collections::{HashMap, HashSet};
 
-use crate::storage::{Category, ImportBatch, PaymentMethod, PendingMirror, ImportSummary, NewTransaction, Storage, Transaction};
+use crate::storage::{
+    Category, ImportBatch, ImportSummary, NewTransaction, PaymentMethod, PendingMirror, Storage,
+    Transaction,
+};
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
@@ -32,7 +35,10 @@ pub struct NoSqlStorage {
 impl NoSqlStorage {
     pub async fn connect() -> Result<Self> {
         let handle = Handle::builder().from_environment()?.build().await?;
-        let s = Self { handle, seq: AtomicU64::new(0) };
+        let s = Self {
+            handle,
+            seq: AtomicU64::new(0),
+        };
         s.create_tables().await?;
         Ok(s)
     }
@@ -42,7 +48,10 @@ impl NoSqlStorage {
         if let Some(l) = limits {
             req = req.limits(&l);
         }
-        req.execute(&self.handle).await?.wait_for_completion_ms(&self.handle, 30000, 500).await?;
+        req.execute(&self.handle)
+            .await?
+            .wait_for_completion_ms(&self.handle, 30000, 500)
+            .await?;
         Ok(())
     }
 
@@ -67,7 +76,10 @@ impl NoSqlStorage {
 
     /// Time-ordered unique id: milliseconds since epoch in the high bits, a counter below.
     fn next_id(&self) -> i64 {
-        let ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         let n = self.seq.fetch_add(1, Ordering::Relaxed) & 0x3ff;
         ((ms << 10) | n) as i64
     }
@@ -85,7 +97,10 @@ impl NoSqlStorage {
     }
 
     async fn set_sync_state(&self, id: i64, state: &str, line_id: Option<&str>) -> Result<()> {
-        let got = GetRequest::new(TX).key(MapValue::new().i64("id", id)).execute(&self.handle).await?;
+        let got = GetRequest::new(TX)
+            .key(MapValue::new().i64("id", id))
+            .execute(&self.handle)
+            .await?;
         let Some(r) = got.row() else { return Ok(()) };
         let t = tx_from_row(r)?;
         let mut row = MapValue::new()
@@ -100,9 +115,11 @@ impl NoSqlStorage {
         if let Some(p) = t.payment_method_id {
             row = row.i64("payment_method_id", p);
         }
-        match line_id.map(str::to_string).or_else(|| r.get_string("paamonim_line_id")) {
-            Some(l) => row = row.str("paamonim_line_id", &l),
-            None => {}
+        if let Some(l) = line_id
+            .map(str::to_string)
+            .or_else(|| r.get_string("paamonim_line_id"))
+        {
+            row = row.str("paamonim_line_id", &l);
         }
         PutRequest::new(TX).value(row).execute(&self.handle).await?;
         Ok(())
@@ -122,17 +139,28 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
         category_id: r.get_i64("category_id"),
         payment_method_id: r.get_i64("payment_method_id"),
         note: r.get_string("note").unwrap_or_default(),
-        sync_state: r.get_string("sync_state").unwrap_or_else(|| "pending".into()),
+        sync_state: r
+            .get_string("sync_state")
+            .unwrap_or_else(|| "pending".into()),
     })
 }
 
 #[async_trait::async_trait]
 impl Storage for NoSqlStorage {
     async fn list_payment_methods(&self) -> Result<Vec<PaymentMethod>> {
-        let rows = self.query_all(&format!("select * from {LOOKUPS} where kind = 'payment_method'")).await?;
+        let rows = self
+            .query_all(&format!(
+                "select * from {LOOKUPS} where kind = 'payment_method'"
+            ))
+            .await?;
         let mut out: Vec<PaymentMethod> = rows
             .iter()
-            .filter_map(|r| Some(PaymentMethod { id: r.get_i64("id")?, name: r.get_string("name")? }))
+            .filter_map(|r| {
+                Some(PaymentMethod {
+                    id: r.get_i64("id")?,
+                    name: r.get_string("name")?,
+                })
+            })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
@@ -149,7 +177,9 @@ impl Storage for NoSqlStorage {
                 paamonim_of.insert(id, pid);
             }
         }
-        let rows = self.query_all(&format!("select * from {TX} where sync_state = 'pending'")).await?;
+        let rows = self
+            .query_all(&format!("select * from {TX} where sync_state = 'pending'"))
+            .await?;
         let mut out = rows
             .iter()
             .map(|r| {
@@ -160,7 +190,9 @@ impl Storage for NoSqlStorage {
                     amount_agorot: t.amount_agorot,
                     note: t.note,
                     item_key: t.category_id.and_then(|c| paamonim_of.get(&c).cloned()),
-                    payment_key: t.payment_method_id.and_then(|p| paamonim_of.get(&p).cloned()),
+                    payment_key: t
+                        .payment_method_id
+                        .and_then(|p| paamonim_of.get(&p).cloned()),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -177,8 +209,13 @@ impl Storage for NoSqlStorage {
     }
 
     async fn known_line_ids(&self) -> Result<Vec<String>> {
-        let rows = self.query_all(&format!("select paamonim_line_id from {TX}")).await?;
-        Ok(rows.iter().filter_map(|r| r.get_string("paamonim_line_id")).collect())
+        let rows = self
+            .query_all(&format!("select paamonim_line_id from {TX}"))
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.get_string("paamonim_line_id"))
+            .collect())
     }
 
     async fn import_paamonim(&self, batch: &ImportBatch) -> Result<ImportSummary> {
@@ -187,7 +224,11 @@ impl Storage for NoSqlStorage {
         // Existing lookups: (kind, paamonim_id) -> id, so reruns reuse ids.
         let mut ids: HashMap<(String, String), i64> = HashMap::new();
         for r in self.query_all(&format!("select * from {LOOKUPS}")).await? {
-            if let (Some(kind), Some(pid), Some(id)) = (r.get_string("kind"), r.get_string("paamonim_id"), r.get_i64("id")) {
+            if let (Some(kind), Some(pid), Some(id)) = (
+                r.get_string("kind"),
+                r.get_string("paamonim_id"),
+                r.get_i64("id"),
+            ) {
                 ids.insert((kind, pid), id);
             }
         }
@@ -205,7 +246,10 @@ impl Storage for NoSqlStorage {
             if let Some(p) = c.parent_key.as_ref().and_then(|k| cats.get(k)) {
                 row = row.i64("parent_id", *p);
             }
-            PutRequest::new(LOOKUPS).value(row).execute(&self.handle).await?;
+            PutRequest::new(LOOKUPS)
+                .value(row)
+                .execute(&self.handle)
+                .await?;
             sum.categories_added += new as usize;
             cats.insert(c.key.clone(), id);
         }
@@ -220,7 +264,10 @@ impl Storage for NoSqlStorage {
                 .str("name", &p.name)
                 .column("is_income", false)
                 .str("paamonim_id", &p.key);
-            PutRequest::new(LOOKUPS).value(row).execute(&self.handle).await?;
+            PutRequest::new(LOOKUPS)
+                .value(row)
+                .execute(&self.handle)
+                .await?;
             sum.payment_methods_added += new as usize;
             pms.insert(p.key.clone(), id);
         }
@@ -283,10 +330,19 @@ impl Storage for NoSqlStorage {
     }
 
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> Result<()> {
-        let got = GetRequest::new(TX).key(MapValue::new().i64("id", id)).execute(&self.handle).await?;
+        let got = GetRequest::new(TX)
+            .key(MapValue::new().i64("id", id))
+            .execute(&self.handle)
+            .await?;
         let Some(r) = got.row() else { return Ok(()) };
-        let state = r.get_string("sync_state").unwrap_or_else(|| "pending".into());
-        let state = if state == "synced" { "modified".to_string() } else { state };
+        let state = r
+            .get_string("sync_state")
+            .unwrap_or_else(|| "pending".into());
+        let state = if state == "synced" {
+            "modified".to_string()
+        } else {
+            state
+        };
         let mut row = MapValue::new()
             .i64("id", id)
             .str("date", &t.date)
@@ -307,12 +363,16 @@ impl Storage for NoSqlStorage {
     }
 
     async fn delete_transaction(&self, id: i64) -> Result<()> {
-        DeleteRequest::new(TX, MapValue::new().i64("id", id)).execute(&self.handle).await?;
+        DeleteRequest::new(TX, MapValue::new().i64("id", id))
+            .execute(&self.handle)
+            .await?;
         Ok(())
     }
 
     async fn list_categories(&self) -> Result<Vec<Category>> {
-        let rows = self.query_all(&format!("select * from {LOOKUPS} where kind = 'category'")).await?;
+        let rows = self
+            .query_all(&format!("select * from {LOOKUPS} where kind = 'category'"))
+            .await?;
         let mut cats: Vec<Category> = rows
             .iter()
             .filter_map(|r| {
@@ -335,6 +395,9 @@ mod tests {
 
     #[test]
     fn extracts_table_name() {
-        assert_eq!(table_name("create table if not exists lookups (kind string)"), "lookups");
+        assert_eq!(
+            table_name("create table if not exists lookups (kind string)"),
+            "lookups"
+        );
     }
 }

@@ -43,7 +43,9 @@ fn parse_service_account(raw: &str) -> Result<ServiceAccount> {
     let json = if raw.starts_with('{') {
         raw.to_string()
     } else {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(raw).context("service account is neither JSON nor base64")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(raw)
+            .context("service account is neither JSON nor base64")?;
         String::from_utf8(bytes)?
     };
     serde_json::from_str(&json).context("invalid service account JSON")
@@ -58,17 +60,35 @@ async fn access_token(http: &reqwest::Client, sa: &ServiceAccount) -> Result<Str
         iat: u64,
         exp: u64,
     }
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-    let claims = Claims { iss: &sa.client_email, scope: SCOPE, aud: &sa.token_uri, iat: now, exp: now + 3600 };
-    let jwt = jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &EncodingKey::from_rsa_pem(sa.private_key.as_bytes())?)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let claims = Claims {
+        iss: &sa.client_email,
+        scope: SCOPE,
+        aud: &sa.token_uri,
+        iat: now,
+        exp: now + 3600,
+    };
+    let jwt = jsonwebtoken::encode(
+        &Header::new(Algorithm::RS256),
+        &claims,
+        &EncodingKey::from_rsa_pem(sa.private_key.as_bytes())?,
+    )?;
     let resp: Value = http
         .post(&sa.token_uri)
-        .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"), ("assertion", &jwt)])
+        .form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+            ("assertion", &jwt),
+        ])
         .send()
         .await?
         .json()
         .await?;
-    resp["access_token"].as_str().map(str::to_string).ok_or_else(|| anyhow!("token exchange failed: {}", resp["error"]))
+    resp["access_token"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("token exchange failed: {}", resp["error"]))
 }
 
 fn money(agorot: i64) -> f64 {
@@ -89,10 +109,27 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<(Vec<Vec<Value>>, Vec<V
             (c.id, name)
         })
         .collect();
-    let pms: HashMap<i64, String> = storage.list_payment_methods().await?.into_iter().map(|p| (p.id, p.name)).collect();
-    let name = |m: &HashMap<i64, String>, id: Option<i64>| id.and_then(|i| m.get(&i).cloned()).unwrap_or_default();
+    let pms: HashMap<i64, String> = storage
+        .list_payment_methods()
+        .await?
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect();
+    let name = |m: &HashMap<i64, String>, id: Option<i64>| {
+        id.and_then(|i| m.get(&i).cloned()).unwrap_or_default()
+    };
 
-    let mut tx = vec![["Date", "Category", "Payment method", "Amount (ILS)", "Note", "Sync", "Id"].map(Value::from).to_vec()];
+    let mut tx = vec![[
+        "Date",
+        "Category",
+        "Payment method",
+        "Amount (ILS)",
+        "Note",
+        "Sync",
+        "Id",
+    ]
+    .map(Value::from)
+    .to_vec()];
     for t in storage.list_transactions().await? {
         tx.push(vec![
             t.date.into(),
@@ -104,9 +141,16 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<(Vec<Vec<Value>>, Vec<V
             t.id.to_string().into(),
         ]);
     }
-    let mut monthly = vec![["Month", "Category", "Total (ILS)", "Count"].map(Value::from).to_vec()];
+    let mut monthly = vec![["Month", "Category", "Total (ILS)", "Count"]
+        .map(Value::from)
+        .to_vec()];
     for m in storage.monthly_totals().await? {
-        monthly.push(vec![m.month.into(), name(&cats, m.category_id).into(), json!(money(m.total_agorot)), json!(m.count)]);
+        monthly.push(vec![
+            m.month.into(),
+            name(&cats, m.category_id).into(),
+            json!(money(m.total_agorot)),
+            json!(m.count),
+        ]);
     }
     Ok((tx, monthly))
 }
@@ -121,7 +165,11 @@ async fn check(resp: reqwest::Response) -> Result<Value> {
 }
 
 pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
-    let sa = parse_service_account(&std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON_B64").or_else(|_| std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON")).context("GOOGLE_SERVICE_ACCOUNT_JSON_B64 not set")?)?;
+    let sa = parse_service_account(
+        &std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
+            .or_else(|_| std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON"))
+            .context("GOOGLE_SERVICE_ACCOUNT_JSON_B64 not set")?,
+    )?;
     let sheet_id = std::env::var("GOOGLE_SHEET_ID").context("GOOGLE_SHEET_ID not set")?;
     let (tx, monthly) = build_tabs(storage).await?;
 
@@ -130,19 +178,44 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
     let base = format!("{SHEETS}/{sheet_id}");
 
     // Create the two tabs if they're missing.
-    let meta = check(http.get(format!("{base}?fields=sheets.properties.title")).bearer_auth(&token).send().await?).await?;
-    let existing: Vec<&str> = meta["sheets"].as_array().into_iter().flatten().filter_map(|s| s["properties"]["title"].as_str()).collect();
+    let meta = check(
+        http.get(format!("{base}?fields=sheets.properties.title"))
+            .bearer_auth(&token)
+            .send()
+            .await?,
+    )
+    .await?;
+    let existing: Vec<&str> = meta["sheets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["properties"]["title"].as_str())
+        .collect();
     let missing: Vec<Value> = ["Transactions", "Monthly"]
         .iter()
         .filter(|t| !existing.contains(t))
         .map(|t| json!({"addSheet": {"properties": {"title": t}}}))
         .collect();
     if !missing.is_empty() {
-        check(http.post(format!("{base}:batchUpdate")).bearer_auth(&token).json(&json!({"requests": missing})).send().await?).await?;
+        check(
+            http.post(format!("{base}:batchUpdate"))
+                .bearer_auth(&token)
+                .json(&json!({"requests": missing}))
+                .send()
+                .await?,
+        )
+        .await?;
     }
 
     for (tab, rows) in [("Transactions", &tx), ("Monthly", &monthly)] {
-        check(http.post(format!("{base}/values/{tab}:clear")).bearer_auth(&token).json(&json!({})).send().await?).await?;
+        check(
+            http.post(format!("{base}/values/{tab}:clear"))
+                .bearer_auth(&token)
+                .json(&json!({}))
+                .send()
+                .await?,
+        )
+        .await?;
         check(
             http.put(format!("{base}/values/{tab}!A1?valueInputOption=RAW"))
                 .bearer_auth(&token)
@@ -152,7 +225,10 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
         )
         .await?;
     }
-    Ok(ExportSummary { transactions: tx.len() - 1, monthly_rows: monthly.len() - 1 })
+    Ok(ExportSummary {
+        transactions: tx.len() - 1,
+        monthly_rows: monthly.len() - 1,
+    })
 }
 
 #[cfg(test)]
@@ -163,15 +239,29 @@ mod tests {
     #[test]
     fn accepts_raw_json_and_base64() {
         let raw = r#"{"client_email":"a@b.iam.gserviceaccount.com","private_key":"k"}"#;
-        assert_eq!(parse_service_account(raw).unwrap().client_email, "a@b.iam.gserviceaccount.com");
+        assert_eq!(
+            parse_service_account(raw).unwrap().client_email,
+            "a@b.iam.gserviceaccount.com"
+        );
         let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
-        assert_eq!(parse_service_account(&b64).unwrap().token_uri, "https://oauth2.googleapis.com/token");
+        assert_eq!(
+            parse_service_account(&b64).unwrap().token_uri,
+            "https://oauth2.googleapis.com/token"
+        );
     }
 
     #[tokio::test]
     async fn tabs_keep_non_round_amounts() {
         let s = SqliteStorage::open(":memory:").unwrap();
-        s.create_transaction(&NewTransaction { date: "2026-10-03".into(), amount_agorot: -1050, category_id: None, payment_method_id: None, note: "x".into() }).await.unwrap();
+        s.create_transaction(&NewTransaction {
+            date: "2026-10-03".into(),
+            amount_agorot: -1050,
+            category_id: None,
+            payment_method_id: None,
+            note: "x".into(),
+        })
+        .await
+        .unwrap();
         let (tx, monthly) = build_tabs(&s).await.unwrap();
         assert_eq!(tx[1][3], json!(-10.5));
         assert_eq!(monthly[1][2], json!(-10.5));

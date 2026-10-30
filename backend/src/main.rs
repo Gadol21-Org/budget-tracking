@@ -3,9 +3,9 @@ mod db;
 mod import;
 mod mirror;
 mod money;
+mod nosql;
 mod paamonim;
 mod sheets;
-mod nosql;
 mod storage;
 
 use std::sync::Arc;
@@ -25,7 +25,9 @@ fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-async fn list_transactions(State(db): State<Db>) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
+async fn list_transactions(
+    State(db): State<Db>,
+) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
     db.list_transactions().await.map(Json).map_err(internal)
 }
 
@@ -59,16 +61,23 @@ async fn update_transaction(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn delete_transaction(State(db): State<Db>, Path(id): Path<i64>) -> Result<StatusCode, (StatusCode, String)> {
+async fn delete_transaction(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
     db.delete_transaction(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_categories(State(db): State<Db>) -> Result<Json<Vec<Category>>, (StatusCode, String)> {
+async fn list_categories(
+    State(db): State<Db>,
+) -> Result<Json<Vec<Category>>, (StatusCode, String)> {
     db.list_categories().await.map(Json).map_err(internal)
 }
 
-async fn monthly_totals(State(db): State<Db>) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
+async fn monthly_totals(
+    State(db): State<Db>,
+) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
     db.monthly_totals().await.map(Json).map_err(internal)
 }
 
@@ -83,26 +92,56 @@ async fn import_paamonim(
     State(db): State<Db>,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<storage::ImportSummary>, (StatusCode, String)> {
-    let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
-    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_USERNAME not set".into()))?;
-    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
-    let client = paamonim::Client::login(&base, &user, &pass).await.map_err(internal)?;
-    import::run(&client, db.as_ref(), &req.from, &req.to).await.map(Json).map_err(|e| {
-        tracing::warn!("paamonim import failed: {e:#}");
-        internal(format!("{e:#}"))
-    })
+    let base =
+        std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
+    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| {
+        (
+            StatusCode::PRECONDITION_FAILED,
+            "PAAMONIM_USERNAME not set".into(),
+        )
+    })?;
+    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| {
+        (
+            StatusCode::PRECONDITION_FAILED,
+            "PAAMONIM_PASSWORD not set".into(),
+        )
+    })?;
+    let client = paamonim::Client::login(&base, &user, &pass)
+        .await
+        .map_err(internal)?;
+    import::run(&client, db.as_ref(), &req.from, &req.to)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            tracing::warn!("paamonim import failed: {e:#}");
+            internal(format!("{e:#}"))
+        })
 }
 
 fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, String)> {
-    let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
-    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_USERNAME not set".into()))?;
-    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
+    let base =
+        std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
+    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| {
+        (
+            StatusCode::PRECONDITION_FAILED,
+            "PAAMONIM_USERNAME not set".into(),
+        )
+    })?;
+    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| {
+        (
+            StatusCode::PRECONDITION_FAILED,
+            "PAAMONIM_PASSWORD not set".into(),
+        )
+    })?;
     Ok((base, user, pass))
 }
 
 /// Writing to Paamonim is opt-in: set PAAMONIM_MIRROR=1.
 fn mirroring_enabled() -> bool {
-    matches!(std::env::var("PAAMONIM_MIRROR").as_deref(), Ok("1") | Ok("true"))
+    matches!(
+        std::env::var("PAAMONIM_MIRROR").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 /// Serialises mirror runs so overlapping triggers can't post the same line twice.
@@ -115,40 +154,71 @@ async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
     mirror::run(&client, db).await
 }
 
-async fn mirror_paamonim(State(db): State<Db>) -> Result<Json<mirror::MirrorSummary>, (StatusCode, String)> {
+async fn mirror_paamonim(
+    State(db): State<Db>,
+) -> Result<Json<mirror::MirrorSummary>, (StatusCode, String)> {
     if !mirroring_enabled() {
-        return Err((StatusCode::PRECONDITION_FAILED, "PAAMONIM_MIRROR is not enabled".into()));
+        return Err((
+            StatusCode::PRECONDITION_FAILED,
+            "PAAMONIM_MIRROR is not enabled".into(),
+        ));
     }
     run_mirror(db.as_ref()).await.map(Json).map_err(internal)
 }
 
-async fn export_sheets(State(db): State<Db>) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
-    sheets::export(db.as_ref()).await.map(Json).map_err(internal)
+async fn export_sheets(
+    State(db): State<Db>,
+) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
+    sheets::export(db.as_ref())
+        .await
+        .map(Json)
+        .map_err(internal)
 }
 
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
 /// importer's parsing can be written against real data. Output contains personal
 /// financial data: keep it out of git (`probe-out/` is ignored).
 async fn probe(out_dir: &str) -> anyhow::Result<()> {
-    let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
+    let base =
+        std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
     let user = std::env::var("PAAMONIM_USERNAME")?;
     let pass = std::env::var("PAAMONIM_PASSWORD")?;
     let client = paamonim::Client::login(&base, &user, &pass).await?;
     std::fs::create_dir_all(out_dir)?;
     let month = chrono::Local::now().format("%Y-%m-01").to_string();
-    let targets: Vec<(&str, &str, Vec<(&str, &str)>)> = vec![
+    type Target<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>);
+    let targets: Vec<Target> = vec![
         ("landing", "/", vec![]),
-        ("data_collection", "/rishumit/data_collection", vec![("month", &month)]),
-        ("month_expense", "/rishumit/month_details_by_type", vec![("data_type", "expense"), ("month", &month)]),
-        ("month_income", "/rishumit/month_details_by_type", vec![("data_type", "income"), ("month", &month)]),
+        (
+            "data_collection",
+            "/rishumit/data_collection",
+            vec![("month", &month)],
+        ),
+        (
+            "month_expense",
+            "/rishumit/month_details_by_type",
+            vec![("data_type", "expense"), ("month", &month)],
+        ),
+        (
+            "month_income",
+            "/rishumit/month_details_by_type",
+            vec![("data_type", "income"), ("month", &month)],
+        ),
         ("income_items", "/rishumit/get_income_items", vec![]),
         ("expense_items", "/rishumit/get_expense_items", vec![]),
         ("payment_methods", "/rishumit/get_payment_methods", vec![]),
-        ("activity_history", "/rishumit/activity_history", vec![("start_date", "2020-01-01"), ("end_date", "2030-01-01")]),
+        (
+            "activity_history",
+            "/rishumit/activity_history",
+            vec![("start_date", "2020-01-01"), ("end_date", "2030-01-01")],
+        ),
     ];
     for (name, path, query) in targets {
         let (status, body) = client.get_raw(path, &query).await?;
-        std::fs::write(format!("{out_dir}/{name}.txt"), format!("HTTP {status}\n{body}"))?;
+        std::fs::write(
+            format!("{out_dir}/{name}.txt"),
+            format!("HTTP {status}\n{body}"),
+        )?;
         println!("{name}: HTTP {status}, {} bytes", body.len());
     }
     Ok(())
@@ -176,7 +246,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Nightly (configurable) snapshot to Google Sheets, only when configured.
     if std::env::var("GOOGLE_SHEET_ID").is_ok() {
-        let hours: u64 = std::env::var("SHEETS_EXPORT_INTERVAL_HOURS").ok().and_then(|h| h.parse().ok()).unwrap_or(24);
+        let hours: u64 = std::env::var("SHEETS_EXPORT_INTERVAL_HOURS")
+            .ok()
+            .and_then(|h| h.parse().ok())
+            .unwrap_or(24);
         let db = db.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(hours * 3600));
@@ -190,8 +263,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = Router::new()
-        .route("/api/transactions", get(list_transactions).post(create_transaction))
-        .route("/api/transactions/:id", delete(delete_transaction).put(update_transaction))
+        .route(
+            "/api/transactions",
+            get(list_transactions).post(create_transaction),
+        )
+        .route(
+            "/api/transactions/:id",
+            delete(delete_transaction).put(update_transaction),
+        )
         .route("/api/categories", get(list_categories))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))

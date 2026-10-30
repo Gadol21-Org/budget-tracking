@@ -16,7 +16,15 @@ fn npm(args: &[&str], dir: &Path) -> bool {
 fn main() {
     println!("cargo:rerun-if-env-changed=SKIP_FRONTEND_BUILD");
     let frontend = Path::new(env!("CARGO_MANIFEST_DIR")).join("../frontend");
-    for p in ["src", "public", "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts"] {
+    for p in [
+        "src",
+        "public",
+        "index.html",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "vite.config.ts",
+    ] {
         println!("cargo:rerun-if-changed={}", frontend.join(p).display());
     }
     // The embedding macro needs the folder to exist even if the build is skipped or fails.

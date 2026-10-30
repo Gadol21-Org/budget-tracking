@@ -33,13 +33,21 @@ pub fn parse_account_ids(html: &str) -> Option<(String, String)> {
     let doc = Html::parse_fragment(html);
     let get = |name: &str| {
         let sel = Selector::parse(&format!("input[name=\"balance_history[{name}]\"]")).unwrap();
-        doc.select(&sel).next().and_then(|e| e.value().attr("value")).map(str::to_string)
+        doc.select(&sel)
+            .next()
+            .and_then(|e| e.value().attr("value"))
+            .map(str::to_string)
     };
     Some((get("family_id")?, get("user_id")?))
 }
 
 /// Query fields for `save_item_line`, in the order the site's form serializes them.
-pub fn save_fields(p: &PendingMirror, item_id: &str, family_id: &str, user_id: &str) -> Option<Vec<(&'static str, String)>> {
+pub fn save_fields(
+    p: &PendingMirror,
+    item_id: &str,
+    family_id: &str,
+    user_id: &str,
+) -> Option<Vec<(&'static str, String)>> {
     let shekels = to_paamonim_shekels(p.amount_agorot.abs());
     if shekels == 0 {
         return None;
@@ -50,7 +58,10 @@ pub fn save_fields(p: &PendingMirror, item_id: &str, family_id: &str, user_id: &
         ("balance_history[amount]", shekels.to_string()),
         ("balance_history[payment_date]", p.date.clone()),
         ("balance_history[remark]", remark),
-        ("balance_history[payment_method_id]", p.payment_key.clone().unwrap_or_default()),
+        (
+            "balance_history[payment_method_id]",
+            p.payment_key.clone().unwrap_or_default(),
+        ),
         ("balance_history[total_payments]", "1".to_string()),
         ("balance_history[family_id]", family_id.to_string()),
         ("balance_history[user_id]", user_id.to_string()),
@@ -60,19 +71,30 @@ pub fn save_fields(p: &PendingMirror, item_id: &str, family_id: &str, user_id: &
 
 async fn history_ids(client: &Client, date: &str) -> Result<HashSet<String>> {
     let html = client.activity_history_html(date, date).await?;
-    Ok(paamonim::parse_history(&html).into_iter().map(|h| h.line_id).collect())
+    Ok(paamonim::parse_history(&html)
+        .into_iter()
+        .map(|h| h.line_id)
+        .collect())
 }
 
 pub async fn run(client: &Client, storage: &dyn Storage) -> Result<MirrorSummary> {
     let mut sum = MirrorSummary::default();
     for p in storage.pending_mirrors().await? {
         // Only Paamonim budget items (`e:<id>` / `i:<id>`) can be written; parent categories can't.
-        let Some(item_id) = p.item_key.as_deref().and_then(|k| k.strip_prefix("e:").or_else(|| k.strip_prefix("i:"))) else {
+        let Some(item_id) = p
+            .item_key
+            .as_deref()
+            .and_then(|k| k.strip_prefix("e:").or_else(|| k.strip_prefix("i:")))
+        else {
             sum.skipped += 1;
             continue;
         };
-        let form = client.fragment("/rishumit/edit_item_line", &[("id", item_id)]).await?;
-        let Some((family, user)) = parse_account_ids(&form) else { bail!("account ids not found in edit form") };
+        let form = client
+            .fragment("/rishumit/edit_item_line", &[("id", item_id)])
+            .await?;
+        let Some((family, user)) = parse_account_ids(&form) else {
+            bail!("account ids not found in edit form")
+        };
         let Some(fields) = save_fields(&p, item_id, &family, &user) else {
             storage.mark_mirror_error(p.id).await?;
             sum.skipped += 1;

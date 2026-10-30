@@ -122,17 +122,31 @@ pub trait Storage: Send + Sync {
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
     async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
-        let mut by_key: std::collections::BTreeMap<(String, Option<i64>), (i64, i64)> = Default::default();
+        let mut by_key: std::collections::BTreeMap<(String, Option<i64>), (i64, i64)> =
+            Default::default();
         for t in self.list_transactions().await? {
-            let e = by_key.entry((t.date[..7].to_string(), t.category_id)).or_default();
+            let e = by_key
+                .entry((t.date[..7].to_string(), t.category_id))
+                .or_default();
             e.0 += t.amount_agorot;
             e.1 += 1;
         }
         let mut totals: Vec<MonthlyTotal> = by_key
             .into_iter()
-            .map(|((month, category_id), (total_agorot, count))| MonthlyTotal { month, category_id, total_agorot, count })
+            .map(
+                |((month, category_id), (total_agorot, count))| MonthlyTotal {
+                    month,
+                    category_id,
+                    total_agorot,
+                    count,
+                },
+            )
             .collect();
-        totals.sort_by(|a, b| b.month.cmp(&a.month).then(a.category_id.cmp(&b.category_id)));
+        totals.sort_by(|a, b| {
+            b.month
+                .cmp(&a.month)
+                .then(a.category_id.cmp(&b.category_id))
+        });
         Ok(totals)
     }
 }
@@ -151,7 +165,12 @@ impl Storage for SqliteStorage {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name FROM payment_methods ORDER BY name")?;
         let rows = stmt
-            .query_map([], |r| Ok(PaymentMethod { id: r.get(0)?, name: r.get(1)? }))?
+            .query_map([], |r| {
+                Ok(PaymentMethod {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                })
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -189,14 +208,21 @@ impl Storage for SqliteStorage {
     }
 
     async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute("UPDATE transactions SET sync_state = 'error' WHERE id = ?1", params![id])?;
+        self.0.lock().unwrap().execute(
+            "UPDATE transactions SET sync_state = 'error' WHERE id = ?1",
+            params![id],
+        )?;
         Ok(())
     }
 
     async fn known_line_ids(&self) -> anyhow::Result<Vec<String>> {
         let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL")?;
-        let ids = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
         Ok(ids)
     }
 
@@ -207,7 +233,11 @@ impl Storage for SqliteStorage {
         let mut cats = std::collections::HashMap::new();
         for c in &batch.categories {
             let existed: Option<i64> = tx
-                .query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))
+                .query_row(
+                    "SELECT id FROM categories WHERE paamonim_item_id = ?1",
+                    params![c.key],
+                    |r| r.get(0),
+                )
                 .ok();
             let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
             tx.execute(
@@ -215,21 +245,33 @@ impl Storage for SqliteStorage {
                  ON CONFLICT(paamonim_item_id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id",
                 params![c.name, c.is_income, c.key, parent],
             )?;
-            let id: i64 = tx.query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))?;
+            let id: i64 = tx.query_row(
+                "SELECT id FROM categories WHERE paamonim_item_id = ?1",
+                params![c.key],
+                |r| r.get(0),
+            )?;
             sum.categories_added += existed.is_none() as usize;
             cats.insert(c.key.clone(), id);
         }
         let mut pms = std::collections::HashMap::new();
         for p in &batch.payment_methods {
             let existed: Option<i64> = tx
-                .query_row("SELECT id FROM payment_methods WHERE paamonim_id = ?1", params![p.key], |r| r.get(0))
+                .query_row(
+                    "SELECT id FROM payment_methods WHERE paamonim_id = ?1",
+                    params![p.key],
+                    |r| r.get(0),
+                )
                 .ok();
             tx.execute(
                 "INSERT INTO payment_methods (name, paamonim_id) VALUES (?1, ?2)
                  ON CONFLICT(paamonim_id) DO UPDATE SET name = excluded.name",
                 params![p.name, p.key],
             )?;
-            let id: i64 = tx.query_row("SELECT id FROM payment_methods WHERE paamonim_id = ?1", params![p.key], |r| r.get(0))?;
+            let id: i64 = tx.query_row(
+                "SELECT id FROM payment_methods WHERE paamonim_id = ?1",
+                params![p.key],
+                |r| r.get(0),
+            )?;
             sum.payment_methods_added += existed.is_none() as usize;
             pms.insert(p.key.clone(), id);
         }
@@ -288,7 +330,13 @@ impl Storage for SqliteStorage {
         tx.execute(
             "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id, note)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![t.date, t.amount_agorot, t.category_id, t.payment_method_id, t.note],
+            params![
+                t.date,
+                t.amount_agorot,
+                t.category_id,
+                t.payment_method_id,
+                t.note
+            ],
         )?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
@@ -306,16 +354,25 @@ impl Storage for SqliteStorage {
     }
 
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        self.0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
         let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, name, is_income, parent_id FROM categories ORDER BY name")?;
+        let mut stmt =
+            conn.prepare("SELECT id, name, is_income, parent_id FROM categories ORDER BY name")?;
         let rows = stmt
             .query_map([], |r| {
-                Ok(Category { id: r.get(0)?, name: r.get(1)?, is_income: r.get::<_, i64>(2)? != 0, parent_id: r.get(3)? })
+                Ok(Category {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    is_income: r.get::<_, i64>(2)? != 0,
+                    parent_id: r.get(3)?,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
@@ -327,19 +384,38 @@ mod tests {
     use super::*;
 
     fn tx(date: &str, amount: i64, cat: Option<i64>) -> NewTransaction {
-        NewTransaction { date: date.into(), amount_agorot: amount, category_id: cat, payment_method_id: None, note: String::new() }
+        NewTransaction {
+            date: date.into(),
+            amount_agorot: amount,
+            category_id: cat,
+            payment_method_id: None,
+            note: String::new(),
+        }
     }
 
     #[tokio::test]
     async fn editing_a_synced_line_flags_it_modified() {
         let s = SqliteStorage::open(":memory:").unwrap();
-        let id = s.create_transaction(&tx("2026-10-03", -1000, None)).await.unwrap();
-        s.update_transaction(id, &tx("2026-10-04", -2000, None)).await.unwrap();
+        let id = s
+            .create_transaction(&tx("2026-10-03", -1000, None))
+            .await
+            .unwrap();
+        s.update_transaction(id, &tx("2026-10-04", -2000, None))
+            .await
+            .unwrap();
         let t = &s.list_transactions().await.unwrap()[0];
-        assert_eq!((t.date.as_str(), t.amount_agorot, t.sync_state.as_str()), ("2026-10-04", -2000, "pending"));
+        assert_eq!(
+            (t.date.as_str(), t.amount_agorot, t.sync_state.as_str()),
+            ("2026-10-04", -2000, "pending")
+        );
         s.mark_mirrored(id, "77").await.unwrap();
-        s.update_transaction(id, &tx("2026-10-05", -2500, None)).await.unwrap();
-        assert_eq!(s.list_transactions().await.unwrap()[0].sync_state, "modified");
+        s.update_transaction(id, &tx("2026-10-05", -2500, None))
+            .await
+            .unwrap();
+        assert_eq!(
+            s.list_transactions().await.unwrap()[0].sync_state,
+            "modified"
+        );
     }
 
     #[tokio::test]
@@ -353,25 +429,48 @@ mod tests {
             payment_key: None,
             note: String::new(),
         };
-        let cat = |key: &str, parent: Option<&str>| ImportCategory { key: key.into(), name: key.into(), is_income: false, parent_key: parent.map(String::from) };
+        let cat = |key: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: key.into(),
+            is_income: false,
+            parent_key: parent.map(String::from),
+        };
         // First run does not know the item yet, so the line has no category.
-        let first = ImportBatch { transactions: vec![line(None)], ..Default::default() };
+        let first = ImportBatch {
+            transactions: vec![line(None)],
+            ..Default::default()
+        };
         s.import_paamonim(&first).await.unwrap();
-        let second = ImportBatch { categories: vec![cat("ce:3", None), cat("e:1", Some("ce:3"))], transactions: vec![line(Some("e:1"))], ..Default::default() };
+        let second = ImportBatch {
+            categories: vec![cat("ce:3", None), cat("e:1", Some("ce:3"))],
+            transactions: vec![line(Some("e:1"))],
+            ..Default::default()
+        };
         s.import_paamonim(&second).await.unwrap();
         let cats = s.list_categories().await.unwrap();
         let child = cats.iter().find(|c| c.name == "e:1").unwrap();
         let parent = cats.iter().find(|c| c.name == "ce:3").unwrap();
         assert_eq!(child.parent_id, Some(parent.id));
-        assert_eq!(s.list_transactions().await.unwrap()[0].category_id, Some(child.id));
+        assert_eq!(
+            s.list_transactions().await.unwrap()[0].category_id,
+            Some(child.id)
+        );
     }
 
     #[tokio::test]
     async fn import_is_idempotent() {
         let s = SqliteStorage::open(":memory:").unwrap();
         let batch = ImportBatch {
-            categories: vec![ImportCategory { key: "e:1".into(), name: "Food".into(), is_income: false, parent_key: None }],
-            payment_methods: vec![ImportPaymentMethod { key: "7".into(), name: "Card".into() }],
+            categories: vec![ImportCategory {
+                key: "e:1".into(),
+                name: "Food".into(),
+                is_income: false,
+                parent_key: None,
+            }],
+            payment_methods: vec![ImportPaymentMethod {
+                key: "7".into(),
+                name: "Card".into(),
+            }],
             transactions: vec![ImportTransaction {
                 line_id: "100".into(),
                 date: "2026-10-03".into(),
@@ -384,7 +483,14 @@ mod tests {
         let first = s.import_paamonim(&batch).await.unwrap();
         assert_eq!((first.categories_added, first.transactions_added), (1, 1));
         let second = s.import_paamonim(&batch).await.unwrap();
-        assert_eq!((second.categories_added, second.transactions_added, second.transactions_skipped), (0, 0, 1));
+        assert_eq!(
+            (
+                second.categories_added,
+                second.transactions_added,
+                second.transactions_skipped
+            ),
+            (0, 0, 1)
+        );
         let totals = s.monthly_totals().await.unwrap();
         assert_eq!((totals[0].total_agorot, totals[0].count), (-12300, 1));
     }
@@ -392,8 +498,13 @@ mod tests {
     #[tokio::test]
     async fn monthly_totals_follow_inserts_and_deletes() {
         let s = SqliteStorage::open(":memory:").unwrap();
-        let a = s.create_transaction(&tx("2026-10-03", 1050, None)).await.unwrap();
-        s.create_transaction(&tx("2026-10-20", 2025, None)).await.unwrap();
+        let a = s
+            .create_transaction(&tx("2026-10-03", 1050, None))
+            .await
+            .unwrap();
+        s.create_transaction(&tx("2026-10-20", 2025, None))
+            .await
+            .unwrap();
         let totals = s.monthly_totals().await.unwrap();
         assert_eq!(totals.len(), 1);
         assert_eq!(totals[0].total_agorot, 3075); // non-round amounts stay exact

@@ -5,8 +5,8 @@ use chrono::{Datelike, NaiveDate};
 
 use crate::money::from_shekels;
 use crate::paamonim::{
-    parse_categories, parse_custom_items, split_category_prefix, BudgetItem, Category as PCategory, Client, CustomItem,
-    HistoryEntry, Kind,
+    parse_categories, parse_custom_items, split_category_prefix, BudgetItem, Category as PCategory,
+    Client, CustomItem, HistoryEntry, Kind,
 };
 use crate::storage::{
     ImportBatch, ImportCategory, ImportPaymentMethod, ImportSummary, ImportTransaction, Storage,
@@ -48,7 +48,12 @@ pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
         let mut ensure_parent = |batch: &mut ImportBatch, c: &PCategory| -> String {
             let key = format!("c{tag}:{}", c.id);
             if parents.insert(key.clone()) {
-                batch.categories.push(ImportCategory { key: key.clone(), name: c.name.clone(), is_income, parent_key: None });
+                batch.categories.push(ImportCategory {
+                    key: key.clone(),
+                    name: c.name.clone(),
+                    is_income,
+                    parent_key: None,
+                });
             }
             key
         };
@@ -60,7 +65,12 @@ pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
             };
             let key = item_key(kind, &it.item_id);
             by_name.insert((kind, it.name.clone()), key.clone());
-            batch.categories.push(ImportCategory { key, name, is_income, parent_key });
+            batch.categories.push(ImportCategory {
+                key,
+                name,
+                is_income,
+                parent_key,
+            });
         }
         for it in custom {
             let parent_key = it
@@ -70,7 +80,12 @@ pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
                 .map(|c| ensure_parent(&mut batch, c));
             let key = item_key(kind, &it.item_id);
             by_name.insert((kind, it.name.clone()), key.clone());
-            batch.categories.push(ImportCategory { key, name: it.name.clone(), is_income, parent_key });
+            batch.categories.push(ImportCategory {
+                key,
+                name: it.name.clone(),
+                is_income,
+                parent_key,
+            });
         }
     }
 
@@ -78,7 +93,10 @@ pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
     for h in history {
         let payment_key = h.payment.as_ref().map(|(id, text)| {
             if seen_pm.insert(id.clone()) {
-                batch.payment_methods.push(ImportPaymentMethod { key: id.clone(), name: text.clone() });
+                batch.payment_methods.push(ImportPaymentMethod {
+                    key: id.clone(),
+                    name: text.clone(),
+                });
             }
             id.clone()
         });
@@ -111,11 +129,17 @@ pub fn year_chunks(from: NaiveDate, to: NaiveDate) -> Vec<(NaiveDate, NaiveDate)
 const EMPTY_YEARS_TO_STOP: usize = 5;
 
 async fn fetch_history(client: &Client, from: &str, to: &str) -> Result<Vec<HistoryEntry>> {
-    let (from, to) = (NaiveDate::parse_from_str(from, "%Y-%m-%d")?, NaiveDate::parse_from_str(to, "%Y-%m-%d")?);
+    let (from, to) = (
+        NaiveDate::parse_from_str(from, "%Y-%m-%d")?,
+        NaiveDate::parse_from_str(to, "%Y-%m-%d")?,
+    );
     let mut all = Vec::new();
     let mut empty_run = 0;
     for (start, end) in year_chunks(from, to) {
-        let (s, e) = (start.format("%Y-%m-%d").to_string(), end.format("%Y-%m-%d").to_string());
+        let (s, e) = (
+            start.format("%Y-%m-%d").to_string(),
+            end.format("%Y-%m-%d").to_string(),
+        );
         let html = client
             .activity_history_html(&s, &e)
             .await
@@ -135,13 +159,27 @@ async fn fetch_history(client: &Client, from: &str, to: &str) -> Result<Vec<Hist
     Ok(all)
 }
 
-pub async fn run(client: &Client, storage: &dyn Storage, from: &str, to: &str) -> Result<ImportSummary> {
-    let expense = crate::paamonim::parse_items(&client.fragment("/rishumit/get_expense_items", &[]).await?);
-    let income = crate::paamonim::parse_items(&client.fragment("/rishumit/get_income_items", &[]).await?);
-    let custom_expense_html = client.fragment("/rishumit/get_custom_items", &[("item_type", "expense")]).await?;
-    let custom_income_html = client.fragment("/rishumit/get_custom_items", &[("item_type", "income")]).await?;
+pub async fn run(
+    client: &Client,
+    storage: &dyn Storage,
+    from: &str,
+    to: &str,
+) -> Result<ImportSummary> {
+    let expense =
+        crate::paamonim::parse_items(&client.fragment("/rishumit/get_expense_items", &[]).await?);
+    let income =
+        crate::paamonim::parse_items(&client.fragment("/rishumit/get_income_items", &[]).await?);
+    let custom_expense_html = client
+        .fragment("/rishumit/get_custom_items", &[("item_type", "expense")])
+        .await?;
+    let custom_income_html = client
+        .fragment("/rishumit/get_custom_items", &[("item_type", "income")])
+        .await?;
     let categories = parse_categories(&custom_expense_html);
-    let (custom_expense, custom_income) = (parse_custom_items(&custom_expense_html), parse_custom_items(&custom_income_html));
+    let (custom_expense, custom_income) = (
+        parse_custom_items(&custom_expense_html),
+        parse_custom_items(&custom_income_html),
+    );
     let history = fetch_history(client, from, to).await?;
     let taxonomy = Taxonomy {
         expense_items: &expense,
@@ -150,7 +188,9 @@ pub async fn run(client: &Client, storage: &dyn Storage, from: &str, to: &str) -
         custom_expense: &custom_expense,
         custom_income: &custom_income,
     };
-    storage.import_paamonim(&build_batch(&taxonomy, &history)).await
+    storage
+        .import_paamonim(&build_batch(&taxonomy, &history))
+        .await
 }
 
 #[cfg(test)]
@@ -161,11 +201,21 @@ mod tests {
     fn year_chunks_are_clipped_and_newest_first() {
         let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
         let chunks = year_chunks(d(2024, 6, 15), d(2026, 10, 30));
-        assert_eq!(chunks, vec![(d(2026, 1, 1), d(2026, 10, 30)), (d(2025, 1, 1), d(2025, 12, 31)), (d(2024, 6, 15), d(2024, 12, 31))]);
+        assert_eq!(
+            chunks,
+            vec![
+                (d(2026, 1, 1), d(2026, 10, 30)),
+                (d(2025, 1, 1), d(2025, 12, 31)),
+                (d(2024, 6, 15), d(2024, 12, 31))
+            ]
+        );
     }
 
     fn item(id: &str, name: &str) -> BudgetItem {
-        BudgetItem { item_id: id.into(), name: name.into() }
+        BudgetItem {
+            item_id: id.into(),
+            name: name.into(),
+        }
     }
 
     fn entry(name: &str, kind: Kind) -> HistoryEntry {
@@ -184,7 +234,13 @@ mod tests {
     #[test]
     fn expenses_are_negative_agorot_and_linked_by_item_name() {
         let items = [item("5", "סופר")];
-        let t = Taxonomy { expense_items: &items, income_items: &[], categories: &[], custom_expense: &[], custom_income: &[] };
+        let t = Taxonomy {
+            expense_items: &items,
+            income_items: &[],
+            categories: &[],
+            custom_expense: &[],
+            custom_income: &[],
+        };
         let b = build_batch(&t, &[entry("סופר", Kind::Expense)]);
         assert_eq!(b.transactions[0].amount_agorot, -12300);
         assert_eq!(b.transactions[0].category_key.as_deref(), Some("e:5"));
@@ -193,11 +249,30 @@ mod tests {
 
     #[test]
     fn prefixed_and_custom_items_get_parents_and_others_stay_top_level() {
-        let cats = [PCategory { id: "3".into(), name: "דיור".into() }];
+        let cats = [PCategory {
+            id: "3".into(),
+            name: "דיור".into(),
+        }];
         let items = [item("1", "דיור - שכירות"), item("2", "סופר")];
-        let custom = [CustomItem { item_id: "90".into(), name: "ארנונה".into(), category_id: Some("3".into()) }];
-        let t = Taxonomy { expense_items: &items, income_items: &[], categories: &cats, custom_expense: &custom, custom_income: &[] };
-        let b = build_batch(&t, &[entry("ארנונה", Kind::Expense), entry("דיור - שכירות", Kind::Expense)]);
+        let custom = [CustomItem {
+            item_id: "90".into(),
+            name: "ארנונה".into(),
+            category_id: Some("3".into()),
+        }];
+        let t = Taxonomy {
+            expense_items: &items,
+            income_items: &[],
+            categories: &cats,
+            custom_expense: &custom,
+            custom_income: &[],
+        };
+        let b = build_batch(
+            &t,
+            &[
+                entry("ארנונה", Kind::Expense),
+                entry("דיור - שכירות", Kind::Expense),
+            ],
+        );
         let get = |k: &str| b.categories.iter().find(|c| c.key == k).unwrap();
         assert_eq!(get("e:1").name, "שכירות");
         assert_eq!(get("e:1").parent_key.as_deref(), Some("ce:3"));
