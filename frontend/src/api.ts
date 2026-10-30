@@ -60,7 +60,7 @@ export interface ImportSummary {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init });
+  const res = await fetch(path, { cache: "no-store", headers: { "Content-Type": "application/json" }, ...init });
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? (undefined as T) : res.json();
 }

@@ -698,6 +698,88 @@ async function load() {
   render();
 }
 
+/** Reload everything without disturbing an open dialog; a failure keeps the data already shown. */
+let refreshing: Promise<boolean> | undefined;
+function refresh(): Promise<boolean> {
+  if (document.querySelector("dialog[open]")) return Promise.resolve(false);
+  refreshing ??= load()
+    .then(() => true)
+    .catch(() => false)
+    .finally(() => (refreshing = undefined));
+  return refreshing;
+}
+
+// An installed PWA is usually resumed from the background, not reloaded, so fetch again whenever it
+// becomes visible (also after a bfcache restore or regained connectivity). Throttled against bursts.
+let lastLoad = Date.now();
+function refreshIfStale() {
+  if (document.visibilityState !== "visible" || Date.now() - lastLoad < 5000) return;
+  lastLoad = Date.now();
+  void refresh();
+}
+document.addEventListener("visibilitychange", refreshIfStale);
+window.addEventListener("pageshow", (e) => e.persisted && refreshIfStale());
+window.addEventListener("online", refreshIfStale);
+
+// iOS Safari ignores user-scalable=no and touch-action for pinch, but still fires these gesture events.
+for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
+
+// Pull to refresh (touch screens only): drag down from the top of the page past the threshold.
+const PULL_THRESHOLD = 70;
+const pullIndicator = el("div", { className: "ptr", textContent: "↓" });
+document.body.append(pullIndicator);
+let pullStart: number | undefined;
+let pullDist = 0;
+function setPull(dist: number, label?: string) {
+  pullIndicator.style.transform = `translateY(${dist - 48}px)`;
+  pullIndicator.style.opacity = String(Math.min(1, dist / PULL_THRESHOLD));
+  pullIndicator.classList.toggle("ready", dist >= PULL_THRESHOLD);
+  pullIndicator.textContent = label ?? (dist >= PULL_THRESHOLD ? "↻" : "↓");
+}
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    pullStart = window.scrollY <= 0 && e.touches.length === 1 && !document.querySelector("dialog[open]") && !refreshing ? e.touches[0].clientY : undefined;
+    pullDist = 0;
+    pullIndicator.classList.remove("settling");
+  },
+  { passive: true },
+);
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (pullStart === undefined) return;
+    const dy = e.touches[0].clientY - pullStart;
+    if (dy <= 0 || window.scrollY > 0) {
+      if (pullDist === 0) pullStart = undefined;
+      return;
+    }
+    e.preventDefault();
+    pullDist = Math.min(dy * 0.5, PULL_THRESHOLD * 1.6);
+    setPull(pullDist);
+  },
+  { passive: false },
+);
+async function endPull() {
+  if (pullStart === undefined) return;
+  const ready = pullDist >= PULL_THRESHOLD;
+  pullStart = undefined;
+  pullIndicator.classList.add("settling");
+  if (!ready) return setPull(0);
+  pullIndicator.classList.add("spin");
+  setPull(PULL_THRESHOLD, "↻");
+  lastLoad = Date.now();
+  const ok = await refresh();
+  pullIndicator.classList.remove("spin");
+  if (!ok) {
+    setPull(PULL_THRESHOLD, "לא ניתן לרענן");
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  setPull(0);
+}
+document.addEventListener("touchend", endPull);
+document.addEventListener("touchcancel", endPull);
+
 root.replaceChildren(el("main", {}, el("div", { className: "empty", textContent: "טוען…" })));
 load().catch((e) => {
   root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));
