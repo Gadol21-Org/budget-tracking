@@ -1,48 +1,44 @@
 # syntax=docker/dockerfile:1
 # The budget tracker: Rust backend with the PWA embedded.
-# The frontend and the Rust build run on the build machine's own architecture and
-# cross-compile when the target differs (an arm64 Oracle VM from an amd64 GitHub runner).
+# Built natively on the target architecture (an arm64 runner for an arm64 Oracle VM),
+# so there is no cross-compiling.
 
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
+FROM node:22-bookworm-slim AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm AS build
-ARG BUILDARCH
-ARG TARGETARCH
+FROM rust:1-bookworm AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libssl-dev pkg-config \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN case "$TARGETARCH" in \
-      amd64) echo x86_64-unknown-linux-gnu > /triple; echo x86-64-linux-gnu > /gnu ;; \
-      arm64) echo aarch64-unknown-linux-gnu > /triple; echo aarch64-linux-gnu > /gnu ;; \
-      *) echo "unsupported architecture $TARGETARCH" >&2; exit 1 ;; \
-    esac \
- && rustup target add "$(cat /triple)" \
- && if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends "gcc-$(cat /gnu | tr _ -)" libc6-dev-"$TARGETARCH"-cross \
-      && rm -rf /var/lib/apt/lists/*; \
-    fi
-COPY . .
-COPY --from=frontend /src/frontend/dist frontend/dist
-# build.rs would run npm; the frontend is already built above. OpenSSL is compiled
-# from source (vendored-openssl) so cross-compiling needs no target libssl.
+# build.rs would run npm; the frontend is built in the stage above.
 ENV SKIP_FRONTEND_BUILD=1
-RUN triple="$(cat /triple)" \
- && if [ "$TARGETARCH" != "$BUILDARCH" ]; then \
-      gcc="$(cat /gnu)-gcc"; \
-      env_triple="$(echo "$triple" | tr a-z- A-Z_)"; \
-      export "CARGO_TARGET_${env_triple}_LINKER=$gcc" "CC_$(echo "$triple" | tr - _)=$gcc"; \
-    fi \
- && cargo build --release --locked --features vendored-openssl --target "$triple" -p budget-backend \
- && mkdir /out && cp "target/$triple/release/budget-backend" /out/
+
+# Build the dependencies against stub sources first, so this layer is reused
+# until Cargo.toml or Cargo.lock change.
+COPY Cargo.toml Cargo.lock ./
+COPY backend/Cargo.toml backend/Cargo.toml
+RUN mkdir backend/src \
+ && echo 'fn main() {}' > backend/src/main.rs \
+ && echo 'fn main() {}' > backend/build.rs \
+ && cargo build --release --locked -p budget-backend \
+ && rm -rf backend/src backend/build.rs
+
+COPY backend backend
+COPY --from=frontend /src/frontend/dist frontend/dist
+# Cargo compares mtimes; make sure the real sources count as newer than the stubs.
+RUN touch backend/src/main.rs backend/build.rs \
+ && cargo build --release --locked -p budget-backend
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/ /usr/local/bin/
+COPY --from=build /src/target/release/budget-backend /usr/local/bin/
 
 # The SQLite file (only used with STORAGE=sqlite) lives in /data, a Docker volume.
 RUN groupadd --gid 10001 app \

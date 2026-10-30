@@ -28,11 +28,3 @@ mime_guess = "2"
 # unification applies "vendored" to the SDK's copy); other platforms use the system one.
 [target.'cfg(windows)'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
-
-# The Docker image cross-compiles for arm64, where there is no target OpenSSL to link,
-# so it builds with `--features vendored-openssl`.
-[target.'cfg(not(windows))'.dependencies]
-openssl = { version = "0.10", optional = true }
-
-[features]
-vendored-openssl = ["openssl/vendored"]

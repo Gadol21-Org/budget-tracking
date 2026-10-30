@@ -40,7 +40,7 @@ The public https address comes from `cloudflared` on the VM, shared with other s
 
 If you already have a VM with Docker and a tunnel, reuse it and skip to 4.
 
-1. Create a compute instance with the **Ubuntu 24.04** image (Always Free `VM.Standard.A1.Flex` arm64, or `VM.Standard.E2.1.Micro` AMD with `DEPLOY_PLATFORM=linux/amd64`). Paste your SSH public key.
+1. Create a compute instance with the **Ubuntu 24.04** image (Always Free `VM.Standard.A1.Flex` arm64, or `VM.Standard.E2.1.Micro` AMD with `BUILD_RUNNER=ubuntu-24.04`). Paste your SSH public key.
 2. Install Docker: `scp deploy/setup-vm.sh ubuntu@<vm-ip>: && ssh ubuntu@<vm-ip> ./setup-vm.sh`, then log out and back in.
 3. Install `cloudflared` as a system service from Cloudflare dashboard > Networks > Tunnels (an existing tunnel can be reused).
 4. Add a **public hostname** to the tunnel, e.g. `budget.example.com`, service HTTP, URL `localhost:8082`.
@@ -58,7 +58,7 @@ In this repo, **Settings > Secrets and variables > Actions**:
 | Secret | `BUDGET_ENV` | The app's `.env`, see below. |
 | Variable | `ORACLE_HOST` | The VM's public IP. Deploys are skipped until it is set. |
 | Variable | `ORACLE_USER` | Optional, default `ubuntu`. |
-| Variable | `DEPLOY_PLATFORM` | Optional, default `linux/arm64`; `linux/amd64` for an AMD VM. |
+| Variable | `BUILD_RUNNER` | Optional, default `ubuntu-24.04-arm` (builds natively for an arm64 VM). Use `ubuntu-24.04` for an AMD VM. |
 
 `BUDGET_ENV` holds one `NAME=value` per line, no quotes:
 
