@@ -286,7 +286,7 @@ function listView(): HTMLElement {
       money(total, total < 0 ? "expense" : "income"),
     );
   }
-  return el("div", {}, monthBar(), header, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
+  return el("div", {}, header, monthBar(), ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
 }
 
 function settingsView(): HTMLElement {
