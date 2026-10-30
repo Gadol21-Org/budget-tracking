@@ -10,7 +10,7 @@ cargo run                        # builds the frontend too, then serves http://1
 `cargo run` runs `npm install` / `npm run build` in `frontend/` via `backend/build.rs` (needs Node.js; set `SKIP_FRONTEND_BUILD=1` to skip). For hot reload while editing the UI: `cd frontend && npm run dev` and open http://localhost:5173 (it proxies `/api` to :3000).
 
 ## Deployment
-`cargo build --release` produces one executable with the web app embedded (debug builds read `frontend/dist` from disk instead). Copy the binary and a `.env`, and run it; no other files are needed.
+`cargo build --release` produces one executable with the web app embedded. Copy the binary and a `.env`, and run it; no other files are needed.
 
 ## Storage
 Oracle's Rust SDK requires OpenSSL. On Linux/macOS the system OpenSSL is used (`apt install libssl-dev pkg-config`). On Windows it is built from source automatically (the `openssl` crate's `vendored` feature, enabled only for Windows targets), which needs the MSVC build tools and [Strawberry Perl](https://strawberryperl.com/) and adds a couple of minutes to the first build.

@@ -1,5 +1,4 @@
-//! The built frontend, embedded in the executable. Release builds contain the files;
-//! debug builds read `frontend/dist` from disk, so a UI rebuild shows up without recompiling.
+//! The built frontend, embedded in the executable (debug builds too: `debug-embed`).
 
 use axum::{
     http::{header, StatusCode, Uri},
