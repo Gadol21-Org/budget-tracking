@@ -447,7 +447,6 @@ async fn main() -> anyhow::Result<()> {
             get(list_categories).post(create_category),
         )
         .route("/api/categories/:id", delete(delete_category))
-        .route("/api/categories", get(list_categories))
         .route("/api/recurring", get(list_recurring).post(create_recurring))
         .route("/api/recurring/occurrences", get(recurring_occurrences))
         .route(
