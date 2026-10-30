@@ -432,6 +432,7 @@ async function load() {
   render();
 }
 
+root.replaceChildren(el("main", {}, el("div", { className: "empty", textContent: "טוען…" })));
 load().catch((e) => {
   root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));
 });

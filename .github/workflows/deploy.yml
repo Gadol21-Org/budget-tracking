@@ -78,7 +78,12 @@ jobs:
           BUDGET_ENV: ${{ secrets.BUDGET_ENV }}
         run: |
           if [ -z "$BUDGET_ENV" ]; then echo "::error::the BUDGET_ENV secret is not set"; exit 1; fi
-          for n in STORAGE ORACLE_NOSQL_AUTH ORACLE_NOSQL_REGION ORACLE_NOSQL_COMPARTMENT_ID; do
+          if printf '%s\n' "$BUDGET_ENV" | grep -q "^STORAGE=mysql"; then
+            required="STORAGE MYSQL_URL"
+          else
+            required="STORAGE ORACLE_NOSQL_AUTH ORACLE_NOSQL_REGION ORACLE_NOSQL_COMPARTMENT_ID"
+          fi
+          for n in $required; do
             if ! printf '%s\n' "$BUDGET_ENV" | grep -q "^$n=."; then
               echo "::error::BUDGET_ENV has no $n= line"; exit 1
             fi

@@ -3,6 +3,7 @@ mod db;
 mod import;
 mod mirror;
 mod money;
+mod mysql;
 mod nosql;
 mod paamonim;
 mod sheets;
@@ -234,14 +235,15 @@ async fn main() -> anyhow::Result<()> {
         return probe(args.get(2).map(String::as_str).unwrap_or("probe-out")).await;
     }
 
-    // STORAGE=sqlite (default, local/tests) | nosql (Oracle NoSQL Cloud or the local Cloud Simulator)
+    // STORAGE=sqlite (default, local/tests) | mysql (MySQL HeatWave or any MySQL 8) | nosql (Oracle NoSQL Cloud or the local Cloud Simulator)
     let db: Db = match std::env::var("STORAGE").as_deref().unwrap_or("sqlite") {
+        "mysql" => Arc::new(mysql::MySqlStorage::connect().await?),
         "nosql" => Arc::new(nosql::NoSqlStorage::connect().await?),
         "sqlite" => {
             let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "budget.db".into());
             Arc::new(SqliteStorage::open(&db_path)?)
         }
-        other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or nosql)"),
+        other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite, mysql or nosql)"),
     };
 
     // Nightly (configurable) snapshot to Google Sheets, only when configured.

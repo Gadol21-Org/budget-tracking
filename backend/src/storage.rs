@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Transaction {
     pub id: i64,
     pub date: String,
@@ -27,13 +27,13 @@ pub struct NewTransaction {
     pub note: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PaymentMethod {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Category {
     pub id: i64,
     pub name: String,
