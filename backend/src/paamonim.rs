@@ -228,6 +228,56 @@ pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
     out
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Category {
+    pub id: String,
+    pub name: String,
+}
+
+/// A user-defined item from `get_custom_items`; the only place an item names its category id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomItem {
+    pub item_id: String,
+    pub name: String,
+    pub category_id: Option<String>,
+}
+
+/// Parses the category `<select name="budget_category">` embedded in the `get_custom_items`
+/// response (identical for `item_type=expense` and `income`). The list is flat.
+pub fn parse_categories(html: &str) -> Vec<Category> {
+    let doc = Html::parse_fragment(html);
+    let sel = Selector::parse("select[name=budget_category] option").unwrap();
+    doc.select(&sel)
+        .filter_map(|o| {
+            let id = o.value().attr("value").filter(|v| !v.is_empty())?;
+            Some(Category { id: id.to_string(), name: squash(&o.text().collect::<String>()) })
+        })
+        .collect()
+}
+
+/// Parses the `.customItem` rows of `get_custom_items`.
+pub fn parse_custom_items(html: &str) -> Vec<CustomItem> {
+    let doc = Html::parse_fragment(html);
+    let sel = Selector::parse(".customItem").unwrap();
+    doc.select(&sel)
+        .filter_map(|e| {
+            Some(CustomItem {
+                item_id: e.value().attr("item_id")?.to_string(),
+                name: squash(&e.text().collect::<String>()),
+                category_id: e.value().attr("budget_category_id").filter(|v| !v.is_empty()).map(String::from),
+            })
+        })
+        .collect()
+}
+
+/// Standard items are flat in `get_*_items`, but some are named `<category> - <item>`.
+/// Returns the category and the remaining item name when the prefix is a known category.
+pub fn split_category_prefix<'a>(name: &'a str, categories: &'a [Category]) -> Option<(&'a Category, &'a str)> {
+    let (prefix, rest) = name.split_once(" - ")?;
+    let prefix = prefix.trim();
+    categories.iter().find(|c| c.name == prefix).map(|c| (c, rest.trim()))
+}
+
 /// Parses `income_items` / `expense_items` HTML into budget items.
 pub fn parse_items(html: &str) -> Vec<BudgetItem> {
     let doc = Html::parse_fragment(html);
@@ -350,5 +400,27 @@ mod tests {
         println!("lines={raw_lines} parsed={} items={} unmatched={unmatched}", entries.len(), items.len());
         assert_eq!(raw_lines, entries.len());
         assert_eq!(unmatched, 0);
+    }
+
+    #[test]
+    fn parses_categories_and_custom_items() {
+        let html = r##"<div class="budgetCategoriesToCut"><select name="budget_category" id="budget_category">
+            <option value="" label=" "></option><option value="3">מזון</option><option value="7">רכב</option></select></div>
+            <a href="#" class="list-group-item customItem" item_id="90" budget_category_id="7">דלק</a>
+            <a href="#" class="list-group-item customItem" item_id="91">אחר</a>"##;
+        let cats = parse_categories(html);
+        assert_eq!(cats, vec![Category { id: "3".into(), name: "מזון".into() }, Category { id: "7".into(), name: "רכב".into() }]);
+        let items = parse_custom_items(html);
+        assert_eq!(items[0], CustomItem { item_id: "90".into(), name: "דלק".into(), category_id: Some("7".into()) });
+        assert_eq!(items[1].category_id, None);
+    }
+
+    #[test]
+    fn splits_category_prefix() {
+        let cats = vec![Category { id: "3".into(), name: "מזון".into() }];
+        let (c, rest) = split_category_prefix("מזון - סופר", &cats).unwrap();
+        assert_eq!((c.id.as_str(), rest), ("3", "סופר"));
+        assert!(split_category_prefix("רכב - דלק", &cats).is_none());
+        assert!(split_category_prefix("סופר", &cats).is_none());
     }
 }
