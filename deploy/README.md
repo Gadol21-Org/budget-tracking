@@ -7,7 +7,7 @@ Every push to `main` runs [`.github/workflows/deploy.yml`](../.github/workflows/
 
 Pull requests build the image without pushing or deploying. Deploy by hand from **Actions > Deploy > Run workflow**. The deploy step is skipped until the `ORACLE_HOST` variable is set.
 
-The data lives in Oracle NoSQL, not on the VM. The container authenticates to it with the VM's **instance principal** (`ORACLE_NOSQL_AUTH=instance`), so there is no API key or OCI config file anywhere. The app's settings come from the `BUDGET_ENV` secret, written to `~/budget-tracking/.env` on the VM before each deploy.
+The data lives in an Oracle **MySQL HeatWave** database (Always Free), not on the VM; the app reaches it over the VCN's private network with `MYSQL_URL` (section A). The older Oracle NoSQL backend is still in the code (`STORAGE=nosql`, see its notes at the end of section A). The app's settings come from the `BUDGET_ENV` secret, written to `~/budget-tracking/.env` on the VM before each deploy.
 
 The public https address comes from `cloudflared` on the VM, shared with other services. The app has **no login of its own**, so put **Cloudflare Access** in front of the hostname before exposing it (step 6).
 
@@ -20,21 +20,30 @@ The public https address comes from `cloudflared` on the VM, shared with other s
 
 ## One-time setup
 
-### A. Oracle NoSQL and IAM (Oracle Cloud console)
+### A. MySQL HeatWave (Oracle Cloud console)
 
-1. **Compartment.** Identity & Security > Compartments > Create compartment, e.g. `budget`, under the root. Copy its OCID (`ocid1.compartment...`) for `ORACLE_NOSQL_COMPARTMENT_ID`. (The root compartment works too, but a dedicated one keeps the policy narrow.)
-2. **Region.** Use your home region (top bar). Always Free NoSQL tables must be created there. Note its identifier, e.g. `il-jerusalem-1`, for `ORACLE_NOSQL_REGION`.
-3. **Tables.** Nothing to create by hand. On startup the app runs `create table if not exists` for `transactions` and `lookups` (10 read units, 10 write units, 1 GB each), leaving one free under the Always Free limit of three. To create them yourself instead: Databases > NoSQL Database > Tables > Create table, in the `budget` compartment, using DDL input with the statements in `backend/src/nosql.rs`, capacity mode provisioned 10/10/1 GB.
-4. **Dynamic group** (Identity & Security > Domains > your domain > Dynamic groups) named `budget-vm`, with this rule (use the instance's OCID, or match the compartment it lives in):
+The database has no public address. It lives in the same virtual network as the VM and only the VM can reach it.
+
+1. **Region and network.** Use your home region (top bar). Note the VCN and the subnet the VM uses (Compute > Instances > your VM > Primary VNIC).
+2. **Create the DB system.** Databases > MySQL > DB Systems > Create DB system. Choose **Always Free** (shape `MySQL.Free`; Always Free needs the home region and gives about 50 GB, no HeatWave cluster). Set an admin username and password. Under Networking pick the **same VCN** as the VM and the same (or any) subnet. Leave "Enable HeatWave cluster" off. Create it and wait until it is Active.
+3. **Copy its private IP** from the DB system's page (Endpoint, e.g. `10.0.1.20`, port 3306).
+4. **Allow the VM to connect.** Networking > Virtual cloud networks > your VCN > the DB system's subnet > Security list (or network security group): add an **ingress rule** with source CIDR of the VM's subnet (e.g. `10.0.0.0/24`), protocol TCP, destination port **3306**. If the VM and database share a subnet, that one rule is enough; otherwise also check the VM subnet's egress allows it (the default allows all egress).
+5. **Create the database and a user** (from the VM, which can reach it):
+   ```bash
+   docker run --rm -it mysql:8 mysql -h 10.0.1.20 -u <admin> -p
    ```
-   ANY {instance.id = 'ocid1.instance.oc1...'}
+   ```sql
+   CREATE DATABASE budget CHARACTER SET utf8mb4;
+   CREATE USER 'budget'@'%' IDENTIFIED BY '<a long password>';
+   GRANT ALL ON budget.* TO 'budget'@'%';
    ```
-5. **Policy** (Identity & Security > Policies, in the root compartment) named `budget-nosql`:
-   ```
-   Allow dynamic-group budget-vm to manage nosql-family in compartment budget
-   ```
-   If the group is in a non-default identity domain, write it as `dynamic-group <domain>/budget-vm`. `manage` is needed because the app creates its tables on startup.
-6. No NoSQL "endpoint" needs exposing: the app talks to the regional service endpoint over the VM's normal outbound internet access. Nothing about the database is opened to the internet.
+   The app creates its tables itself on startup.
+6. Put the connection string in `BUDGET_ENV` (below). Percent-encode special characters in the password (`#` is `%23`, `@` is `%40`).
+
+Nothing about the database is opened to the internet, and no IAM policy is needed.
+
+#### Only if you use `STORAGE=nosql` instead
+Needs a compartment, a dynamic group for the VM and the policy `Allow dynamic-group <group> to manage nosql-family in compartment <name>`, plus `ORACLE_NOSQL_AUTH=instance`, `ORACLE_NOSQL_REGION` and `ORACLE_NOSQL_COMPARTMENT_ID` in `BUDGET_ENV`. Tables are created on startup with 25 read/write units each (the Always Free maximum). Reads scan whole tables, so it is slow.
 
 ### B. VM and tunnel
 
@@ -63,10 +72,8 @@ In this repo, **Settings > Secrets and variables > Actions**:
 `BUDGET_ENV` holds one `NAME=value` per line, no quotes:
 
 ```
-STORAGE=nosql
-ORACLE_NOSQL_AUTH=instance
-ORACLE_NOSQL_REGION=il-jerusalem-1
-ORACLE_NOSQL_COMPARTMENT_ID=ocid1.compartment.oc1..xxxx
+STORAGE=mysql
+MYSQL_URL=mysql://budget:<password>@10.0.1.20:3306/budget
 ```
 
 Add `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` for the nightly Sheets export if you want it. Leave `PAAMONIM_MIRROR` unset (off).
