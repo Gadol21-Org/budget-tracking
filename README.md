@@ -11,6 +11,8 @@ cargo run -p budget-backend      # serves API + built PWA on :3000
 ```
 
 ## Storage
+Oracle NoSQL support is behind the `nosql` cargo feature, because Oracle's Rust SDK requires OpenSSL (no OpenSSL-free option). The default build uses rustls and needs no OpenSSL, so it builds on Windows with just the MSVC build tools. Build the NoSQL version with `cargo run -p budget-backend --features nosql` (on Linux: `apt install libssl-dev pkg-config`; on Windows: install OpenSSL via vcpkg and set `OPENSSL_DIR`).
+
 `STORAGE=sqlite` (default) needs nothing and is used for tests. `STORAGE=nosql` uses Oracle NoSQL; the SDK is configured from `ORACLE_NOSQL_*` variables (see `.env.example`), so the same code runs against:
 - **Local:** the [Oracle NoSQL Cloud Simulator](https://www.oracle.com/downloads/cloud/nosql-cloud-sdk-downloads.html) with `ORACLE_NOSQL_AUTH=cloudsim` and `ORACLE_NOSQL_ENDPOINT=http://localhost:8080`.
 - **Cloud:** `ORACLE_NOSQL_AUTH=user` with an OCI config file, region and compartment.
