@@ -76,7 +76,10 @@ async fn import_paamonim(
     let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_USERNAME not set".into()))?;
     let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
     let client = paamonim::Client::login(&base, &user, &pass).await.map_err(internal)?;
-    import::run(&client, db.as_ref(), &req.from, &req.to).await.map(Json).map_err(internal)
+    import::run(&client, db.as_ref(), &req.from, &req.to).await.map(Json).map_err(|e| {
+        tracing::warn!("paamonim import failed: {e:#}");
+        internal(format!("{e:#}"))
+    })
 }
 
 fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, String)> {
