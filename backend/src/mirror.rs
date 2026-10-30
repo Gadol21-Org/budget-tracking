@@ -518,7 +518,7 @@ mod tests {
                 .iter()
                 .find(|i| i.0 == q["balance_history[budget_item_id]"])
                 .unwrap();
-            let mut add = |m: &mut Mock| {
+            let add = |m: &mut Mock| {
                 m.next_id += 1;
                 let id = 1000 + m.next_id;
                 m.lines.push(Line {
@@ -737,9 +737,10 @@ mod tests {
         s.update_transaction(id, &tx(D, -1100, food)).await.unwrap();
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert_eq!(sum.unchanged, 1);
-        let m = mock.lock().unwrap();
-        assert_eq!((m.saves, m.deletes), (1, 0));
-        drop(m);
+        {
+            let m = mock.lock().unwrap();
+            assert_eq!((m.saves, m.deletes), (1, 0));
+        }
         assert_eq!(state_of(&s, id).await, "synced");
     }
 
@@ -777,9 +778,10 @@ mod tests {
         // Next run finds the line it created and links it; no second post.
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert_eq!(sum.mirrored, 1);
-        let m = mock.lock().unwrap();
-        assert_eq!((m.saves, m.lines.len()), (1, 1));
-        drop(m);
+        {
+            let m = mock.lock().unwrap();
+            assert_eq!((m.saves, m.lines.len()), (1, 1));
+        }
         assert_eq!(state_of(&s, id).await, "synced");
     }
 
