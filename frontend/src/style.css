@@ -131,13 +131,20 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .menu button:hover, .menu button:focus-visible { background: var(--bg); }
 
 body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
+:root { --pull: 0px; --pull-p: 0; }
+#app > .shell > main { transform: translateY(var(--pull)); will-change: transform; }
+#app.gliding > .shell > main, #app.gliding ~ .ptr { transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
 .ptr {
-  position: fixed; top: 0; inset-inline: 0; margin-inline: auto; width: fit-content; min-width: 40px; height: 40px; padding: 0 12px; z-index: 30;
-  display: flex; align-items: center; justify-content: center; border-radius: 20px; white-space: nowrap;
+  position: fixed; top: 0; inset-inline: 0; margin-inline: auto; width: 40px; height: 40px; z-index: 30; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; pointer-events: none;
   background: var(--surface); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.2);
-  transform: translateY(-48px); opacity: 0; pointer-events: none; font-size: 1.2rem;
+  transform: translateY(calc(var(--pull) - 48px)); opacity: var(--pull-p);
 }
-.ptr.settling { transition: transform .2s, opacity .2s; }
-.ptr.ready { background: var(--brand); color: var(--brand-contrast); }
-.ptr.spin { animation: ptr-spin 1s linear infinite; }
+.ptr-dot {
+  width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--brand);
+  rotate: calc(var(--pull-p) * 270deg);
+}
+.ptr.ready .ptr-dot { border-top-color: var(--brand); border-right-color: var(--brand); }
+.ptr.spin .ptr-dot { animation: ptr-spin .8s linear infinite; }
 @keyframes ptr-spin { to { rotate: 360deg; } }
+.haptic { position: fixed; top: 0; inset-inline-start: 0; width: 1px; height: 1px; opacity: 0.01; overflow: hidden; pointer-events: none; }

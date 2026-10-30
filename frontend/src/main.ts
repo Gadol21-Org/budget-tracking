@@ -724,24 +724,44 @@ window.addEventListener("online", refreshIfStale);
 // iOS Safari ignores user-scalable=no and touch-action for pinch, but still fires these gesture events.
 for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
 
-// Pull to refresh (touch screens only): drag down from the top of the page past the threshold.
-const PULL_THRESHOLD = 70;
-const pullIndicator = el("div", { className: "ptr", textContent: "↓" });
-document.body.append(pullIndicator);
+// Pull to refresh (touch screens only): the page follows the finger from the top, the spinner rides
+// along, a short haptic tick marks the threshold (navigator.vibrate is unavailable on iOS Safari),
+// and release glides back with an eased transition.
+const PULL_THRESHOLD = 72;
+const PULL_MAX = 120;
+/** Haptic tick: navigator.vibrate on Android; on iOS Safari (17.4+) toggling a hidden `switch` checkbox makes the system click. */
+const hapticSwitch = el("input", { type: "checkbox", id: "haptic" });
+hapticSwitch.setAttribute("switch", "");
+hapticSwitch.setAttribute("aria-hidden", "true");
+hapticSwitch.tabIndex = -1;
+const hapticLabel = el("label", { className: "haptic" }, hapticSwitch);
+hapticLabel.htmlFor = "haptic";
+document.body.append(hapticLabel);
+function haptic(pattern: number | number[] = 12) {
+  if (navigator.vibrate) navigator.vibrate(pattern);
+  else hapticLabel.click();
+}
+const spinner = el("div", { className: "ptr" }, el("div", { className: "ptr-dot" }));
+document.body.append(spinner);
 let pullStart: number | undefined;
 let pullDist = 0;
-function setPull(dist: number, label?: string) {
-  pullIndicator.style.transform = `translateY(${dist - 48}px)`;
-  pullIndicator.style.opacity = String(Math.min(1, dist / PULL_THRESHOLD));
-  pullIndicator.classList.toggle("ready", dist >= PULL_THRESHOLD);
-  pullIndicator.textContent = label ?? (dist >= PULL_THRESHOLD ? "↻" : "↓");
+let armed = false;
+function setPull(dist: number) {
+  const r = document.documentElement.style;
+  r.setProperty("--pull", `${dist}px`);
+  r.setProperty("--pull-p", String(Math.min(1, dist / PULL_THRESHOLD)));
+}
+function glideTo(dist: number) {
+  root.classList.add("gliding");
+  setPull(dist);
 }
 document.addEventListener(
   "touchstart",
   (e) => {
     pullStart = window.scrollY <= 0 && e.touches.length === 1 && !document.querySelector("dialog[open]") && !refreshing ? e.touches[0].clientY : undefined;
     pullDist = 0;
-    pullIndicator.classList.remove("settling");
+    armed = false;
+    root.classList.remove("gliding");
   },
   { passive: true },
 );
@@ -752,30 +772,31 @@ document.addEventListener(
     const dy = e.touches[0].clientY - pullStart;
     if (dy <= 0 || window.scrollY > 0) {
       if (pullDist === 0) pullStart = undefined;
+      else setPull((pullDist = 0));
       return;
     }
     e.preventDefault();
-    pullDist = Math.min(dy * 0.5, PULL_THRESHOLD * 1.6);
+    // Rubber band: resistance grows as the page is pulled further.
+    pullDist = PULL_MAX * (1 - Math.exp(-dy / (PULL_MAX * 1.6)));
     setPull(pullDist);
+    if (!armed && pullDist >= PULL_THRESHOLD) haptic();
+    armed = pullDist >= PULL_THRESHOLD;
+    spinner.classList.toggle("ready", armed);
   },
   { passive: false },
 );
 async function endPull() {
   if (pullStart === undefined) return;
-  const ready = pullDist >= PULL_THRESHOLD;
   pullStart = undefined;
-  pullIndicator.classList.add("settling");
-  if (!ready) return setPull(0);
-  pullIndicator.classList.add("spin");
-  setPull(PULL_THRESHOLD, "↻");
+  if (!armed) return glideTo(0);
+  spinner.classList.add("spin");
+  glideTo(PULL_THRESHOLD * 0.8);
   lastLoad = Date.now();
-  const ok = await refresh();
-  pullIndicator.classList.remove("spin");
-  if (!ok) {
-    setPull(PULL_THRESHOLD, "לא ניתן לרענן");
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-  setPull(0);
+  const [ok] = await Promise.all([refresh(), new Promise((r) => setTimeout(r, 600))]);
+  if (!ok) haptic([30, 40, 30]);
+  spinner.classList.remove("spin", "ready");
+  glideTo(0);
+  armed = false;
 }
 document.addEventListener("touchend", endPull);
 document.addEventListener("touchcancel", endPull);
