@@ -43,13 +43,14 @@ pub struct MonthlyTotal {
     pub count: i64,
 }
 
+#[async_trait::async_trait]
 pub trait Storage: Send + Sync {
-    fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
-    fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
-    fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
-    fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
+    async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
+    async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
+    async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
+    async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
     /// Dashboards read this instead of scanning transactions.
-    fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>>;
+    async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>>;
 }
 
 pub struct SqliteStorage(Mutex<Connection>);
@@ -71,8 +72,9 @@ fn adjust_rollup(conn: &Connection, date: &str, category_id: Option<i64>, delta:
     Ok(())
 }
 
+#[async_trait::async_trait]
 impl Storage for SqliteStorage {
-    fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
+    async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
@@ -94,7 +96,7 @@ impl Storage for SqliteStorage {
         Ok(rows)
     }
 
-    fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64> {
+    async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
@@ -108,7 +110,7 @@ impl Storage for SqliteStorage {
         Ok(id)
     }
 
-    fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
+    async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         let row: Option<(String, i64, Option<i64>)> = tx
@@ -126,7 +128,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
+    async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, is_income FROM categories ORDER BY name")?;
         let rows = stmt
@@ -137,7 +139,7 @@ impl Storage for SqliteStorage {
         Ok(rows)
     }
 
-    fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
+    async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT month, category_id, total_agorot, count FROM monthly_rollups
@@ -166,15 +168,15 @@ mod tests {
         NewTransaction { date: date.into(), amount_agorot: amount, category_id: cat, payment_method_id: None, note: String::new() }
     }
 
-    #[test]
-    fn rollup_tracks_inserts_and_deletes() {
+    #[tokio::test]
+    async fn rollup_tracks_inserts_and_deletes() {
         let s = SqliteStorage::open(":memory:").unwrap();
-        let a = s.create_transaction(&tx("2026-10-03", 1050, None)).unwrap();
-        s.create_transaction(&tx("2026-10-20", 2025, None)).unwrap();
-        let totals = s.monthly_totals().unwrap();
+        let a = s.create_transaction(&tx("2026-10-03", 1050, None)).await.unwrap();
+        s.create_transaction(&tx("2026-10-20", 2025, None)).await.unwrap();
+        let totals = s.monthly_totals().await.unwrap();
         assert_eq!(totals.len(), 1);
         assert_eq!(totals[0].total_agorot, 3075); // non-round amounts stay exact
-        s.delete_transaction(a).unwrap();
-        assert_eq!(s.monthly_totals().unwrap()[0].total_agorot, 2025);
+        s.delete_transaction(a).await.unwrap();
+        assert_eq!(s.monthly_totals().await.unwrap()[0].total_agorot, 2025);
     }
 }

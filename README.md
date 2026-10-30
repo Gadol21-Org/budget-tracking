@@ -10,8 +10,16 @@ cargo run -p budget-backend      # serves API + built PWA on :3000
 # or: (cd frontend && npm run dev) for hot reload, proxying /api to :3000
 ```
 
+## Storage
+`STORAGE=sqlite` (default) needs nothing and is used for tests. `STORAGE=nosql` uses Oracle NoSQL; the SDK is configured from `ORACLE_NOSQL_*` variables (see `.env.example`), so the same code runs against:
+- **Local:** the [Oracle NoSQL Cloud Simulator](https://www.oracle.com/downloads/cloud/nosql-cloud-sdk-downloads.html) with `ORACLE_NOSQL_AUTH=cloudsim` and `ORACLE_NOSQL_ENDPOINT=http://localhost:8080`.
+- **Cloud:** `ORACLE_NOSQL_AUTH=user` with an OCI config file, region and compartment.
+
+Tables are created on startup (three, to stay within the Always Free limit). The NoSQL backend has not yet been run against the simulator or the cloud service.
+
 ## Layout
-- `backend/src/storage.rs` – `Storage` trait (SQLite today; Postgres on Oracle Cloud planned) plus the `monthly_rollups` table maintained on every write, which dashboards read via `/api/monthly-totals`.
+- `backend/src/storage.rs` – `Storage` trait (SQLite and Oracle NoSQL) plus the `monthly_rollups` table maintained on every write, which dashboards read via `/api/monthly-totals`.
+- `backend/src/nosql.rs` – Oracle NoSQL implementation of `Storage`.
 - `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). Unverified against a real account yet.
 - `backend/src/money.rs` – agorot to shekel rounding for export.
 

@@ -1,6 +1,7 @@
 mod db;
 mod money;
 mod paamonim;
+mod nosql;
 mod storage;
 
 use std::sync::Arc;
@@ -22,7 +23,7 @@ fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
 }
 
 async fn list_transactions(State(db): State<Db>) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
-    db.list_transactions().map(Json).map_err(internal)
+    db.list_transactions().await.map(Json).map_err(internal)
 }
 
 async fn create_transaction(
@@ -31,20 +32,20 @@ async fn create_transaction(
 ) -> Result<Json<i64>, (StatusCode, String)> {
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
-    db.create_transaction(&t).map(Json).map_err(internal)
+    db.create_transaction(&t).await.map(Json).map_err(internal)
 }
 
 async fn delete_transaction(State(db): State<Db>, Path(id): Path<i64>) -> Result<StatusCode, (StatusCode, String)> {
-    db.delete_transaction(id).map_err(internal)?;
+    db.delete_transaction(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_categories(State(db): State<Db>) -> Result<Json<Vec<Category>>, (StatusCode, String)> {
-    db.list_categories().map(Json).map_err(internal)
+    db.list_categories().await.map(Json).map_err(internal)
 }
 
 async fn monthly_totals(State(db): State<Db>) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
-    db.monthly_totals().map(Json).map_err(internal)
+    db.monthly_totals().await.map(Json).map_err(internal)
 }
 
 #[derive(Deserialize)]
@@ -72,8 +73,15 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "budget.db".into());
-    let db: Db = Arc::new(SqliteStorage::open(&db_path)?);
+    // STORAGE=sqlite (default, local/tests) | nosql (Oracle NoSQL Cloud or the local Cloud Simulator)
+    let db: Db = match std::env::var("STORAGE").as_deref().unwrap_or("sqlite") {
+        "nosql" => Arc::new(nosql::NoSqlStorage::connect().await?),
+        "sqlite" => {
+            let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "budget.db".into());
+            Arc::new(SqliteStorage::open(&db_path)?)
+        }
+        other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or nosql)"),
+    };
 
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "frontend/dist".into());
     let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
