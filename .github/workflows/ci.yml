@@ -30,7 +30,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: System packages (OpenSSL for the Oracle NoSQL SDK)
+      - name: System packages (OpenSSL for the MySQL TLS connection)
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       # The frontend is embedded into the binary, and build.rs only warns when it
