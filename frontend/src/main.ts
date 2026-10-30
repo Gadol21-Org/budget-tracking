@@ -46,12 +46,12 @@ const dayTitle = (d: string) =>
 const inMonth = () => state.txs.filter((t) => t.date.startsWith(state.month));
 
 function monthBar(): HTMLElement {
-  // In the RTL layout the first element sits on the right: → goes forward, ← goes back.
-  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "→" });
-  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "←" });
-  next.onclick = () => ((state.month = shiftMonth(state.month, 1)), render());
+  // RTL: the first element is on the right and goes back in time, the last (left) goes forward.
+  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "→" });
+  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "←" });
   prev.onclick = () => ((state.month = shiftMonth(state.month, -1)), render());
-  return el("div", { className: "monthbar" }, next, el("div", { className: "title", textContent: monthTitle(state.month) }), prev);
+  next.onclick = () => ((state.month = shiftMonth(state.month, 1)), render());
+  return el("div", { className: "monthbar" }, prev, el("div", { className: "title", textContent: monthTitle(state.month) }), next);
 }
 
 function monthView(): HTMLElement {
