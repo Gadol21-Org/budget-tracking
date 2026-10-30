@@ -456,6 +456,48 @@ impl Storage for MySqlStorage {
         Ok(())
     }
 
+    async fn settled_recurring(&self) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query("SELECT series_id, month FROM recurring_settled")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("series_id")?, r.try_get("month")?)))
+            .collect()
+    }
+
+    async fn settle_recurring_month(
+        &self,
+        series_id: i64,
+        month: &str,
+        t: &NewTransaction,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let new =
+            sqlx::query("INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)")
+                .bind(series_id)
+                .bind(month)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        if new == 1 {
+            sqlx::query(
+                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                           note, sync_state, recurring_series_id)
+                 VALUES (?, ?, ?, ?, ?, 'local', ?)",
+            )
+            .bind(&t.date)
+            .bind(t.amount_agorot)
+            .bind(t.category_id)
+            .bind(t.payment_method_id)
+            .bind(&t.note)
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(new == 1)
+    }
+
     async fn settle_recurring(&self, due: &[Occurrence]) -> Result<usize> {
         let mut tx = self.pool.begin().await?;
         let mut added = 0;

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
-use crate::storage::{MonthlyTotal, Storage};
+use crate::storage::{MonthlyTotal, NewTransaction, Storage};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct RecurringSegment {
@@ -163,15 +163,59 @@ pub fn default_through(today: NaiveDate) -> String {
 }
 
 /// Occurrences still ahead of `today` (the unsettled ones), through `through_month`.
+/// `settled` are months already turned into transactions (e.g. edited on their own).
 pub fn upcoming(
     segments: &[RecurringSegment],
     through_month: &str,
     today: NaiveDate,
+    settled: &[(i64, String)],
 ) -> Vec<Occurrence> {
     let today = today.format("%Y-%m-%d").to_string();
     let mut occ = occurrences(segments, through_month);
-    occ.retain(|o| o.date > today);
+    occ.retain(|o| o.date > today && !settled.contains(&(o.series_id, o.date[..7].to_string())));
     occ
+}
+
+/// [`upcoming`] over what is stored.
+pub async fn upcoming_stored(
+    db: &dyn Storage,
+    through_month: &str,
+    today: NaiveDate,
+) -> anyhow::Result<Vec<Occurrence>> {
+    let segments = db.list_recurring().await?;
+    let settled = db.settled_recurring().await?;
+    Ok(upcoming(&segments, through_month, today, &settled))
+}
+
+/// Edit a single month on its own: it becomes a transaction with these values (any date,
+/// e.g. a salary that arrived early) and the series carries on unchanged around it. Deleting
+/// that transaction afterwards skips the month.
+pub async fn settle_month(
+    db: &dyn Storage,
+    series_id: i64,
+    month: &str,
+    t: &NewTransaction,
+) -> Result<(), RecurringError> {
+    if !is_month(month) {
+        return invalid("month must be YYYY-MM");
+    }
+    if NaiveDate::parse_from_str(&t.date, "%Y-%m-%d").is_err() {
+        return invalid("date must be YYYY-MM-DD");
+    }
+    if t.amount_agorot == 0 {
+        return invalid("amount must not be zero");
+    }
+    let segs = series_segments(db, series_id).await?;
+    if occurrences(&segs, month)
+        .iter()
+        .all(|o| &o.date[..7] != month)
+    {
+        return invalid("the series has no occurrence in that month");
+    }
+    if !db.settle_recurring_month(series_id, month, t).await? {
+        return invalid("that month has already settled");
+    }
+    Ok(())
 }
 
 /// Whether a series change may start in `month`: its occurrence must still be ahead.
@@ -474,9 +518,52 @@ mod tests {
             &s.list_recurring().await.unwrap(),
             "2026-05",
             day("2026-04-01"),
+            &[],
         );
         assert_eq!(ahead.len(), 2);
         assert_eq!(ahead[0].date, "2026-04-30");
+    }
+
+    #[tokio::test]
+    async fn one_month_can_be_edited_alone() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let id = create(&s, &new("2026-01", None, 1_200_000)).await.unwrap();
+        let early = NewTransaction {
+            date: "2026-03-03".into(),
+            amount_agorot: 1_185_000,
+            category_id: None,
+            payment_method_id: None,
+            note: "early".into(),
+        };
+        settle_month(&s, id, "2026-03", &early).await.unwrap();
+        // Doing it twice, or for a month the series doesn't have, is refused.
+        assert!(settle_month(&s, id, "2026-03", &early).await.is_err());
+        assert!(settle_month(&s, id, "2025-12", &early).await.is_err());
+        let ahead = upcoming_stored(&s, "2026-05", day("2026-02-20"))
+            .await
+            .unwrap();
+        // March is now a transaction; February and April/May are still generated.
+        assert_eq!(
+            ahead.iter().map(|o| o.date.as_str()).collect::<Vec<_>>(),
+            ["2026-02-28", "2026-04-30", "2026-05-31"]
+        );
+        let txs = s.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 1);
+        assert_eq!(
+            (txs[0].amount_agorot, txs[0].recurring_series_id),
+            (1_185_000, Some(id))
+        );
+        // Settling the rest later does not add a second March.
+        settle_due(&s, day("2026-04-01")).await.unwrap();
+        assert_eq!(
+            s.list_transactions()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|t| t.date.starts_with("2026-03"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

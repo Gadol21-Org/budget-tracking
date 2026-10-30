@@ -96,12 +96,11 @@ async fn monthly_totals(
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
     settle(db.as_ref()).await?;
     let mut totals = db.monthly_totals().await.map_err(internal)?;
-    let segments = db.list_recurring().await.map_err(internal)?;
     let through = recurring::default_through(today());
-    recurring::add_to_totals(
-        &mut totals,
-        &recurring::upcoming(&segments, &through, today()),
-    );
+    let ahead = recurring::upcoming_stored(db.as_ref(), &through, today())
+        .await
+        .map_err(internal)?;
+    recurring::add_to_totals(&mut totals, &ahead);
     Ok(Json(totals))
 }
 
@@ -135,8 +134,10 @@ async fn recurring_occurrences(
         None => recurring::default_through(today()),
     };
     settle(db.as_ref()).await?;
-    let segments = db.list_recurring().await.map_err(internal)?;
-    Ok(Json(recurring::upcoming(&segments, &through, today())))
+    recurring::upcoming_stored(db.as_ref(), &through, today())
+        .await
+        .map(Json)
+        .map_err(internal)
 }
 
 /// Start a series; returns its id.
@@ -158,6 +159,20 @@ async fn change_recurring(
 ) -> Result<StatusCode, (StatusCode, String)> {
     settle(db.as_ref()).await?;
     recurring::change_from(db.as_ref(), series_id, &r, today())
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Edit one month of a series on its own (`month` is YYYY-MM): it becomes a transaction with
+/// the body's values and the rest of the series is unchanged.
+async fn settle_recurring_month(
+    State(db): State<Db>,
+    Path((series_id, month)): Path<(i64, String)>,
+    Json(t): Json<NewTransaction>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::settle_month(db.as_ref(), series_id, &month, &t)
         .await
         .map_err(recurring_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -379,6 +394,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/categories", get(list_categories))
         .route("/api/recurring", get(list_recurring).post(create_recurring))
         .route("/api/recurring/occurrences", get(recurring_occurrences))
+        .route(
+            "/api/recurring/:series_id/months/:month",
+            axum::routing::post(settle_recurring_month),
+        )
         .route(
             "/api/recurring/:series_id",
             axum::routing::put(change_recurring).delete(cancel_recurring),

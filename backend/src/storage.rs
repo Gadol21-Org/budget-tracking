@@ -148,6 +148,20 @@ pub trait Storage: Send + Sync {
     async fn settle_recurring(&self, _due: &[Occurrence]) -> anyhow::Result<usize> {
         Ok(0)
     }
+    /// (series id, YYYY-MM) of every month that has settled.
+    async fn settled_recurring(&self) -> anyhow::Result<Vec<(i64, String)>> {
+        Ok(Vec::new())
+    }
+    /// Settle one month of a series early, with these values instead of the rule's (a salary
+    /// that came early, a bill that differed). False if the month had already settled.
+    async fn settle_recurring_month(
+        &self,
+        _series_id: i64,
+        _month: &str,
+        _t: &NewTransaction,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
     async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
@@ -492,6 +506,46 @@ impl Storage for SqliteStorage {
             .unwrap()
             .execute("DELETE FROM recurring WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    async fn settled_recurring(&self) -> anyhow::Result<Vec<(i64, String)>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT series_id, month FROM recurring_settled")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn settle_recurring_month(
+        &self,
+        series_id: i64,
+        month: &str,
+        t: &NewTransaction,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let new = tx.execute(
+            "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
+            params![series_id, month],
+        )?;
+        if new == 1 {
+            tx.execute(
+                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                           note, sync_state, recurring_series_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                params![
+                    t.date,
+                    t.amount_agorot,
+                    t.category_id,
+                    t.payment_method_id,
+                    t.note,
+                    series_id
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(new == 1)
     }
 
     async fn settle_recurring(&self, due: &[Occurrence]) -> anyhow::Result<usize> {
