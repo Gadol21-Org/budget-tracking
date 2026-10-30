@@ -89,7 +89,8 @@ impl NoSqlStorage {
         .await?;
         self.ddl(
             "create table if not exists lookups (kind string, id long, name string, \
-             is_income boolean, paamonim_id string, parent_id long, primary key(kind, id))",
+             is_income boolean, paamonim_id string, parent_id long, deleted boolean, \
+             merged_into long, primary key(kind, id))",
             limits(),
         )
         .await?;
@@ -109,9 +110,14 @@ impl NoSqlStorage {
                 tracing::debug!("not changing limits of {table}: {e}");
             }
         }
-        let alter = "alter table lookups (add parent_id long)";
-        if let Err(e) = self.ddl(alter, None).await {
-            tracing::debug!("lookups.parent_id: {e}");
+        for alter in [
+            "alter table lookups (add parent_id long)",
+            "alter table lookups (add deleted boolean)",
+            "alter table lookups (add merged_into long)",
+        ] {
+            if let Err(e) = self.ddl(alter, None).await {
+                tracing::debug!("{alter}: {e}");
+            }
         }
         Ok(())
     }
@@ -181,6 +187,7 @@ impl NoSqlStorage {
             .await?;
         let mut cats: Vec<Category> = rows
             .iter()
+            .filter(|r| !r.get_bool("deleted").unwrap_or(false))
             .filter_map(|r| {
                 Some(Category {
                     id: r.get_i64("id")?,
@@ -200,6 +207,34 @@ impl NoSqlStorage {
         *self.cache.lock().await = Cache::default();
         res?;
         Ok(())
+    }
+
+    /// Point a transaction at another category. Like any local edit, a line already in
+    /// Paamonim becomes `modified`.
+    async fn set_category(&self, id: i64, category: i64) -> Result<()> {
+        let req = GetRequest::new(TX).key(MapValue::new().i64("id", id));
+        let got = retry(|| req.execute(&self.handle)).await?;
+        let Some(r) = got.row() else { return Ok(()) };
+        let t = tx_from_row(r)?;
+        let state = if t.sync_state == "synced" {
+            "modified"
+        } else {
+            &t.sync_state
+        };
+        let mut row = MapValue::new()
+            .i64("id", t.id)
+            .str("date", &t.date)
+            .i64("amount_agorot", t.amount_agorot)
+            .i64("category_id", category)
+            .str("note", &t.note)
+            .str("sync_state", state);
+        if let Some(p) = t.payment_method_id {
+            row = row.i64("payment_method_id", p);
+        }
+        if let Some(l) = r.get_string("paamonim_line_id") {
+            row = row.str("paamonim_line_id", &l);
+        }
+        self.put(TX, row).await
     }
 
     async fn set_sync_state(&self, id: i64, state: &str, line_id: Option<&str>) -> Result<()> {
@@ -303,6 +338,73 @@ impl Storage for NoSqlStorage {
         Ok(cache.categories.clone().unwrap_or_default())
     }
 
+    async fn insert_category(
+        &self,
+        name: &str,
+        is_income: bool,
+        parent_id: Option<i64>,
+    ) -> Result<i64> {
+        let id = self.next_id();
+        let mut row = MapValue::new()
+            .str("kind", "category")
+            .i64("id", id)
+            .str("name", name)
+            .column("is_income", is_income);
+        if let Some(p) = parent_id {
+            row = row.i64("parent_id", p);
+        }
+        self.put(LOOKUPS, row).await?;
+        Ok(id)
+    }
+
+    /// Not atomic (the service has no multi-table transaction): lines are moved first, so
+    /// an interrupted run leaves the category in place and the delete can simply be retried.
+    async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> Result<()> {
+        for id in ids {
+            if let Some(to) = move_to {
+                let moving: Vec<i64> = self
+                    .list_transactions()
+                    .await?
+                    .iter()
+                    .filter(|t| t.category_id == Some(*id))
+                    .map(|t| t.id)
+                    .collect();
+                for t in moving {
+                    self.set_category(t, to).await?;
+                }
+            }
+            let key = || MapValue::new().str("kind", "category").i64("id", *id);
+            let req = GetRequest::new(LOOKUPS).key(key());
+            let got = retry(|| req.execute(&self.handle)).await?;
+            let Some(r) = got.row() else { continue };
+            match r.get_string("paamonim_id") {
+                Some(pid) => {
+                    let mut row = MapValue::new()
+                        .str("kind", "category")
+                        .i64("id", *id)
+                        .str("name", &r.get_string("name").unwrap_or_default())
+                        .column("is_income", r.get_bool("is_income").unwrap_or(false))
+                        .str("paamonim_id", &pid)
+                        .column("deleted", true);
+                    if let Some(p) = r.get_i64("parent_id") {
+                        row = row.i64("parent_id", p);
+                    }
+                    if let Some(to) = move_to {
+                        row = row.i64("merged_into", to);
+                    }
+                    self.put(LOOKUPS, row).await?;
+                }
+                None => {
+                    let req = DeleteRequest::new(LOOKUPS, key());
+                    let res = retry(|| req.execute(&self.handle)).await;
+                    *self.cache.lock().await = Cache::default();
+                    res?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
         let mut paamonim_of: HashMap<i64, String> = HashMap::new();
         let mut category_ids = HashSet::new();
@@ -358,33 +460,71 @@ impl Storage for NoSqlStorage {
     async fn import_paamonim(&self, batch: &ImportBatch) -> Result<ImportSummary> {
         let mut sum = ImportSummary::default();
 
-        // Existing lookups: (kind, paamonim_id) -> id, so reruns reuse ids.
+        // Existing lookups: (kind, paamonim_id) -> id, so reruns reuse ids. For categories
+        // also whether they were deleted here and where their lines went.
         let mut ids: HashMap<(String, String), i64> = HashMap::new();
+        let mut gone: HashMap<i64, Option<i64>> = HashMap::new();
         for r in self.query_all(&format!("select * from {LOOKUPS}")).await? {
             if let (Some(kind), Some(pid), Some(id)) = (
                 r.get_string("kind"),
                 r.get_string("paamonim_id"),
                 r.get_i64("id"),
             ) {
+                if kind == "category" && r.get_bool("deleted").unwrap_or(false) {
+                    gone.insert(id, r.get_i64("merged_into"));
+                }
                 ids.insert((kind, pid), id);
             }
         }
+        // Where lines of category `id` belong: itself, or what it was merged into.
+        let resolve = |gone: &HashMap<i64, Option<i64>>, mut id: i64| {
+            for _ in 0..16 {
+                match gone.get(&id) {
+                    None => return Some(id),
+                    Some(Some(next)) => id = *next,
+                    Some(None) => return None,
+                }
+            }
+            None
+        };
+        // `cats`: key -> row id, for linking parents. `live`: key -> where its lines go.
         let mut cats: HashMap<String, i64> = HashMap::new();
+        let mut live: HashMap<String, Option<i64>> = HashMap::new();
         for c in &batch.categories {
             let k = ("category".to_string(), c.key.clone());
-            let new = !ids.contains_key(&k);
-            let id = *ids.entry(k).or_insert_with(|| self.next_id());
-            let mut row = MapValue::new()
-                .str("kind", "category")
-                .i64("id", id)
-                .str("name", &c.name)
-                .column("is_income", c.is_income)
-                .str("paamonim_id", &c.key);
-            if let Some(p) = c.parent_key.as_ref().and_then(|k| cats.get(k)) {
-                row = row.i64("parent_id", *p);
-            }
-            self.put(LOOKUPS, row).await?;
-            sum.categories_added += new as usize;
+            let id = match ids.get(&k) {
+                // Deleted here: stays deleted, and its name/parent are not refreshed.
+                Some(id) if gone.contains_key(id) => *id,
+                existing => {
+                    let new = existing.is_none();
+                    let id = existing.copied().unwrap_or_else(|| self.next_id());
+                    let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
+                    // New under a parent that was deleted here: deleted too, same destination.
+                    let parent_gone = new && parent.is_some_and(|p| gone.contains_key(&p));
+                    let mut row = MapValue::new()
+                        .str("kind", "category")
+                        .i64("id", id)
+                        .str("name", &c.name)
+                        .column("is_income", c.is_income)
+                        .str("paamonim_id", &c.key);
+                    if let Some(p) = parent {
+                        row = row.i64("parent_id", p);
+                    }
+                    if parent_gone {
+                        let into = parent.and_then(|p| resolve(&gone, p));
+                        row = row.column("deleted", true);
+                        if let Some(to) = into {
+                            row = row.i64("merged_into", to);
+                        }
+                        gone.insert(id, into);
+                    }
+                    self.put(LOOKUPS, row).await?;
+                    sum.categories_added += new as usize;
+                    ids.insert(k, id);
+                    id
+                }
+            };
+            live.insert(c.key.clone(), resolve(&gone, id));
             cats.insert(c.key.clone(), id);
         }
         let mut pms: HashMap<String, i64> = HashMap::new();
@@ -414,7 +554,12 @@ impl Storage for NoSqlStorage {
                 sum.transactions_skipped += 1;
                 continue;
             }
-            let cat = t.category_key.as_ref().and_then(|k| cats.get(k)).copied();
+            let cat = t
+                .category_key
+                .as_ref()
+                .and_then(|k| live.get(k))
+                .copied()
+                .flatten();
             let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
             let mut row = MapValue::new()
                 .i64("id", self.next_id())

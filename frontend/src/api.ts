@@ -43,6 +43,11 @@ export const api = {
     request<number>("/api/transactions", { method: "POST", body: JSON.stringify(t) }),
   importPaamonim: (from: string, to: string) =>
     request<ImportSummary>("/api/import/paamonim", { method: "POST", body: JSON.stringify({ from, to }) }),
+  addCategory: (c: { name: string; is_income: boolean; parent_id: number | null }) =>
+    request<number>("/api/categories", { method: "POST", body: JSON.stringify(c) }),
+  /** Also deletes sub-categories; their transactions move to `moveTo` (required if there are any). */
+  deleteCategory: (id: number, moveTo?: number) =>
+    request<number>(`/api/categories/${id}${moveTo != null ? `?move_to=${moveTo}` : ""}`, { method: "DELETE" }),
   exportSheets: () => request<{ transactions: number; monthly_rows: number }>("/api/export/sheets", { method: "POST" }),
   updateTransaction: (id: number, t: Omit<Transaction, "id" | "sync_state">) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),

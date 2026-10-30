@@ -42,6 +42,41 @@ pub struct Category {
     pub parent_id: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct NewCategory {
+    pub name: String,
+    /// Ignored for sub-categories, which take their parent's kind.
+    #[serde(default)]
+    pub is_income: bool,
+    pub parent_id: Option<i64>,
+}
+
+/// Why a category change was refused; the API maps these to 4xx responses.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CategoryError {
+    NotFound,
+    Invalid(String),
+    /// The category (or a sub-category) has transactions and no `move_to` was given.
+    NeedsReplacement {
+        transactions: usize,
+    },
+}
+
+impl std::fmt::Display for CategoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "category not found"),
+            Self::Invalid(m) => write!(f, "{m}"),
+            Self::NeedsReplacement { transactions } => write!(
+                f,
+                "category has {transactions} transactions; choose a category to move them to"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CategoryError {}
+
 /// Per-month, per-category totals, computed from transactions on demand.
 #[derive(Serialize)]
 pub struct MonthlyTotal {
@@ -118,7 +153,101 @@ pub trait Storage: Send + Sync {
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
     /// Local edit. A line already in Paamonim is flagged `modified`: edits are not pushed there.
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()>;
+    /// Live categories only; ones deleted locally are hidden.
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
+    /// Raw insert; use [`Storage::create_category`], which validates.
+    async fn insert_category(
+        &self,
+        name: &str,
+        is_income: bool,
+        parent_id: Option<i64>,
+    ) -> anyhow::Result<i64>;
+    /// Raw removal of `ids` (sub-categories before their parent), after moving their
+    /// transactions to `move_to`, in one step where the backend can. Categories that came
+    /// from Paamonim are kept as hidden tombstones (pointing at `move_to`) so that a
+    /// re-import neither recreates them nor loses where their lines now belong; local-only
+    /// ones are deleted outright. Use [`Storage::delete_category`], which validates.
+    async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()>;
+
+    async fn create_category(&self, c: &NewCategory) -> anyhow::Result<i64> {
+        let name = c.name.trim();
+        if name.is_empty() || name.chars().count() > 100 {
+            return Err(CategoryError::Invalid("name must be 1-100 characters".into()).into());
+        }
+        let all = self.list_categories().await?;
+        let is_income = match c.parent_id {
+            Some(pid) => {
+                let parent = all
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .ok_or_else(|| CategoryError::Invalid("parent category not found".into()))?;
+                if parent.parent_id.is_some() {
+                    return Err(CategoryError::Invalid(
+                        "categories have two levels; a sub-category cannot have its own".into(),
+                    )
+                    .into());
+                }
+                parent.is_income
+            }
+            None => c.is_income,
+        };
+        if all
+            .iter()
+            .any(|o| o.parent_id == c.parent_id && o.is_income == is_income && o.name == name)
+        {
+            return Err(
+                CategoryError::Invalid("a category with this name already exists".into()).into(),
+            );
+        }
+        self.insert_category(name, is_income, c.parent_id).await
+    }
+
+    /// Delete a category together with its sub-categories. Their transactions go to
+    /// `move_to`, which is required when there are any. Returns how many were moved.
+    async fn delete_category(&self, id: i64, move_to: Option<i64>) -> anyhow::Result<usize> {
+        let all = self.list_categories().await?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
+        // Sub-categories first, so a parent is never removed while children point at it.
+        let mut ids: Vec<i64> = all
+            .iter()
+            .filter(|c| c.parent_id == Some(id))
+            .map(|c| c.id)
+            .collect();
+        ids.push(id);
+        let moved = self
+            .list_transactions()
+            .await?
+            .iter()
+            .filter(|t| t.category_id.is_some_and(|c| ids.contains(&c)))
+            .count();
+        if let Some(target) = move_to {
+            let t = all.iter().find(|c| c.id == target).ok_or_else(|| {
+                CategoryError::Invalid("the category to move to was not found".into())
+            })?;
+            if ids.contains(&target) {
+                return Err(CategoryError::Invalid(
+                    "cannot move into the category being deleted".into(),
+                )
+                .into());
+            }
+            if t.is_income != cat.is_income {
+                return Err(CategoryError::Invalid(
+                    "cannot move between income and expense categories".into(),
+                )
+                .into());
+            }
+        } else if moved > 0 {
+            return Err(CategoryError::NeedsReplacement {
+                transactions: moved,
+            }
+            .into());
+        }
+        self.remove_categories(&ids, move_to).await?;
+        Ok(moved)
+    }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
     async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
@@ -152,6 +281,26 @@ pub trait Storage: Send + Sync {
 }
 
 pub struct SqliteStorage(Mutex<Connection>);
+
+/// Where lines of category `id` belong: itself, or what it was merged into when deleted
+/// (None if it was deleted without a replacement).
+fn resolve_category(conn: &Connection, mut id: i64) -> anyhow::Result<Option<i64>> {
+    for _ in 0..16 {
+        let (deleted, into): (i64, Option<i64>) = conn.query_row(
+            "SELECT deleted, merged_into FROM categories WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if deleted == 0 {
+            return Ok(Some(id));
+        }
+        match into {
+            Some(next) => id = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(None)
+}
 
 impl SqliteStorage {
     pub fn open(path: &str) -> anyhow::Result<Self> {
@@ -230,27 +379,44 @@ impl Storage for SqliteStorage {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         let mut sum = ImportSummary::default();
+        // `cats`: key -> row id, for linking parents. `live`: key -> where its lines go, which
+        // differs for categories deleted locally (their replacement, or none).
         let mut cats = std::collections::HashMap::new();
+        let mut live: std::collections::HashMap<String, Option<i64>> = Default::default();
         for c in &batch.categories {
-            let existed: Option<i64> = tx
+            let existing: Option<(i64, bool)> = tx
                 .query_row(
-                    "SELECT id FROM categories WHERE paamonim_item_id = ?1",
+                    "SELECT id, deleted FROM categories WHERE paamonim_item_id = ?1",
                     params![c.key],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
                 )
                 .ok();
             let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
-            tx.execute(
-                "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(paamonim_item_id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id",
-                params![c.name, c.is_income, c.key, parent],
-            )?;
-            let id: i64 = tx.query_row(
-                "SELECT id FROM categories WHERE paamonim_item_id = ?1",
-                params![c.key],
-                |r| r.get(0),
-            )?;
-            sum.categories_added += existed.is_none() as usize;
+            let id = match existing {
+                // Deleted here: stays deleted, and its name/parent are not refreshed.
+                Some((id, true)) => id,
+                Some((id, false)) => {
+                    tx.execute(
+                        "UPDATE categories SET name = ?2, parent_id = ?3 WHERE id = ?1",
+                        params![id, c.name, parent],
+                    )?;
+                    id
+                }
+                None => {
+                    // New under a parent that was deleted here: deleted too, same destination.
+                    let into = parent.map(|p| resolve_category(&tx, p)).transpose()?;
+                    let parent_gone = parent.is_some() && into != Some(parent);
+                    let into = into.flatten().filter(|_| parent_gone);
+                    tx.execute(
+                        "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id, deleted, merged_into)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![c.name, c.is_income, c.key, parent, parent_gone, into],
+                    )?;
+                    sum.categories_added += 1;
+                    tx.last_insert_rowid()
+                }
+            };
+            live.insert(c.key.clone(), resolve_category(&tx, id)?);
             cats.insert(c.key.clone(), id);
         }
         let mut pms = std::collections::HashMap::new();
@@ -276,7 +442,12 @@ impl Storage for SqliteStorage {
             pms.insert(p.key.clone(), id);
         }
         for t in &batch.transactions {
-            let cat = t.category_key.as_ref().and_then(|k| cats.get(k)).copied();
+            let cat = t
+                .category_key
+                .as_ref()
+                .and_then(|k| live.get(k))
+                .copied()
+                .flatten();
             let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO transactions
@@ -363,8 +534,9 @@ impl Storage for SqliteStorage {
 
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
         let conn = self.0.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id, name, is_income, parent_id FROM categories ORDER BY name")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, is_income, parent_id FROM categories WHERE deleted = 0 ORDER BY name",
+        )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(Category {
@@ -376,6 +548,51 @@ impl Storage for SqliteStorage {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    async fn insert_category(
+        &self,
+        name: &str,
+        is_income: bool,
+        parent_id: Option<i64>,
+    ) -> anyhow::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO categories (name, is_income, parent_id) VALUES (?1, ?2, ?3)",
+            params![name, is_income, parent_id],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        for id in ids {
+            if let Some(to) = move_to {
+                // Like any local edit: a line already in Paamonim now differs from it.
+                tx.execute(
+                    "UPDATE transactions SET category_id = ?2,
+                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+                     WHERE category_id = ?1",
+                    params![id, to],
+                )?;
+            }
+            let from_paamonim: bool = tx.query_row(
+                "SELECT paamonim_item_id IS NOT NULL FROM categories WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )?;
+            if from_paamonim {
+                tx.execute(
+                    "UPDATE categories SET deleted = 1, merged_into = ?2 WHERE id = ?1",
+                    params![id, move_to],
+                )?;
+            } else {
+                tx.execute("DELETE FROM categories WHERE id = ?1", params![id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 }
 
@@ -510,5 +727,227 @@ mod tests {
         assert_eq!(totals[0].total_agorot, 3075); // non-round amounts stay exact
         s.delete_transaction(a).await.unwrap();
         assert_eq!(s.monthly_totals().await.unwrap()[0].total_agorot, 2025);
+    }
+
+    fn new_cat(name: &str, parent_id: Option<i64>, is_income: bool) -> NewCategory {
+        NewCategory {
+            name: name.into(),
+            is_income,
+            parent_id,
+        }
+    }
+
+    fn imported(key: &str, parent: Option<&str>) -> ImportCategory {
+        ImportCategory {
+            key: key.into(),
+            name: key.into(),
+            is_income: false,
+            parent_key: parent.map(String::from),
+        }
+    }
+
+    fn imported_line(line: &str, cat: &str) -> ImportTransaction {
+        ImportTransaction {
+            line_id: line.into(),
+            date: "2026-10-03".into(),
+            amount_agorot: -100,
+            category_key: Some(cat.into()),
+            payment_key: None,
+            note: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn creating_categories_validates_and_nests_two_levels() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let top = s
+            .create_category(&new_cat(" Home ", None, true))
+            .await
+            .unwrap();
+        let kid = s
+            .create_category(&new_cat("Rent", Some(top), false))
+            .await
+            .unwrap();
+        let cats = s.list_categories().await.unwrap();
+        let kid = cats.iter().find(|c| c.id == kid).unwrap();
+        // Trimmed, and a sub-category takes its parent's kind.
+        assert_eq!((kid.parent_id, kid.is_income), (Some(top), true));
+        assert!(cats.iter().any(|c| c.name == "Home"));
+        let refused = |r: anyhow::Result<i64>| {
+            matches!(
+                r.unwrap_err().downcast_ref::<CategoryError>(),
+                Some(CategoryError::Invalid(_))
+            )
+        };
+        assert!(refused(
+            s.create_category(&new_cat("  ", None, false)).await
+        ));
+        assert!(refused(
+            s.create_category(&new_cat("Home", None, true)).await
+        ));
+        assert!(refused(
+            s.create_category(&new_cat("x", Some(kid.id), false)).await
+        ));
+        assert!(refused(
+            s.create_category(&new_cat("x", Some(999), false)).await
+        ));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_used_category_needs_a_valid_replacement() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let home = s
+            .create_category(&new_cat("Home", None, false))
+            .await
+            .unwrap();
+        let rent = s
+            .create_category(&new_cat("Rent", Some(home), false))
+            .await
+            .unwrap();
+        let food = s
+            .create_category(&new_cat("Food", None, false))
+            .await
+            .unwrap();
+        let pay = s
+            .create_category(&new_cat("Pay", None, true))
+            .await
+            .unwrap();
+        s.create_transaction(&tx("2026-10-03", -100, Some(rent)))
+            .await
+            .unwrap();
+        let err = |r: anyhow::Result<usize>| r.unwrap_err().downcast::<CategoryError>().unwrap();
+        // Used through a sub-category, so deleting the parent needs a replacement too.
+        assert_eq!(
+            err(s.delete_category(home, None).await),
+            CategoryError::NeedsReplacement { transactions: 1 }
+        );
+        assert!(matches!(
+            err(s.delete_category(home, Some(rent)).await),
+            CategoryError::Invalid(_)
+        ));
+        assert!(matches!(
+            err(s.delete_category(home, Some(pay)).await),
+            CategoryError::Invalid(_)
+        ));
+        assert_eq!(
+            err(s.delete_category(999, None).await),
+            CategoryError::NotFound
+        );
+        assert_eq!(s.delete_category(home, Some(food)).await.unwrap(), 1);
+        let t = &s.list_transactions().await.unwrap()[0];
+        assert_eq!(t.category_id, Some(food));
+        let names: Vec<_> = s
+            .list_categories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["Food", "Pay"]);
+        // Unused categories go without a replacement.
+        assert_eq!(s.delete_category(pay, None).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn moving_lines_flags_synced_ones_as_modified() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let a = s.create_category(&new_cat("A", None, false)).await.unwrap();
+        let b = s.create_category(&new_cat("B", None, false)).await.unwrap();
+        let synced = s
+            .create_transaction(&tx("2026-10-03", -100, Some(a)))
+            .await
+            .unwrap();
+        s.mark_mirrored(synced, "5").await.unwrap();
+        s.create_transaction(&tx("2026-10-04", -100, Some(a)))
+            .await
+            .unwrap();
+        s.delete_category(a, Some(b)).await.unwrap();
+        let mut states: Vec<_> = s
+            .list_transactions()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| (t.category_id, t.sync_state))
+            .collect();
+        states.sort();
+        assert_eq!(
+            states,
+            [
+                (Some(b), "modified".to_string()),
+                (Some(b), "pending".to_string())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn reimport_does_not_bring_back_deleted_categories() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let batch = |extra: Vec<ImportCategory>, lines: Vec<ImportTransaction>| ImportBatch {
+            categories: [
+                imported("ce:1", None),
+                imported("e:1", Some("ce:1")),
+                imported("e:2", None),
+            ]
+            .into_iter()
+            .chain(extra)
+            .collect(),
+            transactions: lines,
+            ..Default::default()
+        };
+        s.import_paamonim(&batch(vec![], vec![imported_line("1", "e:1")]))
+            .await
+            .unwrap();
+        let find = |cats: &[Category], n: &str| cats.iter().find(|c| c.name == n).map(|c| c.id);
+        let cats = s.list_categories().await.unwrap();
+        let (parent, target) = (find(&cats, "ce:1").unwrap(), find(&cats, "e:2").unwrap());
+        s.delete_category(parent, Some(target)).await.unwrap();
+
+        // Same data again, plus a new line in the deleted category and a new item under
+        // the deleted parent: nothing is recreated and new lines follow the move.
+        let again = batch(
+            vec![imported("e:3", Some("ce:1"))],
+            vec![
+                imported_line("1", "e:1"),
+                imported_line("2", "e:1"),
+                imported_line("3", "e:3"),
+            ],
+        );
+        let sum = s.import_paamonim(&again).await.unwrap();
+        assert_eq!((sum.categories_added, sum.transactions_added), (1, 2));
+        let names: Vec<_> = s
+            .list_categories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["e:2"]);
+        assert!(s
+            .list_transactions()
+            .await
+            .unwrap()
+            .iter()
+            .all(|t| t.category_id == Some(target)));
+        // And a third run adds nothing.
+        let sum = s.import_paamonim(&again).await.unwrap();
+        assert_eq!((sum.categories_added, sum.transactions_added), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn deleted_paamonim_category_without_replacement_leaves_new_lines_uncategorized() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let batch = |lines| ImportBatch {
+            categories: vec![imported("e:1", None)],
+            transactions: lines,
+            ..Default::default()
+        };
+        s.import_paamonim(&batch(vec![])).await.unwrap();
+        let id = s.list_categories().await.unwrap()[0].id;
+        s.delete_category(id, None).await.unwrap();
+        s.import_paamonim(&batch(vec![imported_line("9", "e:1")]))
+            .await
+            .unwrap();
+        assert!(s.list_categories().await.unwrap().is_empty());
+        assert_eq!(s.list_transactions().await.unwrap()[0].category_id, None);
     }
 }
