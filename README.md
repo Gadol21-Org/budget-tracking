@@ -12,6 +12,8 @@ cargo run                        # builds the frontend too, then serves http://1
 ## Deployment
 `cargo build --release` produces one executable with the web app embedded. Copy the binary and a `.env`, and run it; no other files are needed.
 
+To run on an Oracle Cloud VM with Oracle NoSQL, with automatic deploys from `main`, see [`deploy/README.md`](deploy/README.md).
+
 ## Storage
 Oracle's Rust SDK requires OpenSSL. On Linux/macOS the system OpenSSL is used (`apt install libssl-dev pkg-config`). On Windows it is built from source automatically (the `openssl` crate's `vendored` feature, enabled only for Windows targets), which needs the MSVC build tools and [Strawberry Perl](https://strawberryperl.com/) and adds a couple of minutes to the first build.
 

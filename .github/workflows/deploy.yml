@@ -1,0 +1,102 @@
+# On every push to main: build the app's Docker image, push it to
+# GitHub's container registry, and replace the running app on the Oracle Cloud VM.
+# Pull requests build the image without pushing or deploying.
+# The deploy step is skipped until the ORACLE_HOST variable is set; see
+# deploy/README.md for the one-time setup.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # A native arm64 runner for the arm64 VM (free for public repos). For an AMD VM,
+    # set the BUILD_RUNNER variable to ubuntu-24.04.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Registry names must be lowercase and the org name is not.
+      - name: Set image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && vars.ORACLE_HOST != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TARGET: ${{ vars.ORACLE_USER || 'ubuntu' }}@${{ vars.ORACLE_HOST }}
+    steps:
+      # Registry names must be lowercase and the org name is not.
+      - name: Set image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "${{ vars.ORACLE_HOST }}" > ~/.ssh/known_hosts
+          fi
+      - name: Write the app's .env on the VM
+        env:
+          BUDGET_ENV: ${{ secrets.BUDGET_ENV }}
+        run: |
+          if [ -z "$BUDGET_ENV" ]; then echo "::error::the BUDGET_ENV secret is not set"; exit 1; fi
+          for n in STORAGE ORACLE_NOSQL_AUTH ORACLE_NOSQL_REGION ORACLE_NOSQL_COMPARTMENT_ID; do
+            if ! printf '%s\n' "$BUDGET_ENV" | grep -q "^$n=."; then
+              echo "::error::BUDGET_ENV has no $n= line"; exit 1
+            fi
+          done
+          # The file goes over ssh's stdin, never onto a command line. It is
+          # replaced in one step and readable by this user only.
+          printf '%s\n' "$BUDGET_ENV" \
+            | ssh -i "$HOME/.ssh/id_deploy" -o BatchMode=yes "$TARGET" \
+                'umask 077 && mkdir -p ~/budget-tracking && cat > ~/budget-tracking/.env.new && mv ~/budget-tracking/.env.new ~/budget-tracking/.env'
+      - name: Deploy
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ssh="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes $TARGET"
+          # The image is private, so log the VM in to the registry for the pull,
+          # with this job's short-lived token, and log it out afterwards.
+          printf '%s' "$TOKEN" | $ssh docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          status=0
+          $ssh bash -s -- "$IMAGE:${{ github.sha }}" < deploy/deploy.sh || status=$?
+          $ssh docker logout ghcr.io
+          exit $status
