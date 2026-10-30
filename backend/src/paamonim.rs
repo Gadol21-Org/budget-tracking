@@ -312,6 +312,35 @@ pub fn split_category_prefix<'a>(
         .map(|c| (c, rest.trim()))
 }
 
+/// A standard item with the category Paamonim files it under, from `budget_and_balances`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemCategory {
+    /// Same id as `BudgetItem::item_id`.
+    pub item_id: String,
+    pub full_name: String,
+    pub category_name: String,
+}
+
+/// Parses the JSON of `GET /budgets/budget_and_balances?budget_id=&balance_from=0&balance_to=0&family_id=`.
+/// The body is `[expense_rows, income_rows]`; each starts with a titles row (no `id`) that is skipped.
+/// Returns `(expense, income)`. Categories are given by name only, and the two kinds share none.
+pub fn parse_item_categories(json: &str) -> Result<(Vec<ItemCategory>, Vec<ItemCategory>)> {
+    let parts: Vec<Vec<serde_json::Value>> = serde_json::from_str(json).context("budget_and_balances is not [[..],[..]]")?;
+    let rows = |part: Option<&Vec<serde_json::Value>>| -> Vec<ItemCategory> {
+        part.into_iter()
+            .flatten()
+            .filter_map(|r| {
+                Some(ItemCategory {
+                    item_id: r.get("id")?.to_string(),
+                    full_name: r.get("full_name")?.as_str()?.trim().to_string(),
+                    category_name: r.get("BudgetCategoryName")?.as_str()?.trim().to_string(),
+                })
+            })
+            .collect()
+    };
+    Ok((rows(parts.first()), rows(parts.get(1))))
+}
+
 /// Parses `income_items` / `expense_items` HTML into budget items.
 pub fn parse_items(html: &str) -> Vec<BudgetItem> {
     let doc = Html::parse_fragment(html);
@@ -497,5 +526,20 @@ mod tests {
         assert_eq!((c.id.as_str(), rest), ("3", "סופר"));
         assert!(split_category_prefix("רכב - דלק", &cats).is_none());
         assert!(split_category_prefix("סופר", &cats).is_none());
+    }
+
+    #[test]
+    fn parses_item_categories() {
+        let json = r#"[
+            [{"avg_title":"a","balances_titles":[],"budget_title":"b","future_payments":"c","remaining_budget_title":"d","type_title":"e"},
+             {"id":5,"full_name":"סופר ","BudgetCategoryName":"מזון","Average":10,"BAL1":3,"RemainingBudget":null,"FutureLiabilities":0},
+             {"id":6,"full_name":"דלק","BudgetCategoryName":"רכב","Average":1}],
+            [{"avg_title":"a"},
+             {"id":9,"full_name":"משכורת","BudgetCategoryName":"הכנסות","Average":0}]]"#;
+        let (exp, inc) = parse_item_categories(json).unwrap();
+        assert_eq!(exp.len(), 2);
+        assert_eq!(exp[0], ItemCategory { item_id: "5".into(), full_name: "סופר".into(), category_name: "מזון".into() });
+        assert_eq!(inc, vec![ItemCategory { item_id: "9".into(), full_name: "משכורת".into(), category_name: "הכנסות".into() }]);
+        assert!(parse_item_categories("{}").is_err());
     }
 }
