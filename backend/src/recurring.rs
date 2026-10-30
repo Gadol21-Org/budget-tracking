@@ -196,14 +196,32 @@ pub async fn settle_month(
     month: &str,
     t: &NewTransaction,
 ) -> Result<(), RecurringError> {
-    if !is_month(month) {
-        return invalid("month must be YYYY-MM");
-    }
     if NaiveDate::parse_from_str(&t.date, "%Y-%m-%d").is_err() {
         return invalid("date must be YYYY-MM-DD");
     }
     if t.amount_agorot == 0 {
         return invalid("amount must not be zero");
+    }
+    settle_or_skip(db, series_id, month, Some(t)).await
+}
+
+/// Skip a single month: no transaction is made and the series carries on around it.
+pub async fn skip_month(
+    db: &dyn Storage,
+    series_id: i64,
+    month: &str,
+) -> Result<(), RecurringError> {
+    settle_or_skip(db, series_id, month, None).await
+}
+
+async fn settle_or_skip(
+    db: &dyn Storage,
+    series_id: i64,
+    month: &str,
+    t: Option<&NewTransaction>,
+) -> Result<(), RecurringError> {
+    if !is_month(month) {
+        return invalid("month must be YYYY-MM");
     }
     let segs = series_segments(db, series_id).await?;
     if occurrences(&segs, month)
@@ -553,17 +571,24 @@ mod tests {
             (txs[0].amount_agorot, txs[0].recurring_series_id),
             (1_185_000, Some(id))
         );
+        // A skipped month neither makes a transaction nor is generated.
+        skip_month(&s, id, "2026-04").await.unwrap();
+        assert!(skip_month(&s, id, "2026-04").await.is_err());
+        let ahead = upcoming_stored(&s, "2026-05", day("2026-02-20"))
+            .await
+            .unwrap();
+        assert_eq!(
+            ahead.iter().map(|o| o.date.as_str()).collect::<Vec<_>>(),
+            ["2026-02-28", "2026-05-31"]
+        );
         // Settling the rest later does not add a second March.
         settle_due(&s, day("2026-04-01")).await.unwrap();
+        let all = s.list_transactions().await.unwrap();
         assert_eq!(
-            s.list_transactions()
-                .await
-                .unwrap()
-                .iter()
-                .filter(|t| t.date.starts_with("2026-03"))
-                .count(),
+            all.iter().filter(|t| t.date.starts_with("2026-03")).count(),
             1
         );
+        assert!(all.iter().all(|t| !t.date.starts_with("2026-04")));
     }
 
     #[tokio::test]

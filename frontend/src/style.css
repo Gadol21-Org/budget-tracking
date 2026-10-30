@@ -120,3 +120,12 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 /* Not yet settled: a repeating charge that is still ahead. */
 .row.upcoming { background: color-mix(in srgb, #f59e0b 10%, transparent); }
 .upcoming-mark { color: #d97706; }
+
+/* Drop-down menu opening above its button (used by the repeating-charge dialog). */
+.menuwrap { position: relative; }
+.menu { position: absolute; bottom: calc(100% + 6px); inset-inline-end: 0; z-index: 5; display: flex; flex-direction: column;
+  min-width: max-content; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
+.menu[hidden] { display: none; }
+.menu button { border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: var(--bg); }

@@ -178,6 +178,18 @@ async fn settle_recurring_month(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Skip one month of a series (`month` is YYYY-MM); the rest is unchanged.
+async fn skip_recurring_month(
+    State(db): State<Db>,
+    Path((series_id, month)): Path<(i64, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::skip_month(db.as_ref(), series_id, &month)
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 struct CancelQuery {
     /// First month without an occurrence, YYYY-MM.
@@ -396,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/recurring/occurrences", get(recurring_occurrences))
         .route(
             "/api/recurring/:series_id/months/:month",
-            axum::routing::post(settle_recurring_month),
+            axum::routing::post(settle_recurring_month).delete(skip_recurring_month),
         )
         .route(
             "/api/recurring/:series_id",

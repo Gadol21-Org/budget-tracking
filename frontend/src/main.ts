@@ -332,6 +332,18 @@ function settingsView(): HTMLElement {
   );
 }
 
+/** A button that opens a small menu of choices above it. */
+function menuButton(label: string, items: [string, () => void][], className = "btn"): HTMLElement {
+  const menu = el("div", { className: "menu", hidden: true }, ...items.map(([text, run]) => {
+    const item = el("button", { type: "button", textContent: text });
+    item.onclick = () => ((menu.hidden = true), run());
+    return item;
+  }));
+  const button = el("button", { type: "button", className, textContent: `${label} ▾` });
+  button.onclick = () => (menu.hidden = !menu.hidden);
+  return el("div", { className: "menuwrap" }, button, menu);
+}
+
 const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
 const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);
 
@@ -398,16 +410,14 @@ function openTransactionDialog(existing?: Transaction) {
   incBtn.onclick = () => ((isIncome = true), fillCats());
   fillCats();
 
-  const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+  const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
-  const save = el("button", { type: "submit", className: "btn primary", textContent: seriesId !== undefined ? "עדכון מכאן והלאה" : existing ? "עדכון" : "שמירה" });
+  const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
   // Only this month: becomes a transaction with these values; later months are unchanged.
-  const once = el("button", { type: "button", className: "btn", textContent: "עדכון חודש זה בלבד" });
-  once.onclick = async () => {
+  const updateOnce = async () => {
     try {
       const abs = Math.abs(parseAgorot(amount.value));
       if (abs === 0) throw new Error("יש להזין סכום");
-      once.disabled = true;
       await api.settleRecurringMonth(seriesId!, month, {
         date: date.value,
         amount_agorot: isIncome ? abs : -abs,
@@ -420,15 +430,24 @@ function openTransactionDialog(existing?: Transaction) {
       await load();
     } catch (e2) {
       err.textContent = e2 instanceof Error ? e2.message : String(e2);
-      once.disabled = false;
     }
   };
   // Stop the series: this month and later disappear, earlier months stay.
-  const stop = el("button", { type: "button", className: "btn", textContent: "ביטול מכאן והלאה" });
-  stop.onclick = async () => {
+  const stopFromHere = async () => {
     if (!confirm("לבטל את ההוצאה החוזרת מחודש זה והלאה? חודשים קודמים לא ישתנו.")) return;
     try {
       await api.cancelRecurring(seriesId!, month);
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+    }
+  };
+  // Skip only this month; the series carries on around it.
+  const skipOnce = async () => {
+    if (!confirm("לדלג על החיוב של חודש זה בלבד?")) return;
+    try {
+      await api.skipRecurringMonth(seriesId!, month);
       dlg.close();
       await load();
     } catch (e2) {
@@ -446,7 +465,15 @@ function openTransactionDialog(existing?: Transaction) {
     !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
     repeatBox,
     err,
-    el("div", { className: "actions", style: "flex-wrap:wrap" }, cancel, seriesId !== undefined ? stop : null, seriesId !== undefined ? once : null, save),
+    seriesId !== undefined
+      ? el(
+          "div",
+          { className: "actions" },
+          cancel,
+          menuButton("ביטול חיוב", [["חודש זה בלבד", skipOnce], ["מכאן והלאה", stopFromHere]]),
+          menuButton("עדכון", [["חודש זה בלבד", updateOnce], ["מכאן והלאה", () => dlg.querySelector("form")!.requestSubmit()]], "btn primary"),
+        )
+      : el("div", { className: "actions" }, cancel, save),
   );
   form.onsubmit = async (e) => {
     e.preventDefault();

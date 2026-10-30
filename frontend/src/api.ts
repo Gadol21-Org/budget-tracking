@@ -80,6 +80,9 @@ export const api = {
   /** Edit one month on its own (month is YYYY-MM): it becomes a transaction; the series is unchanged. */
   settleRecurringMonth: (series: number, month: string, t: Omit<Transaction, "id" | "sync_state">) =>
     request<void>(`/api/recurring/${series}/months/${month}`, { method: "POST", body: JSON.stringify(t) }),
+  /** Skip one month (YYYY-MM); the series is unchanged. */
+  skipRecurringMonth: (series: number, month: string) =>
+    request<void>(`/api/recurring/${series}/months/${month}`, { method: "DELETE" }),
   /** Stop the series from this month (YYYY-MM) on. */
   cancelRecurring: (series: number, from: string) =>
     request<void>(`/api/recurring/${series}?from=${from}`, { method: "DELETE" }),

@@ -469,7 +469,7 @@ impl Storage for MySqlStorage {
         &self,
         series_id: i64,
         month: &str,
-        t: &NewTransaction,
+        t: Option<&NewTransaction>,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let new =
@@ -479,7 +479,7 @@ impl Storage for MySqlStorage {
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
-        if new == 1 {
+        if let (1, Some(t)) = (new, t) {
             sqlx::query(
                 "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                            note, sync_state, recurring_series_id)

@@ -153,12 +153,13 @@ pub trait Storage: Send + Sync {
         Ok(Vec::new())
     }
     /// Settle one month of a series early, with these values instead of the rule's (a salary
-    /// that came early, a bill that differed). False if the month had already settled.
+    /// that came early, a bill that differed), or with `None` to skip the month. False if the
+    /// month had already settled.
     async fn settle_recurring_month(
         &self,
         _series_id: i64,
         _month: &str,
-        _t: &NewTransaction,
+        _t: Option<&NewTransaction>,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("repeating transactions are not supported by this storage backend")
     }
@@ -521,7 +522,7 @@ impl Storage for SqliteStorage {
         &self,
         series_id: i64,
         month: &str,
-        t: &NewTransaction,
+        t: Option<&NewTransaction>,
     ) -> anyhow::Result<bool> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
@@ -529,7 +530,7 @@ impl Storage for SqliteStorage {
             "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
             params![series_id, month],
         )?;
-        if new == 1 {
+        if let (1, Some(t)) = (new, t) {
             tx.execute(
                 "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                            note, sync_state, recurring_series_id)
