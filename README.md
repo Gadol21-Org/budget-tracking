@@ -6,8 +6,8 @@ PWA (TypeScript, Vite) with a Rust (axum) backend. Amounts are stored as exact i
 ```
 cp .env.example .env   # quote values containing '#', e.g. PAAMONIM_PASSWORD='pass#'
 (cd frontend && npm install && npm run build)
-cargo run -p budget-backend      # serves API + built PWA on :3000
-# or: (cd frontend && npm run dev) for hot reload, proxying /api to :3000
+cargo run -p budget-backend      # serves API + built PWA at http://127.0.0.1:3000
+# or, for hot reload: (cd frontend && npm run dev) and open http://localhost:5173 (proxies /api to :3000)
 ```
 
 ## Storage
