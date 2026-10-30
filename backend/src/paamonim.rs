@@ -120,6 +120,29 @@ impl Client {
         .await
     }
 
+    /// The category Paamonim files each standard item under (expense items, income items).
+    /// `family_id` is the account id from the edit-item form.
+    pub async fn item_categories(
+        &self,
+        family_id: &str,
+    ) -> Result<(Vec<ItemCategory>, Vec<ItemCategory>)> {
+        let (status, body) = self
+            .get_raw(
+                "/budgets/budget_and_balances",
+                &[
+                    ("budget_id", ""),
+                    ("balance_from", "0"),
+                    ("balance_to", "0"),
+                    ("family_id", family_id),
+                ],
+            )
+            .await?;
+        if status != 200 {
+            bail!("budget_and_balances returned HTTP {status}");
+        }
+        parse_item_categories(&body)
+    }
+
     /// Mirror a line to Paamonim. `amount_shekels` must already be rounded.
     pub async fn save_item_line(&self, fields: &[(&str, String)]) -> Result<()> {
         self.http
@@ -298,20 +321,6 @@ pub fn parse_custom_items(html: &str) -> Vec<CustomItem> {
         .collect()
 }
 
-/// Standard items are flat in `get_*_items`, but some are named `<category> - <item>`.
-/// Returns the category and the remaining item name when the prefix is a known category.
-pub fn split_category_prefix<'a>(
-    name: &'a str,
-    categories: &'a [Category],
-) -> Option<(&'a Category, &'a str)> {
-    let (prefix, rest) = name.split_once(" - ")?;
-    let prefix = prefix.trim();
-    categories
-        .iter()
-        .find(|c| c.name == prefix)
-        .map(|c| (c, rest.trim()))
-}
-
 /// A standard item with the category Paamonim files it under, from `budget_and_balances`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemCategory {
@@ -325,7 +334,8 @@ pub struct ItemCategory {
 /// The body is `[expense_rows, income_rows]`; each starts with a titles row (no `id`) that is skipped.
 /// Returns `(expense, income)`. Categories are given by name only, and the two kinds share none.
 pub fn parse_item_categories(json: &str) -> Result<(Vec<ItemCategory>, Vec<ItemCategory>)> {
-    let parts: Vec<Vec<serde_json::Value>> = serde_json::from_str(json).context("budget_and_balances is not [[..],[..]]")?;
+    let parts: Vec<Vec<serde_json::Value>> =
+        serde_json::from_str(json).context("budget_and_balances is not [[..],[..]]")?;
     let rows = |part: Option<&Vec<serde_json::Value>>| -> Vec<ItemCategory> {
         part.into_iter()
             .flatten()
@@ -517,18 +527,6 @@ mod tests {
     }
 
     #[test]
-    fn splits_category_prefix() {
-        let cats = vec![Category {
-            id: "3".into(),
-            name: "מזון".into(),
-        }];
-        let (c, rest) = split_category_prefix("מזון - סופר", &cats).unwrap();
-        assert_eq!((c.id.as_str(), rest), ("3", "סופר"));
-        assert!(split_category_prefix("רכב - דלק", &cats).is_none());
-        assert!(split_category_prefix("סופר", &cats).is_none());
-    }
-
-    #[test]
     fn parses_item_categories() {
         let json = r#"[
             [{"avg_title":"a","balances_titles":[],"budget_title":"b","future_payments":"c","remaining_budget_title":"d","type_title":"e"},
@@ -538,8 +536,22 @@ mod tests {
              {"id":9,"full_name":"משכורת","BudgetCategoryName":"הכנסות","Average":0}]]"#;
         let (exp, inc) = parse_item_categories(json).unwrap();
         assert_eq!(exp.len(), 2);
-        assert_eq!(exp[0], ItemCategory { item_id: "5".into(), full_name: "סופר".into(), category_name: "מזון".into() });
-        assert_eq!(inc, vec![ItemCategory { item_id: "9".into(), full_name: "משכורת".into(), category_name: "הכנסות".into() }]);
+        assert_eq!(
+            exp[0],
+            ItemCategory {
+                item_id: "5".into(),
+                full_name: "סופר".into(),
+                category_name: "מזון".into()
+            }
+        );
+        assert_eq!(
+            inc,
+            vec![ItemCategory {
+                item_id: "9".into(),
+                full_name: "משכורת".into(),
+                category_name: "הכנסות".into()
+            }]
+        );
         assert!(parse_item_categories("{}").is_err());
     }
 }

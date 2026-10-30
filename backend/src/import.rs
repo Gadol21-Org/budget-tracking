@@ -5,8 +5,8 @@ use chrono::{Datelike, NaiveDate};
 
 use crate::money::from_shekels;
 use crate::paamonim::{
-    parse_categories, parse_custom_items, split_category_prefix, BudgetItem, Category as PCategory,
-    Client, CustomItem, HistoryEntry, Kind,
+    parse_categories, parse_custom_items, BudgetItem, Category as PCategory, Client, CustomItem,
+    HistoryEntry, ItemCategory, Kind,
 };
 use crate::storage::{
     ImportBatch, ImportCategory, ImportPaymentMethod, ImportSummary, ImportTransaction, Storage,
@@ -23,6 +23,10 @@ fn item_key(kind: Kind, item_id: &str) -> String {
 pub struct Taxonomy<'a> {
     pub expense_items: &'a [BudgetItem],
     pub income_items: &'a [BudgetItem],
+    /// Category of each standard item (from `budget_and_balances`), by item id.
+    pub expense_item_categories: &'a [ItemCategory],
+    pub income_item_categories: &'a [ItemCategory],
+    /// Category ids, which only the add-item form exposes; joined to the above by name.
     pub categories: &'a [PCategory],
     pub custom_expense: &'a [CustomItem],
     pub custom_income: &'a [CustomItem],
@@ -30,44 +34,50 @@ pub struct Taxonomy<'a> {
 
 /// Pure mapping from parsed Paamonim data to an import batch.
 ///
-/// Paamonim has no real item-to-category tree: standard items are flat, a few are named
-/// `<category> - <item>`, and only custom items carry a category id. Items with a known
-/// category become children of it; the rest stay top-level.
+/// Paamonim's hierarchy is two levels: category, then item. Every standard item has a
+/// category; custom items carry a category id. Items become children of their category.
 pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
     let mut batch = ImportBatch::default();
     let mut by_name = std::collections::HashMap::new();
     let mut parents = std::collections::HashSet::new();
 
     for kind in [Kind::Expense, Kind::Income] {
-        let (items, custom) = match kind {
-            Kind::Expense => (t.expense_items, t.custom_expense),
-            Kind::Income => (t.income_items, t.custom_income),
+        let (items, item_cats, custom) = match kind {
+            Kind::Expense => (t.expense_items, t.expense_item_categories, t.custom_expense),
+            Kind::Income => (t.income_items, t.income_item_categories, t.custom_income),
         };
         let is_income = kind == Kind::Income;
         let tag = if is_income { "i" } else { "e" };
-        let mut ensure_parent = |batch: &mut ImportBatch, c: &PCategory| -> String {
-            let key = format!("c{tag}:{}", c.id);
+        // Parent key by category id when known (stable across imports), else by name.
+        let mut ensure_parent = |batch: &mut ImportBatch, id: Option<&str>, name: &str| -> String {
+            let key = format!("c{tag}:{}", id.unwrap_or(name));
             if parents.insert(key.clone()) {
                 batch.categories.push(ImportCategory {
                     key: key.clone(),
-                    name: c.name.clone(),
+                    name: name.to_string(),
                     is_income,
                     parent_key: None,
                 });
             }
             key
         };
+        let id_of = |name: &str| {
+            t.categories
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.id.as_str())
+        };
 
         for it in items {
-            let (parent_key, name) = match split_category_prefix(&it.name, t.categories) {
-                Some((c, rest)) => (Some(ensure_parent(&mut batch, c)), rest.to_string()),
-                None => (None, it.name.clone()),
-            };
+            let parent_key = item_cats
+                .iter()
+                .find(|c| c.item_id == it.item_id)
+                .map(|c| ensure_parent(&mut batch, id_of(&c.category_name), &c.category_name));
             let key = item_key(kind, &it.item_id);
             by_name.insert((kind, it.name.clone()), key.clone());
             batch.categories.push(ImportCategory {
                 key,
-                name,
+                name: it.name.clone(),
                 is_income,
                 parent_key,
             });
@@ -77,7 +87,7 @@ pub fn build_batch(t: &Taxonomy, history: &[HistoryEntry]) -> ImportBatch {
                 .category_id
                 .as_ref()
                 .and_then(|id| t.categories.iter().find(|c| &c.id == id))
-                .map(|c| ensure_parent(&mut batch, c));
+                .map(|c| ensure_parent(&mut batch, Some(&c.id), &c.name));
             let key = item_key(kind, &it.item_id);
             by_name.insert((kind, it.name.clone()), key.clone());
             batch.categories.push(ImportCategory {
@@ -180,10 +190,26 @@ pub async fn run(
         parse_custom_items(&custom_expense_html),
         parse_custom_items(&custom_income_html),
     );
+    // The account (family) id is only exposed in the edit-item form.
+    let first_item = expense
+        .first()
+        .or(income.first())
+        .context("Paamonim returned no budget items")?;
+    let form = client
+        .fragment(
+            "/rishumit/edit_item_line",
+            &[("id", first_item.item_id.as_str())],
+        )
+        .await?;
+    let (family_id, _) = crate::mirror::parse_account_ids(&form)
+        .context("account id not found in the edit-item form")?;
+    let (expense_cats, income_cats) = client.item_categories(&family_id).await?;
     let history = fetch_history(client, from, to).await?;
     let taxonomy = Taxonomy {
         expense_items: &expense,
         income_items: &income,
+        expense_item_categories: &expense_cats,
+        income_item_categories: &income_cats,
         categories: &categories,
         custom_expense: &custom_expense,
         custom_income: &custom_income,
@@ -237,6 +263,8 @@ mod tests {
         let t = Taxonomy {
             expense_items: &items,
             income_items: &[],
+            expense_item_categories: &[],
+            income_item_categories: &[],
             categories: &[],
             custom_expense: &[],
             custom_income: &[],
@@ -248,12 +276,24 @@ mod tests {
     }
 
     #[test]
-    fn prefixed_and_custom_items_get_parents_and_others_stay_top_level() {
+    fn items_become_children_of_their_category_and_custom_items_join_the_same_parent() {
         let cats = [PCategory {
             id: "3".into(),
             name: "דיור".into(),
         }];
-        let items = [item("1", "דיור - שכירות"), item("2", "סופר")];
+        let items = [item("1", "שכירות"), item("2", "סופר")];
+        let item_cats = [
+            ItemCategory {
+                item_id: "1".into(),
+                full_name: "שכירות".into(),
+                category_name: "דיור".into(),
+            },
+            ItemCategory {
+                item_id: "2".into(),
+                full_name: "סופר".into(),
+                category_name: "מזון".into(),
+            },
+        ];
         let custom = [CustomItem {
             item_id: "90".into(),
             name: "ארנונה".into(),
@@ -262,6 +302,8 @@ mod tests {
         let t = Taxonomy {
             expense_items: &items,
             income_items: &[],
+            expense_item_categories: &item_cats,
+            income_item_categories: &[],
             categories: &cats,
             custom_expense: &custom,
             custom_income: &[],
@@ -270,14 +312,14 @@ mod tests {
             &t,
             &[
                 entry("ארנונה", Kind::Expense),
-                entry("דיור - שכירות", Kind::Expense),
+                entry("שכירות", Kind::Expense),
             ],
         );
         let get = |k: &str| b.categories.iter().find(|c| c.key == k).unwrap();
-        assert_eq!(get("e:1").name, "שכירות");
+        // "דיור" has a known id, so its key is stable; "מזון" has none and is keyed by name.
         assert_eq!(get("e:1").parent_key.as_deref(), Some("ce:3"));
         assert_eq!(get("e:90").parent_key.as_deref(), Some("ce:3"));
-        assert_eq!(get("e:2").parent_key, None);
+        assert_eq!(get("e:2").parent_key.as_deref(), Some("ce:מזון"));
         assert_eq!(b.categories.iter().filter(|c| c.key == "ce:3").count(), 1);
         // a parent is always listed before its children
         let pos = |k: &str| b.categories.iter().position(|c| c.key == k).unwrap();
