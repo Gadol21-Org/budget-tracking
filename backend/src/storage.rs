@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::recurring::{NewRecurring, RecurringSegment};
+
 #[derive(Serialize, Clone)]
 pub struct Transaction {
     pub id: i64,
@@ -119,6 +121,25 @@ pub trait Storage: Send + Sync {
     /// Local edit. A line already in Paamonim is flagged `modified`: edits are not pushed there.
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()>;
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
+    /// Repeating-transaction rules (see `recurring.rs`). Backends without support have none.
+    async fn list_recurring(&self) -> anyhow::Result<Vec<RecurringSegment>> {
+        Ok(Vec::new())
+    }
+    /// Add a segment and return its id; `series_id` None starts a new series, whose id is
+    /// that of its first segment.
+    async fn insert_recurring(
+        &self,
+        _series_id: Option<i64>,
+        _r: &NewRecurring,
+    ) -> anyhow::Result<i64> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    async fn update_recurring(&self, _id: i64, _r: &NewRecurring) -> anyhow::Result<()> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    async fn delete_recurring(&self, _id: i64) -> anyhow::Result<()> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
     async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
@@ -376,6 +397,91 @@ impl Storage for SqliteStorage {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    async fn list_recurring(&self) -> anyhow::Result<Vec<RecurringSegment>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
+                    payment_method_id, note
+             FROM recurring ORDER BY series_id, start_month",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(RecurringSegment {
+                    id: r.get(0)?,
+                    series_id: r.get(1)?,
+                    start_month: r.get(2)?,
+                    end_month: r.get(3)?,
+                    day: r.get(4)?,
+                    amount_agorot: r.get(5)?,
+                    category_id: r.get(6)?,
+                    payment_method_id: r.get(7)?,
+                    note: r.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn insert_recurring(
+        &self,
+        series_id: Option<i64>,
+        r: &NewRecurring,
+    ) -> anyhow::Result<i64> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
+                                    category_id, payment_method_id, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                series_id.unwrap_or(0),
+                r.start_month,
+                r.end_month,
+                r.day,
+                r.amount_agorot,
+                r.category_id,
+                r.payment_method_id,
+                r.note
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        if series_id.is_none() {
+            tx.execute(
+                "UPDATE recurring SET series_id = ?1 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(id)
+    }
+
+    async fn update_recurring(&self, id: i64, r: &NewRecurring) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE recurring SET start_month = ?2, end_month = ?3, day = ?4, amount_agorot = ?5,
+               category_id = ?6, payment_method_id = ?7, note = ?8
+             WHERE id = ?1",
+            params![
+                id,
+                r.start_month,
+                r.end_month,
+                r.day,
+                r.amount_agorot,
+                r.category_id,
+                r.payment_method_id,
+                r.note
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn delete_recurring(&self, id: i64) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM recurring WHERE id = ?1", params![id])?;
+        Ok(())
     }
 }
 

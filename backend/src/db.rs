@@ -26,6 +26,18 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              paamonim_line_id TEXT UNIQUE,       -- set once mirrored/imported
              sync_state TEXT NOT NULL DEFAULT 'pending' -- pending | synced | error
          );
+         -- Rules for repeating transactions; occurrences are generated, not stored.
+         CREATE TABLE IF NOT EXISTS recurring (
+             id INTEGER PRIMARY KEY,
+             series_id INTEGER NOT NULL,         -- id of the series' first segment
+             start_month TEXT NOT NULL,          -- YYYY-MM
+             end_month TEXT,                     -- inclusive; NULL = forever
+             day INTEGER NOT NULL,
+             amount_agorot INTEGER NOT NULL,
+             category_id INTEGER REFERENCES categories(id),
+             payment_method_id INTEGER REFERENCES payment_methods(id),
+             note TEXT NOT NULL DEFAULT ''
+         );
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
     )?;

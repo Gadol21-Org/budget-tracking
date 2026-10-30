@@ -6,6 +6,34 @@ export interface Transaction {
   payment_method_id: number | null;
   note: string;
   sync_state: string;
+  /** Set on a generated occurrence of a repeating transaction (not a stored row). */
+  recurring_series_id?: number;
+  recurring_segment_id?: number;
+}
+
+/** One rule of a repeating monthly transaction; a series is one or more segments. */
+export interface RecurringSegment {
+  id: number;
+  series_id: number;
+  start_month: string;
+  end_month: string | null;
+  day: number;
+  amount_agorot: number;
+  category_id: number | null;
+  payment_method_id: number | null;
+  note: string;
+}
+
+export type NewRecurring = Omit<RecurringSegment, "id" | "series_id">;
+
+export interface Occurrence {
+  series_id: number;
+  segment_id: number;
+  date: string;
+  amount_agorot: number;
+  category_id: number | null;
+  payment_method_id: number | null;
+  note: string;
 }
 
 export interface Category {
@@ -41,6 +69,15 @@ export const api = {
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),
   addTransaction: (t: Omit<Transaction, "id" | "sync_state">) =>
     request<number>("/api/transactions", { method: "POST", body: JSON.stringify(t) }),
+  recurring: () => request<RecurringSegment[]>("/api/recurring"),
+  occurrences: () => request<Occurrence[]>("/api/recurring/occurrences"),
+  addRecurring: (r: NewRecurring) => request<number>("/api/recurring", { method: "POST", body: JSON.stringify(r) }),
+  /** Apply `r` from `r.start_month` on; earlier months keep their values. */
+  changeRecurring: (series: number, r: NewRecurring) =>
+    request<void>(`/api/recurring/${series}`, { method: "PUT", body: JSON.stringify(r) }),
+  /** Stop the series from this month (YYYY-MM) on. */
+  cancelRecurring: (series: number, from: string) =>
+    request<void>(`/api/recurring/${series}?from=${from}`, { method: "DELETE" }),
   importPaamonim: (from: string, to: string) =>
     request<ImportSummary>("/api/import/paamonim", { method: "POST", body: JSON.stringify({ from, to }) }),
   exportSheets: () => request<{ transactions: number; monthly_rows: number }>("/api/export/sheets", { method: "POST" }),

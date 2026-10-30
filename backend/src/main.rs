@@ -6,13 +6,14 @@ mod money;
 mod mysql;
 mod nosql;
 mod paamonim;
+mod recurring;
 mod sheets;
 mod storage;
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get},
     Json, Router,
@@ -76,10 +77,87 @@ async fn list_categories(
     db.list_categories().await.map(Json).map_err(internal)
 }
 
+/// Totals of real transactions plus the repeating ones generated up to the default horizon.
 async fn monthly_totals(
     State(db): State<Db>,
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
-    db.monthly_totals().await.map(Json).map_err(internal)
+    let mut totals = db.monthly_totals().await.map_err(internal)?;
+    let segments = db.list_recurring().await.map_err(internal)?;
+    let through = recurring::default_through(chrono::Local::now().date_naive());
+    recurring::add_to_totals(&mut totals, &recurring::occurrences(&segments, &through));
+    Ok(Json(totals))
+}
+
+fn recurring_error(e: recurring::RecurringError) -> (StatusCode, String) {
+    match e {
+        recurring::RecurringError::Invalid(m) => (StatusCode::BAD_REQUEST, m),
+        recurring::RecurringError::Storage(e) => internal(e),
+    }
+}
+
+async fn list_recurring(
+    State(db): State<Db>,
+) -> Result<Json<Vec<recurring::RecurringSegment>>, (StatusCode, String)> {
+    db.list_recurring().await.map(Json).map_err(internal)
+}
+
+#[derive(Deserialize)]
+struct OccurrencesQuery {
+    /// Last month to generate, YYYY-MM; defaults to two years ahead.
+    through: Option<String>,
+}
+
+async fn recurring_occurrences(
+    State(db): State<Db>,
+    Query(q): Query<OccurrencesQuery>,
+) -> Result<Json<Vec<recurring::Occurrence>>, (StatusCode, String)> {
+    let through = match q.through {
+        Some(m) if recurring::is_month(&m) => m,
+        Some(_) => return Err((StatusCode::BAD_REQUEST, "through must be YYYY-MM".into())),
+        None => recurring::default_through(chrono::Local::now().date_naive()),
+    };
+    let segments = db.list_recurring().await.map_err(internal)?;
+    Ok(Json(recurring::occurrences(&segments, &through)))
+}
+
+/// Start a series; returns its id.
+async fn create_recurring(
+    State(db): State<Db>,
+    Json(r): Json<recurring::NewRecurring>,
+) -> Result<Json<i64>, (StatusCode, String)> {
+    recurring::create(db.as_ref(), &r)
+        .await
+        .map(Json)
+        .map_err(recurring_error)
+}
+
+/// Change the series from `start_month` of the body onward; earlier months are untouched.
+async fn change_recurring(
+    State(db): State<Db>,
+    Path(series_id): Path<i64>,
+    Json(r): Json<recurring::NewRecurring>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    recurring::change_from(db.as_ref(), series_id, &r)
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct CancelQuery {
+    /// First month without an occurrence, YYYY-MM.
+    from: String,
+}
+
+async fn cancel_recurring(
+    State(db): State<Db>,
+    Path(series_id): Path<i64>,
+    Query(q): Query<CancelQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    recurring::cancel_from(db.as_ref(), series_id, &q.from)
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -274,6 +352,12 @@ async fn main() -> anyhow::Result<()> {
             delete(delete_transaction).put(update_transaction),
         )
         .route("/api/categories", get(list_categories))
+        .route("/api/recurring", get(list_recurring).post(create_recurring))
+        .route("/api/recurring/occurrences", get(recurring_occurrences))
+        .route(
+            "/api/recurring/:series_id",
+            axum::routing::put(change_recurring).delete(cancel_recurring),
+        )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))

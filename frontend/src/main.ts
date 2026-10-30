@@ -1,6 +1,6 @@
 import "./style.css";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
-import { api, formatShekels, parseAgorot, type Category, type Transaction } from "./api";
+import { api, formatShekels, parseAgorot, type Category, type RecurringSegment, type Transaction } from "./api";
 
 type View = "month" | "list" | "settings";
 
@@ -8,7 +8,9 @@ const root = document.getElementById("app")!;
 const state = {
   view: "month" as View,
   period: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  /** Stored transactions plus the generated occurrences of repeating ones. */
   txs: [] as Transaction[],
+  recurring: [] as RecurringSegment[],
   cats: [] as Category[],
   /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
   /** Which side of the summary's category breakdown is shown. */
@@ -239,12 +241,15 @@ function listView(): HTMLElement {
         ...txs
           .filter((t) => t.date === d)
           .map((t) => {
-            const del = el("button", { className: "del", title: "מחיקה", textContent: "✕" });
-            del.onclick = async () => {
-              if (!confirm("למחוק את התנועה?")) return;
-              await api.deleteTransaction(t.id);
-              await load();
-            };
+            const repeating = t.recurring_series_id !== undefined;
+            // A repeating line has no row of its own to delete; stopping it is in its edit dialog.
+            const del = repeating ? null : el("button", { className: "del", title: "מחיקה", textContent: "✕" });
+            if (del)
+              del.onclick = async () => {
+                if (!confirm("למחוק את התנועה?")) return;
+                await api.deleteTransaction(t.id);
+                await load();
+              };
             const edit = el("button", { className: "del", title: "עריכה", textContent: "✎" });
             edit.onclick = () => openTransactionDialog(t);
             const badge: Record<string, string> = {
@@ -257,7 +262,7 @@ function listView(): HTMLElement {
               el(
                 "div",
                 { className: "grow" },
-                el("div", { className: "name", textContent: catPath(t.category_id) }),
+                el("div", { className: "name", textContent: `${repeating ? "🔁 " : ""}${catPath(t.category_id)}` }),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
                 badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
               ),
@@ -323,7 +328,16 @@ function settingsView(): HTMLElement {
   );
 }
 
+const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
+const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);
+
+/**
+ * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
+ * the series from that occurrence's month on; earlier months are left as they were.
+ */
 function openTransactionDialog(existing?: Transaction) {
+  const seriesId = existing?.recurring_series_id;
+  const segment = state.recurring.find((s) => s.id === existing?.recurring_segment_id);
   let isIncome = existing ? existing.amount_agorot > 0 : false;
   const dlg = el("dialog");
   const amount = el("input", {
@@ -334,10 +348,27 @@ function openTransactionDialog(existing?: Transaction) {
     autocomplete: "off",
     value: existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
   });
-  const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
+  // The occurrence picked fixes the month a series change starts from.
+  const date = el("input", { type: "date", required: true, disabled: seriesId !== undefined, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
   const category = el("select");
   const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35, value: existing?.note ?? "" });
   const err = el("div", { className: "error" });
+
+  // Repeating monthly: for a new transaction it is opt-in; for an occurrence it is always on.
+  const repeat = el("input", { type: "checkbox", checked: seriesId !== undefined, disabled: seriesId !== undefined });
+  const forever = el("select", {}, el("option", { value: "forever", textContent: "ללא הגבלה" }), el("option", { value: "months", textContent: "למשך מספר חודשים" }));
+  const months = el("input", { type: "number", min: "1", step: "1", inputMode: "numeric", value: "12" });
+  if (segment?.end_month) {
+    forever.value = "months";
+    months.value = String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1);
+  }
+  const repeatBox = el("div", { style: "display:flex;flex-direction:column;gap:12px" }, el("label", {}, "משך", forever), el("label", {}, "מספר חודשים (כולל החודש הזה)", months));
+  const showRepeat = () => {
+    repeatBox.style.display = repeat.checked ? "flex" : "none";
+    months.parentElement!.style.display = forever.value === "months" ? "" : "none";
+  };
+  repeat.onchange = forever.onchange = showRepeat;
+  showRepeat();
 
   const expBtn = el("button", { type: "button", textContent: "הוצאה" });
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
@@ -364,17 +395,31 @@ function openTransactionDialog(existing?: Transaction) {
 
   const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
   cancel.onclick = () => dlg.close();
-  const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
+  const save = el("button", { type: "submit", className: "btn primary", textContent: seriesId !== undefined ? "עדכון מהחודש הזה והלאה" : existing ? "עדכון" : "שמירה" });
+  // Stop the series: this month and later disappear, earlier months stay.
+  const stop = el("button", { type: "button", className: "btn", textContent: "ביטול מהחודש הזה והלאה" });
+  stop.onclick = async () => {
+    if (!confirm("לבטל את ההוצאה החוזרת מחודש זה והלאה? חודשים קודמים לא ישתנו.")) return;
+    try {
+      await api.cancelRecurring(seriesId!, existing!.date.slice(0, 7));
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+    }
+  };
   const form = el(
     "form",
     { className: "add", method: "dialog" },
     el("div", { className: "seg" }, expBtn, incBtn),
     el("label", {}, "סכום (₪)", amount),
     el("label", {}, "קטגוריה", category),
-    el("label", {}, "תאריך", date),
+    el("label", {}, seriesId !== undefined ? "חודש" : "תאריך", date),
     el("label", {}, "הערה", note),
+    seriesId === undefined ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
+    repeatBox,
     err,
-    el("div", { className: "actions" }, cancel, save),
+    el("div", { className: "actions" }, cancel, seriesId !== undefined ? stop : null, save),
   );
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -389,7 +434,22 @@ function openTransactionDialog(existing?: Transaction) {
         payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
       };
-      if (existing) await api.updateTransaction(existing.id, body);
+      if (repeat.checked) {
+        const n = Number(months.value);
+        if (forever.value === "months" && !(Number.isInteger(n) && n >= 1)) throw new Error("מספר החודשים אינו תקין");
+        const start = date.value.slice(0, 7);
+        const rule = {
+          start_month: start,
+          end_month: forever.value === "months" ? addMonths(start, n - 1) : null,
+          day: seriesId !== undefined ? (segment?.day ?? 1) : Number(date.value.slice(8)),
+          amount_agorot: body.amount_agorot,
+          category_id: body.category_id,
+          payment_method_id: body.payment_method_id,
+          note: body.note,
+        };
+        if (seriesId !== undefined) await api.changeRecurring(seriesId, rule);
+        else await api.addRecurring(rule);
+      } else if (existing) await api.updateTransaction(existing.id, body);
       else await api.addTransaction(body);
       state.period = monthOf(date.value);
       dlg.close();
@@ -428,7 +488,21 @@ function render() {
 }
 
 async function load() {
-  [state.cats, state.txs] = await Promise.all([api.categories(), api.transactions()]);
+  const [cats, txs, recurring, occurrences] = await Promise.all([api.categories(), api.transactions(), api.recurring(), api.occurrences()]);
+  state.cats = cats;
+  state.recurring = recurring;
+  const generated: Transaction[] = occurrences.map((o) => ({
+    id: 0,
+    date: o.date,
+    amount_agorot: o.amount_agorot,
+    category_id: o.category_id,
+    payment_method_id: o.payment_method_id,
+    note: o.note,
+    sync_state: "synced",
+    recurring_series_id: o.series_id,
+    recurring_segment_id: o.segment_id,
+  }));
+  state.txs = [...txs, ...generated];
   render();
 }
 

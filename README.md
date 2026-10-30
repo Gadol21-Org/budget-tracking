@@ -29,6 +29,9 @@ Two tables (`transactions`, `lookups`) are created on startup, leaving one free 
 ## Mirroring to Paamonim
 Off by default. With `PAAMONIM_MIRROR=1`, new transactions that use a Paamonim-imported category are written to Paamonim (rounded to whole shekels; the app keeps the exact amount). `POST /api/mirror/paamonim` retries pending ones. Deletes and edits are not mirrored yet. Not yet run against a real account.
 
+## Repeating monthly transactions
+Tick "חוזר מדי חודש" when adding a transaction, for a set number of months or without end. A series is stored as rules (`recurring` table, `backend/src/recurring.rs`); its monthly occurrences are generated when read (`GET /api/recurring/occurrences`, also folded into `/api/monthly-totals`) and are shown with 🔁. Editing an occurrence changes the series from that month on (`PUT /api/recurring/:series_id`, the body's `start_month` is the first affected month), and "cancel from this month" stops it (`DELETE /api/recurring/:series_id?from=YYYY-MM`); earlier months never change. Occurrences are not real transactions, so they are not mirrored to Paamonim and not in the Sheets export. Supported by SQLite and MySQL, not by the NoSQL backend.
+
 ## Google Sheets export
 Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet with the service account as Editor). The `Transactions` and `Monthly` tabs are rewritten by `POST /api/export/sheets` and nightly (`SHEETS_EXPORT_INTERVAL_HOURS`). Verified live against Google Sheets.
 
