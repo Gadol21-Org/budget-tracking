@@ -33,9 +33,19 @@ const BACKOFF_MAX: Duration = Duration::from_secs(8);
 /// Always Free allows 25 read and 25 write units per table (and 3 tables).
 const UNITS: i32 = 25;
 
+/// Full-table scans are slow and use up the read units of the free tier, so
+/// the lists are kept in memory and dropped whenever anything is written.
+#[derive(Default)]
+struct Cache {
+    transactions: Option<Vec<Transaction>>,
+    categories: Option<Vec<Category>>,
+    payment_methods: Option<Vec<PaymentMethod>>,
+}
+
 pub struct NoSqlStorage {
     handle: Handle,
     seq: AtomicU64,
+    cache: tokio::sync::Mutex<Cache>,
 }
 
 impl NoSqlStorage {
@@ -49,6 +59,7 @@ impl NoSqlStorage {
         let s = Self {
             handle,
             seq: AtomicU64::new(0),
+            cache: Default::default(),
         };
         s.create_tables().await?;
         Ok(s)
@@ -138,9 +149,56 @@ impl NoSqlStorage {
         }
     }
 
+    async fn scan_payment_methods(&self) -> Result<Vec<PaymentMethod>> {
+        let rows = self
+            .query_all(&format!(
+                "select * from {LOOKUPS} where kind = 'payment_method'"
+            ))
+            .await?;
+        let mut out: Vec<PaymentMethod> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(PaymentMethod {
+                    id: r.get_i64("id")?,
+                    name: r.get_string("name")?,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    async fn scan_transactions(&self) -> Result<Vec<Transaction>> {
+        let rows = self.query_all(&format!("select * from {TX}")).await?;
+        let mut txs = rows.iter().map(tx_from_row).collect::<Result<Vec<_>>>()?;
+        txs.sort_by(|a, b| b.date.cmp(&a.date).then(b.id.cmp(&a.id)));
+        Ok(txs)
+    }
+
+    async fn scan_categories(&self) -> Result<Vec<Category>> {
+        let rows = self
+            .query_all(&format!("select * from {LOOKUPS} where kind = 'category'"))
+            .await?;
+        let mut cats: Vec<Category> = rows
+            .iter()
+            .filter_map(|r| {
+                Some(Category {
+                    id: r.get_i64("id")?,
+                    name: r.get_string("name")?,
+                    is_income: r.get_bool("is_income").unwrap_or(false),
+                    parent_id: r.get_i64("parent_id"),
+                })
+            })
+            .collect();
+        cats.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(cats)
+    }
+
     async fn put(&self, table: &str, row: MapValue) -> Result<()> {
         let req = PutRequest::new(table).value(row);
-        retry(|| req.execute(&self.handle)).await?;
+        let res = retry(|| req.execute(&self.handle)).await;
+        *self.cache.lock().await = Cache::default();
+        res?;
         Ok(())
     }
 
@@ -222,22 +280,27 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
 #[async_trait::async_trait]
 impl Storage for NoSqlStorage {
     async fn list_payment_methods(&self) -> Result<Vec<PaymentMethod>> {
-        let rows = self
-            .query_all(&format!(
-                "select * from {LOOKUPS} where kind = 'payment_method'"
-            ))
-            .await?;
-        let mut out: Vec<PaymentMethod> = rows
-            .iter()
-            .filter_map(|r| {
-                Some(PaymentMethod {
-                    id: r.get_i64("id")?,
-                    name: r.get_string("name")?,
-                })
-            })
-            .collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        let mut cache = self.cache.lock().await;
+        if cache.payment_methods.is_none() {
+            cache.payment_methods = Some(self.scan_payment_methods().await?);
+        }
+        Ok(cache.payment_methods.clone().unwrap_or_default())
+    }
+
+    async fn list_transactions(&self) -> Result<Vec<Transaction>> {
+        let mut cache = self.cache.lock().await;
+        if cache.transactions.is_none() {
+            cache.transactions = Some(self.scan_transactions().await?);
+        }
+        Ok(cache.transactions.clone().unwrap_or_default())
+    }
+
+    async fn list_categories(&self) -> Result<Vec<Category>> {
+        let mut cache = self.cache.lock().await;
+        if cache.categories.is_none() {
+            cache.categories = Some(self.scan_categories().await?);
+        }
+        Ok(cache.categories.clone().unwrap_or_default())
     }
 
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
@@ -372,13 +435,6 @@ impl Storage for NoSqlStorage {
         Ok(sum)
     }
 
-    async fn list_transactions(&self) -> Result<Vec<Transaction>> {
-        let rows = self.query_all(&format!("select * from {TX}")).await?;
-        let mut txs = rows.iter().map(tx_from_row).collect::<Result<Vec<_>>>()?;
-        txs.sort_by(|a, b| b.date.cmp(&a.date).then(b.id.cmp(&a.id)));
-        Ok(txs)
-    }
-
     async fn create_transaction(&self, t: &NewTransaction) -> Result<i64> {
         let id = self.next_id();
         let mut row = MapValue::new()
@@ -430,27 +486,10 @@ impl Storage for NoSqlStorage {
 
     async fn delete_transaction(&self, id: i64) -> Result<()> {
         let req = DeleteRequest::new(TX, MapValue::new().i64("id", id));
-        retry(|| req.execute(&self.handle)).await?;
+        let res = retry(|| req.execute(&self.handle)).await;
+        *self.cache.lock().await = Cache::default();
+        res?;
         Ok(())
-    }
-
-    async fn list_categories(&self) -> Result<Vec<Category>> {
-        let rows = self
-            .query_all(&format!("select * from {LOOKUPS} where kind = 'category'"))
-            .await?;
-        let mut cats: Vec<Category> = rows
-            .iter()
-            .filter_map(|r| {
-                Some(Category {
-                    id: r.get_i64("id")?,
-                    name: r.get_string("name")?,
-                    is_income: r.get_bool("is_income").unwrap_or(false),
-                    parent_id: r.get_i64("parent_id"),
-                })
-            })
-            .collect();
-        cats.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(cats)
     }
 }
 
