@@ -392,6 +392,42 @@ async fn probe(out_dir: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// All HTTP routes. A separate function so a test can build it: axum panics on
+/// overlapping routes when the router is constructed, which would otherwise only
+/// show up when the server starts.
+fn router(db: Db) -> Router {
+    Router::new()
+        .route(
+            "/api/transactions",
+            get(list_transactions).post(create_transaction),
+        )
+        .route(
+            "/api/transactions/:id",
+            delete(delete_transaction).put(update_transaction),
+        )
+        .route(
+            "/api/categories",
+            get(list_categories).post(create_category),
+        )
+        .route("/api/categories/:id", delete(delete_category))
+        .route("/api/recurring", get(list_recurring).post(create_recurring))
+        .route("/api/recurring/occurrences", get(recurring_occurrences))
+        .route(
+            "/api/recurring/:series_id/months/:month",
+            axum::routing::post(settle_recurring_month).delete(skip_recurring_month),
+        )
+        .route(
+            "/api/recurring/:series_id",
+            axum::routing::put(change_recurring).delete(cancel_recurring),
+        )
+        .route("/api/monthly-totals", get(monthly_totals))
+        .route("/api/import/paamonim", axum::routing::post(import_paamonim))
+        .route("/api/export/sheets", axum::routing::post(export_sheets))
+        .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
+        .with_state(db)
+        .fallback(assets::static_handler)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -433,39 +469,21 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let app = Router::new()
-        .route(
-            "/api/transactions",
-            get(list_transactions).post(create_transaction),
-        )
-        .route(
-            "/api/transactions/:id",
-            delete(delete_transaction).put(update_transaction),
-        )
-        .route(
-            "/api/categories",
-            get(list_categories).post(create_category),
-        )
-        .route("/api/categories/:id", delete(delete_category))
-        .route("/api/recurring", get(list_recurring).post(create_recurring))
-        .route("/api/recurring/occurrences", get(recurring_occurrences))
-        .route(
-            "/api/recurring/:series_id/months/:month",
-            axum::routing::post(settle_recurring_month).delete(skip_recurring_month),
-        )
-        .route(
-            "/api/recurring/:series_id",
-            axum::routing::put(change_recurring).delete(cancel_recurring),
-        )
-        .route("/api/monthly-totals", get(monthly_totals))
-        .route("/api/import/paamonim", axum::routing::post(import_paamonim))
-        .route("/api/export/sheets", axum::routing::post(export_sheets))
-        .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
-        .with_state(db)
-        .fallback(assets::static_handler);
+    let app = router(db);
 
     let addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     tracing::info!("listening on http://{addr}");
     axum::serve(tokio::net::TcpListener::bind(&addr).await?, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn router_builds_without_overlapping_routes() {
+        let db: Db = Arc::new(SqliteStorage::open(":memory:").unwrap());
+        let _ = router(db);
+    }
 }
