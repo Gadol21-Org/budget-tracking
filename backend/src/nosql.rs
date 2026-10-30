@@ -9,13 +9,14 @@
 //! NOTE: written against the SDK docs; not yet run against a live service.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use oracle_nosql_rust_sdk::types::{MapValue, TableLimits};
 use oracle_nosql_rust_sdk::{
     DeleteRequest, GetRequest, Handle, PutRequest, QueryRequest, TableRequest,
 };
+use oracle_nosql_rust_sdk::{NoSQLError, NoSQLErrorCode};
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,6 +27,11 @@ use crate::storage::{
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
+const MAX_ATTEMPTS: u32 = 12;
+const BACKOFF_START: Duration = Duration::from_millis(250);
+const BACKOFF_MAX: Duration = Duration::from_secs(8);
+/// Always Free allows 25 read and 25 write units per table (and 3 tables).
+const UNITS: i32 = 25;
 
 pub struct NoSqlStorage {
     handle: Handle,
@@ -34,7 +40,12 @@ pub struct NoSqlStorage {
 
 impl NoSqlStorage {
     pub async fn connect() -> Result<Self> {
-        let handle = Handle::builder().from_environment()?.build().await?;
+        // The SDK paces requests to the table's limits instead of failing them.
+        let handle = Handle::builder()
+            .from_environment()?
+            .rate_limiting_enabled(true)?
+            .build()
+            .await?;
         let s = Self {
             handle,
             seq: AtomicU64::new(0),
@@ -57,7 +68,7 @@ impl NoSqlStorage {
 
     async fn create_tables(&self) -> Result<()> {
         // Small provisioned limits: ~200 operations a month is far below any cap.
-        let limits = || Some(TableLimits::provisioned(10, 10, 1));
+        let limits = || Some(TableLimits::provisioned(UNITS, UNITS, 1));
         self.ddl(
             "create table if not exists transactions (id long, date string, amount_agorot long, \
              category_id long, payment_method_id long, note string, sync_state string, \
@@ -67,10 +78,30 @@ impl NoSqlStorage {
         .await?;
         self.ddl(
             "create table if not exists lookups (kind string, id long, name string, \
-             is_income boolean, paamonim_id string, primary key(kind, id))",
+             is_income boolean, paamonim_id string, parent_id long, primary key(kind, id))",
             limits(),
         )
         .await?;
+        // Tables created by an earlier version keep their old limits and lack
+        // `parent_id`; bring them up to date (both are harmless no-ops otherwise).
+        for table in [TX, LOOKUPS] {
+            let l = TableLimits::provisioned(UNITS, UNITS, 1);
+            let done = match TableRequest::new(table)
+                .limits(&l)
+                .execute(&self.handle)
+                .await
+            {
+                Ok(mut r) => r.wait_for_completion_ms(&self.handle, 30000, 500).await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = done {
+                tracing::debug!("not changing limits of {table}: {e}");
+            }
+        }
+        let alter = "alter table lookups (add parent_id long)";
+        if let Err(e) = self.ddl(alter, None).await {
+            tracing::debug!("lookups.parent_id: {e}");
+        }
         Ok(())
     }
 
@@ -88,7 +119,18 @@ impl NoSqlStorage {
         let mut req = QueryRequest::new(statement);
         let mut rows = Vec::new();
         loop {
-            let mut res = req.execute(&self.handle).await?;
+            let mut attempt = 1;
+            let mut delay = BACKOFF_START;
+            let mut res = loop {
+                match req.execute(&self.handle).await {
+                    Err(e) if attempt < MAX_ATTEMPTS && throttled(&e) => {
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        delay = (delay * 2).min(BACKOFF_MAX);
+                    }
+                    other => break other?,
+                }
+            };
             rows.extend(res.take_rows());
             if req.is_done() {
                 return Ok(rows);
@@ -96,11 +138,15 @@ impl NoSqlStorage {
         }
     }
 
+    async fn put(&self, table: &str, row: MapValue) -> Result<()> {
+        let req = PutRequest::new(table).value(row);
+        retry(|| req.execute(&self.handle)).await?;
+        Ok(())
+    }
+
     async fn set_sync_state(&self, id: i64, state: &str, line_id: Option<&str>) -> Result<()> {
-        let got = GetRequest::new(TX)
-            .key(MapValue::new().i64("id", id))
-            .execute(&self.handle)
-            .await?;
+        let req = GetRequest::new(TX).key(MapValue::new().i64("id", id));
+        let got = retry(|| req.execute(&self.handle)).await?;
         let Some(r) = got.row() else { return Ok(()) };
         let t = tx_from_row(r)?;
         let mut row = MapValue::new()
@@ -121,8 +167,36 @@ impl NoSqlStorage {
         {
             row = row.str("paamonim_line_id", &l);
         }
-        PutRequest::new(TX).value(row).execute(&self.handle).await?;
+        self.put(TX, row).await?;
         Ok(())
+    }
+}
+
+fn throttled(e: &NoSQLError) -> bool {
+    matches!(
+        e.code,
+        NoSQLErrorCode::WriteLimitExceeded | NoSQLErrorCode::ReadLimitExceeded
+    )
+}
+
+/// Run a request, retrying with exponential backoff while the table's
+/// provisioned throughput is exceeded (bulk imports hit this easily).
+async fn retry<T, F, Fut>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, NoSQLError>>,
+{
+    let mut delay = BACKOFF_START;
+    let mut attempt = 1;
+    loop {
+        match op().await {
+            Err(e) if attempt < MAX_ATTEMPTS && throttled(&e) => {
+                tokio::time::sleep(delay).await;
+                attempt += 1;
+                delay = (delay * 2).min(BACKOFF_MAX);
+            }
+            other => return other.map_err(Into::into),
+        }
     }
 }
 
@@ -246,10 +320,7 @@ impl Storage for NoSqlStorage {
             if let Some(p) = c.parent_key.as_ref().and_then(|k| cats.get(k)) {
                 row = row.i64("parent_id", *p);
             }
-            PutRequest::new(LOOKUPS)
-                .value(row)
-                .execute(&self.handle)
-                .await?;
+            self.put(LOOKUPS, row).await?;
             sum.categories_added += new as usize;
             cats.insert(c.key.clone(), id);
         }
@@ -264,10 +335,7 @@ impl Storage for NoSqlStorage {
                 .str("name", &p.name)
                 .column("is_income", false)
                 .str("paamonim_id", &p.key);
-            PutRequest::new(LOOKUPS)
-                .value(row)
-                .execute(&self.handle)
-                .await?;
+            self.put(LOOKUPS, row).await?;
             sum.payment_methods_added += new as usize;
             pms.insert(p.key.clone(), id);
         }
@@ -298,7 +366,7 @@ impl Storage for NoSqlStorage {
             if let Some(p) = pm {
                 row = row.i64("payment_method_id", p);
             }
-            PutRequest::new(TX).value(row).execute(&self.handle).await?;
+            self.put(TX, row).await?;
             sum.transactions_added += 1;
         }
         Ok(sum)
@@ -325,15 +393,13 @@ impl Storage for NoSqlStorage {
         if let Some(p) = t.payment_method_id {
             row = row.i64("payment_method_id", p);
         }
-        PutRequest::new(TX).value(row).execute(&self.handle).await?;
+        self.put(TX, row).await?;
         Ok(id)
     }
 
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> Result<()> {
-        let got = GetRequest::new(TX)
-            .key(MapValue::new().i64("id", id))
-            .execute(&self.handle)
-            .await?;
+        let req = GetRequest::new(TX).key(MapValue::new().i64("id", id));
+        let got = retry(|| req.execute(&self.handle)).await?;
         let Some(r) = got.row() else { return Ok(()) };
         let state = r
             .get_string("sync_state")
@@ -358,14 +424,13 @@ impl Storage for NoSqlStorage {
         if let Some(l) = r.get_string("paamonim_line_id") {
             row = row.str("paamonim_line_id", &l);
         }
-        PutRequest::new(TX).value(row).execute(&self.handle).await?;
+        self.put(TX, row).await?;
         Ok(())
     }
 
     async fn delete_transaction(&self, id: i64) -> Result<()> {
-        DeleteRequest::new(TX, MapValue::new().i64("id", id))
-            .execute(&self.handle)
-            .await?;
+        let req = DeleteRequest::new(TX, MapValue::new().i64("id", id));
+        retry(|| req.execute(&self.handle)).await?;
         Ok(())
     }
 
