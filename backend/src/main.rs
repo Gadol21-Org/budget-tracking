@@ -1,4 +1,5 @@
 mod db;
+mod import;
 mod money;
 mod paamonim;
 mod nosql;
@@ -54,18 +55,16 @@ struct ImportRequest {
     to: String,
 }
 
-/// Initial import. Currently stores/returns the raw parsed lines so the HTML
-/// parsing can be tuned against a real account.
+/// Import from Paamonim (idempotent). `from`/`to` are YYYY-MM-DD.
 async fn import_paamonim(
+    State(db): State<Db>,
     Json(req): Json<ImportRequest>,
-) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+) -> Result<Json<storage::ImportSummary>, (StatusCode, String)> {
     let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
     let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_USERNAME not set".into()))?;
     let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
     let client = paamonim::Client::login(&base, &user, &pass).await.map_err(internal)?;
-    let html = client.activity_history_html(&req.from, &req.to).await.map_err(internal)?;
-    let lines = paamonim::Client::parse_history(&html);
-    Ok(Json(lines.into_iter().map(|l| format!("{}: {} {} {:?} {}", l.line_id, l.date, l.item_name, l.kind, l.amount_shekels)).collect()))
+    import::run(&client, db.as_ref(), &req.from, &req.to).await.map(Json).map_err(internal)
 }
 
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the

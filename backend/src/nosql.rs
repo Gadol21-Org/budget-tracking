@@ -18,7 +18,9 @@ use oracle_nosql_rust_sdk::{
     DeleteRequest, GetRequest, Handle, PutRequest, QueryRequest, TableRequest,
 };
 
-use crate::storage::{Category, MonthlyTotal, NewTransaction, Storage, Transaction};
+use std::collections::{HashMap, HashSet};
+
+use crate::storage::{Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
@@ -140,6 +142,87 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
 
 #[async_trait::async_trait]
 impl Storage for NoSqlStorage {
+    async fn import_paamonim(&self, batch: &ImportBatch) -> Result<ImportSummary> {
+        let mut sum = ImportSummary::default();
+
+        // Existing lookups: (kind, paamonim_id) -> id, so reruns reuse ids.
+        let mut ids: HashMap<(String, String), i64> = HashMap::new();
+        for r in self.query_all(&format!("select * from {LOOKUPS}")).await? {
+            if let (Some(kind), Some(pid), Some(id)) = (r.get_string("kind"), r.get_string("paamonim_id"), r.get_i64("id")) {
+                ids.insert((kind, pid), id);
+            }
+        }
+        let mut cats: HashMap<String, i64> = HashMap::new();
+        for c in &batch.categories {
+            let k = ("category".to_string(), c.key.clone());
+            let new = !ids.contains_key(&k);
+            let id = *ids.entry(k).or_insert_with(|| self.next_id());
+            let row = MapValue::new()
+                .str("kind", "category")
+                .i64("id", id)
+                .str("name", &c.name)
+                .column("is_income", c.is_income)
+                .str("paamonim_id", &c.key);
+            PutRequest::new(LOOKUPS).value(row).execute(&self.handle).await?;
+            sum.categories_added += new as usize;
+            cats.insert(c.key.clone(), id);
+        }
+        let mut pms: HashMap<String, i64> = HashMap::new();
+        for p in &batch.payment_methods {
+            let k = ("payment_method".to_string(), p.key.clone());
+            let new = !ids.contains_key(&k);
+            let id = *ids.entry(k).or_insert_with(|| self.next_id());
+            let row = MapValue::new()
+                .str("kind", "payment_method")
+                .i64("id", id)
+                .str("name", &p.name)
+                .column("is_income", false)
+                .str("paamonim_id", &p.key);
+            PutRequest::new(LOOKUPS).value(row).execute(&self.handle).await?;
+            sum.payment_methods_added += new as usize;
+            pms.insert(p.key.clone(), id);
+        }
+
+        let existing: HashSet<String> = self
+            .query_all(&format!("select paamonim_line_id from {TX}"))
+            .await?
+            .iter()
+            .filter_map(|r| r.get_string("paamonim_line_id"))
+            .collect();
+        // Aggregate rollup deltas first so each (month, category) is written once.
+        let mut deltas: HashMap<(String, Option<i64>), (i64, i64)> = HashMap::new();
+        for t in &batch.transactions {
+            if existing.contains(&t.line_id) {
+                sum.transactions_skipped += 1;
+                continue;
+            }
+            let cat = t.category_key.as_ref().and_then(|k| cats.get(k)).copied();
+            let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
+            let mut row = MapValue::new()
+                .i64("id", self.next_id())
+                .str("date", &t.date)
+                .i64("amount_agorot", t.amount_agorot)
+                .str("note", &t.note)
+                .str("sync_state", "synced")
+                .str("paamonim_line_id", &t.line_id);
+            if let Some(c) = cat {
+                row = row.i64("category_id", c);
+            }
+            if let Some(p) = pm {
+                row = row.i64("payment_method_id", p);
+            }
+            PutRequest::new(TX).value(row).execute(&self.handle).await?;
+            let d = deltas.entry((t.date[..7].to_string(), cat)).or_default();
+            d.0 += t.amount_agorot;
+            d.1 += 1;
+            sum.transactions_added += 1;
+        }
+        for ((month, cat), (total, count)) in deltas {
+            self.adjust_rollup(&format!("{month}-01"), cat, total, count).await?;
+        }
+        Ok(sum)
+    }
+
     async fn list_transactions(&self) -> Result<Vec<Transaction>> {
         let rows = self.query_all(&format!("select * from {TX}")).await?;
         let mut txs = rows.iter().map(tx_from_row).collect::<Result<Vec<_>>>()?;

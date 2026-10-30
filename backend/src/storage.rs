@@ -43,8 +43,48 @@ pub struct MonthlyTotal {
     pub count: i64,
 }
 
+/// One Paamonim import run. Keys are Paamonim ids (items are `e:<id>` / `i:<id>` since
+/// expense and income ids are separate spaces). Amounts are signed agorot: expenses negative.
+pub struct ImportCategory {
+    pub key: String,
+    pub name: String,
+    pub is_income: bool,
+}
+
+pub struct ImportPaymentMethod {
+    pub key: String,
+    pub name: String,
+}
+
+pub struct ImportTransaction {
+    pub line_id: String,
+    pub date: String,
+    pub amount_agorot: i64,
+    pub category_key: Option<String>,
+    pub payment_key: Option<String>,
+    pub note: String,
+}
+
+#[derive(Default)]
+pub struct ImportBatch {
+    pub categories: Vec<ImportCategory>,
+    pub payment_methods: Vec<ImportPaymentMethod>,
+    pub transactions: Vec<ImportTransaction>,
+}
+
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ImportSummary {
+    pub categories_added: usize,
+    pub payment_methods_added: usize,
+    pub transactions_added: usize,
+    /// Already imported (same Paamonim line id); import is idempotent.
+    pub transactions_skipped: usize,
+}
+
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
+    /// Idempotent: lookups are upserted by key, transactions skipped if their line id exists.
+    async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary>;
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
@@ -74,6 +114,58 @@ fn adjust_rollup(conn: &Connection, date: &str, category_id: Option<i64>, delta:
 
 #[async_trait::async_trait]
 impl Storage for SqliteStorage {
+    async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut sum = ImportSummary::default();
+        let mut cats = std::collections::HashMap::new();
+        for c in &batch.categories {
+            let existed: Option<i64> = tx
+                .query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))
+                .ok();
+            tx.execute(
+                "INSERT INTO categories (name, is_income, paamonim_item_id) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(paamonim_item_id) DO UPDATE SET name = excluded.name",
+                params![c.name, c.is_income, c.key],
+            )?;
+            let id: i64 = tx.query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))?;
+            sum.categories_added += existed.is_none() as usize;
+            cats.insert(c.key.clone(), id);
+        }
+        let mut pms = std::collections::HashMap::new();
+        for p in &batch.payment_methods {
+            let existed: Option<i64> = tx
+                .query_row("SELECT id FROM payment_methods WHERE paamonim_id = ?1", params![p.key], |r| r.get(0))
+                .ok();
+            tx.execute(
+                "INSERT INTO payment_methods (name, paamonim_id) VALUES (?1, ?2)
+                 ON CONFLICT(paamonim_id) DO UPDATE SET name = excluded.name",
+                params![p.name, p.key],
+            )?;
+            let id: i64 = tx.query_row("SELECT id FROM payment_methods WHERE paamonim_id = ?1", params![p.key], |r| r.get(0))?;
+            sum.payment_methods_added += existed.is_none() as usize;
+            pms.insert(p.key.clone(), id);
+        }
+        for t in &batch.transactions {
+            let cat = t.category_key.as_ref().and_then(|k| cats.get(k)).copied();
+            let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO transactions
+                   (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id, sync_state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'synced')",
+                params![t.date, t.amount_agorot, cat, pm, t.note, t.line_id],
+            )?;
+            if inserted == 1 {
+                adjust_rollup(&tx, &t.date, cat, t.amount_agorot, 1)?;
+                sum.transactions_added += 1;
+            } else {
+                sum.transactions_skipped += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(sum)
+    }
+
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -166,6 +258,29 @@ mod tests {
 
     fn tx(date: &str, amount: i64, cat: Option<i64>) -> NewTransaction {
         NewTransaction { date: date.into(), amount_agorot: amount, category_id: cat, payment_method_id: None, note: String::new() }
+    }
+
+    #[tokio::test]
+    async fn import_is_idempotent() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let batch = ImportBatch {
+            categories: vec![ImportCategory { key: "e:1".into(), name: "Food".into(), is_income: false }],
+            payment_methods: vec![ImportPaymentMethod { key: "7".into(), name: "Card".into() }],
+            transactions: vec![ImportTransaction {
+                line_id: "100".into(),
+                date: "2026-10-03".into(),
+                amount_agorot: -12300,
+                category_key: Some("e:1".into()),
+                payment_key: Some("7".into()),
+                note: String::new(),
+            }],
+        };
+        let first = s.import_paamonim(&batch).await.unwrap();
+        assert_eq!((first.categories_added, first.transactions_added), (1, 1));
+        let second = s.import_paamonim(&batch).await.unwrap();
+        assert_eq!((second.categories_added, second.transactions_added, second.transactions_skipped), (0, 0, 1));
+        let totals = s.monthly_totals().await.unwrap();
+        assert_eq!((totals[0].total_agorot, totals[0].count), (-12300, 1));
     }
 
     #[tokio::test]

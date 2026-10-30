@@ -14,7 +14,7 @@ pub struct Client {
     base: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Expense,
     Income,
@@ -95,6 +95,18 @@ impl Client {
             .await?;
         let status = resp.status().as_u16();
         Ok((status, resp.text().await?))
+    }
+
+    /// GET an endpoint and return its `html` fragment (JSON envelope unwrapped).
+    pub async fn fragment(&self, path: &str, query: &[(&str, &str)]) -> Result<String> {
+        let (status, body) = self.get_raw(path, query).await?;
+        if status != 200 {
+            bail!("{path} returned HTTP {status}");
+        }
+        Ok(match serde_json::from_str::<HtmlEnvelope>(&body) {
+            Ok(env) => env.html,
+            Err(_) => body,
+        })
     }
 
     /// Fetch raw activity-history HTML for a date range (YYYY-MM-DD).
