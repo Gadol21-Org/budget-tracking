@@ -102,3 +102,11 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
   main { padding: 32px 32px 120px; max-width: 880px; margin: 0; }
   .fab { inset-inline-start: auto; inset-inline-end: 32px; bottom: 32px; }
 }
+
+.clickable { cursor: pointer; }
+.clickable:hover { background: var(--bg); }
+.clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.filterbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.filterbar .grow { flex: 1; min-width: 0; }
+.filterbar .btn { white-space: nowrap; padding: 8px 12px; }
+.filterbar .muted, .filterbar .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -9,6 +9,8 @@ const state = {
   month: new Date().toISOString().slice(0, 7), // YYYY-MM
   txs: [] as Transaction[],
   cats: [] as Category[],
+  /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
+  filter: undefined as { id: number | null } | undefined,
 };
 
 type Child = Node | string | null | false;
@@ -44,6 +46,33 @@ const dayTitle = (d: string) =>
   new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
 
 const inMonth = () => state.txs.filter((t) => t.date.startsWith(state.month));
+
+function inFilter(t: Transaction): boolean {
+  if (!state.filter) return true;
+  const id = state.filter.id;
+  return t.category_id === id || (id !== null && catById(t.category_id)?.parent_id === id);
+}
+
+/** Make a row act as a button: click, Enter and Space. */
+function clickable<T extends HTMLElement>(node: T, onActivate: () => void): T {
+  node.classList.add("clickable");
+  node.tabIndex = 0;
+  node.setAttribute("role", "button");
+  node.onclick = onActivate;
+  node.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onActivate();
+    }
+  };
+  return node;
+}
+
+function showCategory(id: number | null) {
+  state.filter = { id };
+  state.view = "list";
+  render();
+}
 
 function monthBar(): HTMLElement {
   // RTL: the first element is on the right and goes back in time, the last (left) goes forward.
@@ -89,16 +118,22 @@ function monthView(): HTMLElement {
             el(
               "div",
               {},
-              el(
-                "div",
-                { className: "row" },
-                el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%` }))),
-                money(g.total),
+              clickable(
+                el(
+                  "div",
+                  { className: "row" },
+                  el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%` }))),
+                  money(g.total),
+                ),
+                () => showCategory(id),
               ),
               ...[...g.kids.entries()]
                 .sort((a, b) => b[1] - a[1])
                 .map(([kid, total]) =>
-                  el("div", { className: "row sub" }, el("div", { className: "grow muted", textContent: catName(kid) }), money(total)),
+                  clickable(
+                    el("div", { className: "row sub" }, el("div", { className: "grow muted", textContent: catName(kid) }), money(total)),
+                    () => showCategory(kid),
+                  ),
                 ),
             ),
           ),
@@ -107,7 +142,7 @@ function monthView(): HTMLElement {
 }
 
 function listView(): HTMLElement {
-  const txs = inMonth();
+  const txs = inMonth().filter(inFilter);
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
   const body: Child[] = days.map((d) =>
     el(
@@ -150,7 +185,24 @@ function listView(): HTMLElement {
       ),
     ),
   );
-  return el("div", {}, monthBar(), ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בחודש זה" })]));
+  let header: Node | null = null;
+  if (state.filter) {
+    const back = el("button", { className: "btn", textContent: "→ סיכום", title: "חזרה לסיכום" });
+    back.onclick = () => {
+      state.filter = undefined;
+      state.view = "month";
+      render();
+    };
+    const total = txs.reduce((s, t) => s + t.amount_agorot, 0);
+    header = el(
+      "div",
+      { className: "card filterbar" },
+      back,
+      el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(state.filter.id) }), el("div", { className: "muted", textContent: `${txs.length} תנועות` })),
+      money(total, total < 0 ? "expense" : "income"),
+    );
+  }
+  return el("div", {}, monthBar(), header, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בחודש זה" })]));
 }
 
 function settingsView(): HTMLElement {
@@ -274,7 +326,11 @@ function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
     if (state.view === view) b.setAttribute("aria-current", "page");
-    b.onclick = () => ((state.view = view), render());
+    b.onclick = () => {
+      state.view = view;
+      state.filter = undefined;
+      render();
+    };
     return b;
   };
   return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
