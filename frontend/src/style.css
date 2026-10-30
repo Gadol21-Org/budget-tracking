@@ -110,3 +110,8 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .filterbar .grow { flex: 1; min-width: 0; }
 .filterbar .btn { white-space: nowrap; padding: 8px 12px; }
 .filterbar .muted, .filterbar .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.periodbtn { border: 0; background: none; cursor: pointer; padding: 8px 12px; border-radius: 10px; }
+.periodbtn:hover { background: var(--surface); }
+.seg3 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg3 button { padding: 10px; border: 0; background: var(--bg); cursor: pointer; }
+.seg3 button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }

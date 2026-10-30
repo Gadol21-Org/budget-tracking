@@ -1,4 +1,5 @@
 import "./style.css";
+import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { api, formatShekels, parseAgorot, type Category, type Transaction } from "./api";
 
 type View = "month" | "list" | "settings";
@@ -6,7 +7,7 @@ type View = "month" | "list" | "settings";
 const root = document.getElementById("app")!;
 const state = {
   view: "month" as View,
-  month: new Date().toISOString().slice(0, 7), // YYYY-MM
+  period: monthOf(new Date().toISOString().slice(0, 10)) as Period,
   txs: [] as Transaction[],
   cats: [] as Category[],
   /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
@@ -35,17 +36,10 @@ const catPath = (id: number | null) => {
   return p && c ? `${p.name} › ${c.name}` : catName(id);
 };
 
-function shiftMonth(m: string, delta: number): string {
-  const [y, mo] = m.split("-").map(Number);
-  const d = new Date(Date.UTC(y, mo - 1 + delta, 1));
-  return d.toISOString().slice(0, 7);
-}
-const monthTitle = (m: string) =>
-  new Date(`${m}-01T00:00:00`).toLocaleDateString("he-IL", { month: "long", year: "numeric" });
 const dayTitle = (d: string) =>
   new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
 
-const inMonth = () => state.txs.filter((t) => t.date.startsWith(state.month));
+const inPeriod = () => state.txs.filter((t) => contains(state.period, t.date));
 
 function inFilter(t: Transaction): boolean {
   if (!state.filter) return true;
@@ -76,15 +70,97 @@ function showCategory(id: number | null) {
 
 function monthBar(): HTMLElement {
   // RTL: the first element is on the right and goes back in time, the last (left) goes forward.
-  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "→" });
-  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "←" });
-  prev.onclick = () => ((state.month = shiftMonth(state.month, -1)), render());
-  next.onclick = () => ((state.month = shiftMonth(state.month, 1)), render());
-  return el("div", { className: "monthbar" }, prev, el("div", { className: "title", textContent: monthTitle(state.month) }), next);
+  const prev = el("button", { className: "iconbtn", title: "הקודם", textContent: "→" });
+  const next = el("button", { className: "iconbtn", title: "הבא", textContent: "←" });
+  const go = (delta: number) => () => {
+    state.period = shift(state.period, delta) ?? state.period;
+    render();
+  };
+  prev.onclick = go(-1);
+  next.onclick = go(1);
+  if (state.period.kind === "range") {
+    // A custom range has no neighbours; keep the layout steady.
+    prev.style.visibility = next.style.visibility = "hidden";
+  }
+  const label = el("button", { className: "title periodbtn", title: "בחירת תקופה", textContent: `${periodTitle(state.period)} ▾` });
+  label.onclick = openPeriodDialog;
+  return el("div", { className: "monthbar" }, prev, label, next);
+}
+
+function openPeriodDialog() {
+  const p = state.period;
+  let kind: Period["kind"] = p.kind;
+  const dlg = el("dialog");
+  const thisYear = new Date().getFullYear();
+  const dataYears = state.txs.map((t) => Number(t.date.slice(0, 4)));
+  const minYear = Math.min(thisYear, ...dataYears);
+  const maxYear = Math.max(thisYear, ...dataYears);
+  const years = Array.from({ length: maxYear - minYear + 1 }, (_, i) => maxYear - i);
+  const yearSelect = (value: number) =>
+    el("select", { value: String(value) }, ...years.map((y) => el("option", { value: String(y), textContent: String(y), selected: y === value })));
+
+  const curMonth = p.kind === "month" ? p.month : new Date().toISOString().slice(0, 7);
+  const monthSel = el("select", {}, ...MONTHS.map((n, i) => el("option", { value: String(i + 1), textContent: n, selected: i + 1 === Number(curMonth.slice(5)) })));
+  const monthYear = yearSelect(Number(curMonth.slice(0, 4)));
+  const yearOnly = yearSelect(p.kind === "year" ? p.year : thisYear);
+  const today = new Date().toISOString().slice(0, 10);
+  const from = el("input", { type: "date", value: p.kind === "range" ? p.from : `${today.slice(0, 7)}-01` });
+  const to = el("input", { type: "date", value: p.kind === "range" ? p.to : today });
+
+  const fields = el("div", { style: "display:flex;flex-direction:column;gap:12px" });
+  const tabs = (["month", "year", "range"] as const).map((k) => {
+    const b = el("button", { type: "button", textContent: { month: "חודש", year: "שנה", range: "טווח" }[k] });
+    b.onclick = () => ((kind = k), draw());
+    return [k, b] as const;
+  });
+  const labelled = (text: string, input: Node) => el("label", {}, text, input);
+  const draw = () => {
+    for (const [k, b] of tabs) b.setAttribute("aria-pressed", String(k === kind));
+    fields.replaceChildren(
+      ...(kind === "month"
+        ? [labelled("חודש", monthSel), labelled("שנה", monthYear)]
+        : kind === "year"
+          ? [labelled("שנה", yearOnly)]
+          : [labelled("מתאריך", from), labelled("עד תאריך", to)]),
+    );
+  };
+  draw();
+
+  const err = el("div", { className: "error" });
+  const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+  cancel.onclick = () => dlg.close();
+  const form = el(
+    "form",
+    { className: "add", method: "dialog" },
+    el("div", { className: "seg3" }, ...tabs.map(([, b]) => b)),
+    fields,
+    err,
+    el("div", { className: "actions" }, cancel, el("button", { type: "submit", className: "btn primary", textContent: "הצגה" })),
+  );
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    if (kind === "month") {
+      state.period = { kind, month: `${monthYear.value}-${monthSel.value.padStart(2, "0")}` };
+    } else if (kind === "year") {
+      state.period = { kind, year: Number(yearOnly.value) };
+    } else {
+      if (!from.value || !to.value || from.value > to.value) {
+        err.textContent = "טווח התאריכים אינו תקין";
+        return;
+      }
+      state.period = { kind, from: from.value, to: to.value };
+    }
+    dlg.close();
+    render();
+  };
+  dlg.append(form);
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 function monthView(): HTMLElement {
-  const txs = inMonth();
+  const txs = inPeriod();
   const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
   const expense = txs.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
   const stat = (label: string, value: HTMLElement) =>
@@ -110,7 +186,7 @@ function monthView(): HTMLElement {
     el("div", { className: "stats" }, stat("הכנסות", money(income, "income")), stat("הוצאות", money(-expense, "expense")), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
     el("h2", { textContent: "הוצאות לפי קטגוריה" }),
     rows.length === 0
-      ? el("div", { className: "empty", textContent: "אין הוצאות בחודש זה" })
+      ? el("div", { className: "empty", textContent: "אין הוצאות בתקופה זו" })
       : el(
           "div",
           { className: "card rows" },
@@ -142,7 +218,7 @@ function monthView(): HTMLElement {
 }
 
 function listView(): HTMLElement {
-  const txs = inMonth().filter(inFilter);
+  const txs = inPeriod().filter(inFilter);
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
   const body: Child[] = days.map((d) =>
     el(
@@ -202,7 +278,7 @@ function listView(): HTMLElement {
       money(total, total < 0 ? "expense" : "income"),
     );
   }
-  return el("div", {}, monthBar(), header, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בחודש זה" })]));
+  return el("div", {}, monthBar(), header, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
 }
 
 function settingsView(): HTMLElement {
@@ -307,7 +383,7 @@ function openTransactionDialog(existing?: Transaction) {
       };
       if (existing) await api.updateTransaction(existing.id, body);
       else await api.addTransaction(body);
-      state.month = date.value.slice(0, 7);
+      state.period = monthOf(date.value);
       dlg.close();
       await load();
     } catch (e2) {
