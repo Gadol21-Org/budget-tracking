@@ -13,13 +13,13 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::ConnectOptions;
 use sqlx::Row;
 
-use crate::recurring::{NewRecurring, RecurringSegment};
+use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, PaymentMethod,
     PendingMirror, Storage, Transaction,
 };
 
-const SCHEMA: [&str; 4] = [
+const SCHEMA: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -41,7 +41,8 @@ const SCHEMA: [&str; 4] = [
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
          paamonim_line_id VARCHAR(100) UNIQUE,   -- set once mirrored/imported
-         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error
+         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
+         recurring_series_id BIGINT NULL,        -- set on a settled repeating transaction
          INDEX idx_tx_date (date),
          INDEX idx_tx_category_date (category_id, date),
          FOREIGN KEY (category_id) REFERENCES categories(id),
@@ -60,6 +61,11 @@ const SCHEMA: [&str; 4] = [
          INDEX idx_recurring_series (series_id),
          FOREIGN KEY (category_id) REFERENCES categories(id),
          FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+     )",
+    "CREATE TABLE IF NOT EXISTS recurring_settled (
+         series_id BIGINT NOT NULL,
+         month VARCHAR(7) NOT NULL,
+         PRIMARY KEY (series_id, month)
      )",
 ];
 
@@ -94,6 +100,10 @@ impl MySqlStorage {
         for ddl in SCHEMA {
             sqlx::query(ddl).execute(&pool).await?;
         }
+        // Tables created before repeating transactions existed; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN recurring_series_id BIGINT NULL")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
 }
@@ -107,6 +117,7 @@ fn tx_from_row(r: &MySqlRow) -> Result<Transaction> {
         payment_method_id: r.try_get("payment_method_id")?,
         note: r.try_get("note")?,
         sync_state: r.try_get("sync_state")?,
+        recurring_series_id: r.try_get("recurring_series_id")?,
     })
 }
 
@@ -298,7 +309,8 @@ impl Storage for MySqlStorage {
 
     async fn list_transactions(&self) -> Result<Vec<Transaction>> {
         let rows = sqlx::query(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
              FROM transactions ORDER BY date DESC, id DESC",
         )
         .fetch_all(&self.pool)
@@ -442,6 +454,39 @@ impl Storage for MySqlStorage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn settle_recurring(&self, due: &[Occurrence]) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        let mut added = 0;
+        for o in due {
+            let new = sqlx::query(
+                "INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)",
+            )
+            .bind(o.series_id)
+            .bind(&o.date[..7])
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if new == 1 {
+                sqlx::query(
+                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                               note, sync_state, recurring_series_id)
+                     VALUES (?, ?, ?, ?, ?, 'local', ?)",
+                )
+                .bind(&o.date)
+                .bind(o.amount_agorot)
+                .bind(o.category_id)
+                .bind(o.payment_method_id)
+                .bind(&o.note)
+                .bind(o.series_id)
+                .execute(&mut *tx)
+                .await?;
+                added += 1;
+            }
+        }
+        tx.commit().await?;
+        Ok(added)
     }
 
     /// Aggregated in the database.

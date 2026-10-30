@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::recurring::{NewRecurring, RecurringSegment};
+use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 
 #[derive(Serialize, Clone)]
 pub struct Transaction {
@@ -17,6 +17,8 @@ pub struct Transaction {
     pub payment_method_id: Option<i64>,
     pub note: String,
     pub sync_state: String,
+    /// Set on a settled occurrence of a repeating transaction.
+    pub recurring_series_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +141,12 @@ pub trait Storage: Send + Sync {
     }
     async fn delete_recurring(&self, _id: i64) -> anyhow::Result<()> {
         anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    /// Turn occurrences that have come due into real transactions (sync state `local`, so
+    /// they are not mirrored). Each (series, month) is settled once, even if the transaction
+    /// is later deleted. Returns how many were added.
+    async fn settle_recurring(&self, _due: &[Occurrence]) -> anyhow::Result<usize> {
+        Ok(0)
     }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
@@ -326,7 +334,8 @@ impl Storage for SqliteStorage {
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
              FROM transactions ORDER BY date DESC, id DESC",
         )?;
         let rows = stmt
@@ -339,6 +348,7 @@ impl Storage for SqliteStorage {
                     payment_method_id: r.get(4)?,
                     note: r.get(5)?,
                     sync_state: r.get(6)?,
+                    recurring_series_id: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -482,6 +492,36 @@ impl Storage for SqliteStorage {
             .unwrap()
             .execute("DELETE FROM recurring WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    async fn settle_recurring(&self, due: &[Occurrence]) -> anyhow::Result<usize> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut added = 0;
+        for o in due {
+            let new = tx.execute(
+                "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
+                params![o.series_id, &o.date[..7]],
+            )?;
+            if new == 1 {
+                tx.execute(
+                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                               note, sync_state, recurring_series_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                    params![
+                        o.date,
+                        o.amount_agorot,
+                        o.category_id,
+                        o.payment_method_id,
+                        o.note,
+                        o.series_id
+                    ],
+                )?;
+                added += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(added)
     }
 }
 

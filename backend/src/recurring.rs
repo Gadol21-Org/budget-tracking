@@ -4,8 +4,14 @@
 //! `end_month`, this amount on this day"). Occurrences are generated from the rules when
 //! read and are not stored as transactions, so changing a series "from this month on" only
 //! rewrites the rules: the segment in force is cut off the month before and a new one
-//! starts, and earlier months keep their old values. Because occurrences are not real
-//! transactions they are never mirrored to Paamonim.
+//! starts, and earlier months keep their old values.
+//!
+//! An occurrence is *unsettled* until its date has passed. Unsettled ones exist only as
+//! generated previews (shown as upcoming, counted in totals) and are the only ones a series
+//! change may touch. When the date passes, [`settle_due`] turns the occurrence into an
+//! ordinary transaction (sync state `local`: not mirrored to Paamonim), which flows into the
+//! totals, the Google Sheets export and so on like any other and is never rewritten by a
+//! later change to the series.
 
 use std::collections::BTreeMap;
 
@@ -111,6 +117,12 @@ fn prev_month(m: &str) -> String {
     fmt_month(parse_month(m).unwrap() - Months::new(1))
 }
 
+/// The day of `month` (its first day) the occurrence falls on; short months use their last day.
+fn occurrence_date(month: NaiveDate, day: u32) -> String {
+    let last = (month + Months::new(1)).pred_opt().unwrap().day();
+    format!("{}-{:02}", fmt_month(month), day.clamp(1, last))
+}
+
 /// Every occurrence of the segments whose month is `<= through_month`, oldest first.
 pub fn occurrences(segments: &[RecurringSegment], through_month: &str) -> Vec<Occurrence> {
     let mut out = Vec::new();
@@ -126,11 +138,10 @@ pub fn occurrences(segments: &[RecurringSegment], through_month: &str) -> Vec<Oc
         };
         let mut month = start;
         while month <= end {
-            let last = (month + Months::new(1)).pred_opt().unwrap().day();
             out.push(Occurrence {
                 series_id: s.series_id,
                 segment_id: s.id,
-                date: format!("{}-{:02}", fmt_month(month), s.day.clamp(1, last)),
+                date: occurrence_date(month, s.day),
                 amount_agorot: s.amount_agorot,
                 category_id: s.category_id,
                 payment_method_id: s.payment_method_id,
@@ -149,6 +160,44 @@ pub const DEFAULT_HORIZON_MONTHS: u32 = 24;
 
 pub fn default_through(today: NaiveDate) -> String {
     fmt_month(today + Months::new(DEFAULT_HORIZON_MONTHS))
+}
+
+/// Occurrences still ahead of `today` (the unsettled ones), through `through_month`.
+pub fn upcoming(
+    segments: &[RecurringSegment],
+    through_month: &str,
+    today: NaiveDate,
+) -> Vec<Occurrence> {
+    let today = today.format("%Y-%m-%d").to_string();
+    let mut occ = occurrences(segments, through_month);
+    occ.retain(|o| o.date > today);
+    occ
+}
+
+/// Whether a series change may start in `month`: its occurrence must still be ahead.
+fn is_unsettled(month: &str, day: u32, today: NaiveDate) -> bool {
+    occurrence_date(parse_month(month).unwrap(), day) > today.format("%Y-%m-%d").to_string()
+}
+
+/// Settle (see the module docs) every occurrence whose date is on or before `today`.
+/// Cheap to call often: it does nothing unless the day or the rules changed since last time.
+pub async fn settle_due(db: &dyn Storage, today: NaiveDate) -> anyhow::Result<usize> {
+    static LAST: tokio::sync::Mutex<Option<(NaiveDate, Vec<RecurringSegment>)>> =
+        tokio::sync::Mutex::const_new(None);
+    let mut last = LAST.lock().await;
+    let segments = db.list_recurring().await?;
+    if last
+        .as_ref()
+        .is_some_and(|(d, s)| *d == today && *s == segments)
+    {
+        return Ok(0);
+    }
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let mut due = occurrences(&segments, &fmt_month(today));
+    due.retain(|o| o.date <= today_str);
+    let added = db.settle_recurring(&due).await?;
+    *last = Some((today, segments));
+    Ok(added)
 }
 
 /// Add occurrences to monthly totals computed from real transactions.
@@ -231,6 +280,7 @@ pub async fn change_from(
     db: &dyn Storage,
     series_id: i64,
     r: &NewRecurring,
+    today: NaiveDate,
 ) -> Result<(), RecurringError> {
     validate(r)?;
     let segs = series_segments(db, series_id).await?;
@@ -240,6 +290,9 @@ pub async fn change_from(
     };
     if current.end_month.as_deref().is_some_and(|e| e < from) {
         return invalid("the series has already ended in that month");
+    }
+    if !is_unsettled(from, current.day, today) {
+        return invalid("that month has already settled; edit its transaction instead");
     }
     if current.start_month == from {
         db.update_recurring(current.id, r).await?;
@@ -262,11 +315,23 @@ pub async fn cancel_from(
     db: &dyn Storage,
     series_id: i64,
     from_month: &str,
+    today: NaiveDate,
 ) -> Result<(), RecurringError> {
     if !is_month(from_month) {
         return invalid("month must be YYYY-MM");
     }
-    for s in series_segments(db, series_id).await? {
+    let segs = series_segments(db, series_id).await?;
+    let Some(current) = segs
+        .iter()
+        .rev()
+        .find(|s| s.start_month.as_str() <= from_month)
+    else {
+        return invalid("the cancellation starts before the series does");
+    };
+    if !is_unsettled(from_month, current.day, today) {
+        return invalid("that month has already settled; delete its transaction instead");
+    }
+    for s in segs {
         if s.start_month.as_str() >= from_month {
             db.delete_recurring(s.id).await?;
         } else if s.end_month.as_deref().is_none_or(|e| e >= from_month) {
@@ -282,6 +347,19 @@ pub async fn cancel_from(
 mod tests {
     use super::*;
     use crate::storage::SqliteStorage;
+
+    fn day(d: &str) -> NaiveDate {
+        d.parse().unwrap()
+    }
+
+    /// The tests run on 2026-01-01 unless they say otherwise.
+    async fn change(s: &SqliteStorage, id: i64, r: &NewRecurring) -> Result<(), RecurringError> {
+        change_from(s, id, r, day("2026-01-01")).await
+    }
+
+    async fn cancel(s: &SqliteStorage, id: i64, month: &str) -> Result<(), RecurringError> {
+        cancel_from(s, id, month, day("2026-01-01")).await
+    }
 
     fn new(start: &str, end: Option<&str>, amount: i64) -> NewRecurring {
         NewRecurring {
@@ -327,20 +405,16 @@ mod tests {
     async fn price_change_keeps_the_past() {
         let s = SqliteStorage::open(":memory:").unwrap();
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
-        change_from(&s, id, &new("2026-03", None, -1500))
-            .await
-            .unwrap();
+        change(&s, id, &new("2026-03", None, -1500)).await.unwrap();
         let got: Vec<i64> = all(&s, "2026-04").await.iter().map(|o| o.1).collect();
         assert_eq!(got, [-1000, -1000, -1500, -1500]);
         // A second change in a later month, then one in the very first month.
-        change_from(&s, id, &new("2026-02", Some("2026-03"), -700))
+        change(&s, id, &new("2026-02", Some("2026-03"), -700))
             .await
             .unwrap();
         let got: Vec<i64> = all(&s, "2026-06").await.iter().map(|o| o.1).collect();
         assert_eq!(got, [-1000, -700, -700]); // later segments were replaced
-        change_from(&s, id, &new("2026-01", None, -100))
-            .await
-            .unwrap();
+        change(&s, id, &new("2026-01", None, -100)).await.unwrap();
         assert_eq!(all(&s, "2026-02").await.len(), 2);
         assert!(all(&s, "2026-02").await.iter().all(|o| o.1 == -100));
     }
@@ -349,14 +423,12 @@ mod tests {
     async fn cancel_from_a_month_and_entirely() {
         let s = SqliteStorage::open(":memory:").unwrap();
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
-        change_from(&s, id, &new("2026-04", None, -1200))
-            .await
-            .unwrap();
-        cancel_from(&s, id, "2026-06").await.unwrap();
+        change(&s, id, &new("2026-04", None, -1200)).await.unwrap();
+        cancel(&s, id, "2026-06").await.unwrap();
         let got = all(&s, "2027-01").await;
         assert_eq!(got.len(), 5);
         assert_eq!(got.last().unwrap().1, -1200);
-        cancel_from(&s, id, "2026-01").await.unwrap();
+        cancel(&s, id, "2026-01").await.unwrap();
         assert!(all(&s, "2027-01").await.is_empty());
     }
 
@@ -374,15 +446,60 @@ mod tests {
         let id = create(&s, &new("2026-05", Some("2026-06"), -1))
             .await
             .unwrap();
-        assert!(change_from(&s, id, &new("2026-04", None, -1))
+        assert!(change(&s, id, &new("2026-04", None, -1)).await.is_err());
+        assert!(change(&s, id, &new("2026-08", None, -1)).await.is_err());
+        assert!(change(&s, 999, &new("2026-05", None, -1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn due_occurrences_settle_once_and_stay_settled() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
+        // 2026-03-31 is not reached yet: January and February (28th) are due.
+        assert_eq!(settle_due(&s, day("2026-03-15")).await.unwrap(), 3 - 1);
+        assert_eq!(settle_due(&s, day("2026-03-15")).await.unwrap(), 0);
+        let txs = s.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 2);
+        assert!(txs
+            .iter()
+            .all(|t| t.recurring_series_id == Some(id) && t.sync_state == "local"));
+        // A deleted settled transaction is not brought back.
+        s.delete_transaction(txs[0].id).await.unwrap();
+        assert_eq!(settle_due(&s, day("2026-03-16")).await.unwrap(), 0);
+        assert_eq!(s.list_transactions().await.unwrap().len(), 1);
+        // Later months settle as they come due.
+        assert_eq!(settle_due(&s, day("2026-04-01")).await.unwrap(), 1);
+        // The totals see settled ones as normal transactions; only the rest is upcoming.
+        let ahead = upcoming(
+            &s.list_recurring().await.unwrap(),
+            "2026-05",
+            day("2026-04-01"),
+        );
+        assert_eq!(ahead.len(), 2);
+        assert_eq!(ahead[0].date, "2026-04-30");
+    }
+
+    #[tokio::test]
+    async fn settled_months_cannot_be_changed() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
+        let on = day("2026-03-10"); // January and February have settled
+        assert!(matches!(
+            change_from(&s, id, &new("2026-02", None, -1), on).await,
+            Err(RecurringError::Invalid(_))
+        ));
+        assert!(matches!(
+            cancel_from(&s, id, "2026-02", on).await,
+            Err(RecurringError::Invalid(_))
+        ));
+        // The current month is still ahead until its charge date.
+        change_from(&s, id, &new("2026-03", None, -1500), on)
             .await
-            .is_err());
-        assert!(change_from(&s, id, &new("2026-08", None, -1))
-            .await
-            .is_err());
-        assert!(change_from(&s, 999, &new("2026-05", None, -1))
-            .await
-            .is_err());
+            .unwrap();
+        cancel_from(&s, id, "2026-04", on).await.unwrap();
+        let got = all(&s, "2026-12").await;
+        assert_eq!(got.len(), 3);
+        assert_eq!(got.last().unwrap().1, -1500);
     }
 
     #[test]

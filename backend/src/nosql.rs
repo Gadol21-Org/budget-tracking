@@ -274,6 +274,7 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
         sync_state: r
             .get_string("sync_state")
             .unwrap_or_else(|| "pending".into()),
+        recurring_series_id: None,
     })
 }
 

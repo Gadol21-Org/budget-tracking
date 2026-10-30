@@ -241,9 +241,8 @@ function listView(): HTMLElement {
         ...txs
           .filter((t) => t.date === d)
           .map((t) => {
-            const repeating = t.recurring_series_id !== undefined;
-            // A repeating line has no row of its own to delete; stopping it is in its edit dialog.
-            const del = repeating ? null : el("button", { className: "del", title: "מחיקה", textContent: "✕" });
+            // An upcoming line has no row of its own to delete; stopping it is in its edit dialog.
+            const del = t.upcoming ? null : el("button", { className: "del", title: "מחיקה", textContent: "✕" });
             if (del)
               del.onclick = async () => {
                 if (!confirm("למחוק את התנועה?")) return;
@@ -258,11 +257,16 @@ function listView(): HTMLElement {
             };
             return el(
               "div",
-              { className: "row" },
+              { className: t.upcoming ? "row upcoming" : "row" },
               el(
                 "div",
                 { className: "grow" },
-                el("div", { className: "name", textContent: `${repeating ? "🔁 " : ""}${catPath(t.category_id)}` }),
+                el(
+                  "div",
+                  { className: "name" },
+                  t.upcoming ? el("span", { className: "upcoming-mark", title: "טרם בוצע: ניתן לשנות מכאן והלאה", textContent: "⏳ " }) : t.recurring_series_id != null ? el("span", { title: "הוצאה חוזרת", textContent: "🔁 " }) : null,
+                  catPath(t.category_id),
+                ),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
                 badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
               ),
@@ -336,7 +340,7 @@ const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.s
  * the series from that occurrence's month on; earlier months are left as they were.
  */
 function openTransactionDialog(existing?: Transaction) {
-  const seriesId = existing?.recurring_series_id;
+  const seriesId = existing?.upcoming ? existing.recurring_series_id! : undefined;
   const segment = state.recurring.find((s) => s.id === existing?.recurring_segment_id);
   let isIncome = existing ? existing.amount_agorot > 0 : false;
   const dlg = el("dialog");
@@ -395,9 +399,9 @@ function openTransactionDialog(existing?: Transaction) {
 
   const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
   cancel.onclick = () => dlg.close();
-  const save = el("button", { type: "submit", className: "btn primary", textContent: seriesId !== undefined ? "עדכון מהחודש הזה והלאה" : existing ? "עדכון" : "שמירה" });
+  const save = el("button", { type: "submit", className: "btn primary", textContent: seriesId !== undefined ? "עדכון מכאן והלאה" : existing ? "עדכון" : "שמירה" });
   // Stop the series: this month and later disappear, earlier months stay.
-  const stop = el("button", { type: "button", className: "btn", textContent: "ביטול מהחודש הזה והלאה" });
+  const stop = el("button", { type: "button", className: "btn", textContent: "ביטול מכאן והלאה" });
   stop.onclick = async () => {
     if (!confirm("לבטל את ההוצאה החוזרת מחודש זה והלאה? חודשים קודמים לא ישתנו.")) return;
     try {
@@ -416,7 +420,7 @@ function openTransactionDialog(existing?: Transaction) {
     el("label", {}, "קטגוריה", category),
     el("label", {}, seriesId !== undefined ? "חודש" : "תאריך", date),
     el("label", {}, "הערה", note),
-    seriesId === undefined ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
+    !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
     repeatBox,
     err,
     el("div", { className: "actions" }, cancel, seriesId !== undefined ? stop : null, save),
@@ -501,6 +505,7 @@ async function load() {
     sync_state: "synced",
     recurring_series_id: o.series_id,
     recurring_segment_id: o.segment_id,
+    upcoming: true,
   }));
   state.txs = [...txs, ...generated];
   render();

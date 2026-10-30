@@ -27,9 +27,22 @@ fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+/// Make charges that have come due real transactions before anything reads them.
+async fn settle(db: &dyn Storage) -> Result<(), (StatusCode, String)> {
+    recurring::settle_due(db, today())
+        .await
+        .map(|_| ())
+        .map_err(internal)
+}
+
 async fn list_transactions(
     State(db): State<Db>,
 ) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
     db.list_transactions().await.map(Json).map_err(internal)
 }
 
@@ -77,14 +90,18 @@ async fn list_categories(
     db.list_categories().await.map(Json).map_err(internal)
 }
 
-/// Totals of real transactions plus the repeating ones generated up to the default horizon.
+/// Totals of real transactions plus the upcoming repeating ones up to the default horizon.
 async fn monthly_totals(
     State(db): State<Db>,
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
     let mut totals = db.monthly_totals().await.map_err(internal)?;
     let segments = db.list_recurring().await.map_err(internal)?;
-    let through = recurring::default_through(chrono::Local::now().date_naive());
-    recurring::add_to_totals(&mut totals, &recurring::occurrences(&segments, &through));
+    let through = recurring::default_through(today());
+    recurring::add_to_totals(
+        &mut totals,
+        &recurring::upcoming(&segments, &through, today()),
+    );
     Ok(Json(totals))
 }
 
@@ -103,7 +120,8 @@ async fn list_recurring(
 
 #[derive(Deserialize)]
 struct OccurrencesQuery {
-    /// Last month to generate, YYYY-MM; defaults to two years ahead.
+    /// Last month to generate, YYYY-MM; defaults to two years ahead. Only upcoming
+    /// (unsettled) occurrences are returned; settled ones are transactions.
     through: Option<String>,
 }
 
@@ -114,10 +132,11 @@ async fn recurring_occurrences(
     let through = match q.through {
         Some(m) if recurring::is_month(&m) => m,
         Some(_) => return Err((StatusCode::BAD_REQUEST, "through must be YYYY-MM".into())),
-        None => recurring::default_through(chrono::Local::now().date_naive()),
+        None => recurring::default_through(today()),
     };
+    settle(db.as_ref()).await?;
     let segments = db.list_recurring().await.map_err(internal)?;
-    Ok(Json(recurring::occurrences(&segments, &through)))
+    Ok(Json(recurring::upcoming(&segments, &through, today())))
 }
 
 /// Start a series; returns its id.
@@ -137,7 +156,8 @@ async fn change_recurring(
     Path(series_id): Path<i64>,
     Json(r): Json<recurring::NewRecurring>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    recurring::change_from(db.as_ref(), series_id, &r)
+    settle(db.as_ref()).await?;
+    recurring::change_from(db.as_ref(), series_id, &r, today())
         .await
         .map_err(recurring_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -154,7 +174,8 @@ async fn cancel_recurring(
     Path(series_id): Path<i64>,
     Query(q): Query<CancelQuery>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    recurring::cancel_from(db.as_ref(), series_id, &q.from)
+    settle(db.as_ref()).await?;
+    recurring::cancel_from(db.as_ref(), series_id, &q.from, today())
         .await
         .map_err(recurring_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -248,6 +269,7 @@ async fn mirror_paamonim(
 async fn export_sheets(
     State(db): State<Db>,
 ) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
     sheets::export(db.as_ref())
         .await
         .map(Json)
@@ -335,6 +357,9 @@ async fn main() -> anyhow::Result<()> {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(hours * 3600));
             loop {
                 tick.tick().await;
+                if let Err(e) = recurring::settle_due(db.as_ref(), today()).await {
+                    tracing::warn!("settling repeating charges failed: {e}");
+                }
                 if let Err(e) = sheets::export(db.as_ref()).await {
                     tracing::warn!("sheets export failed: {e}");
                 }
