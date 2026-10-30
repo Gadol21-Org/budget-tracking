@@ -4,7 +4,6 @@ mod mirror;
 mod money;
 mod paamonim;
 mod sheets;
-#[cfg(feature = "nosql")]
 mod nosql;
 mod storage;
 
@@ -153,10 +152,7 @@ async fn main() -> anyhow::Result<()> {
 
     // STORAGE=sqlite (default, local/tests) | nosql (Oracle NoSQL Cloud or the local Cloud Simulator)
     let db: Db = match std::env::var("STORAGE").as_deref().unwrap_or("sqlite") {
-        #[cfg(feature = "nosql")]
         "nosql" => Arc::new(nosql::NoSqlStorage::connect().await?),
-        #[cfg(not(feature = "nosql"))]
-        "nosql" => anyhow::bail!("built without NoSQL support; rebuild with `--features nosql`"),
         "sqlite" => {
             let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "budget.db".into());
             Arc::new(SqliteStorage::open(&db_path)?)
