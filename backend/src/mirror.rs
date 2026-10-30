@@ -55,12 +55,11 @@ impl Options {
             max_ops: var("PAAMONIM_MIRROR_MAX_OPS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50),
-            delete: var("PAAMONIM_DELETE_PATH").map(|p| {
-                (
-                    p,
-                    var("PAAMONIM_DELETE_PARAM").unwrap_or_else(|| "line_id".into()),
-                )
-            }),
+            delete: Some((
+                var("PAAMONIM_DELETE_PATH")
+                    .unwrap_or_else(|| "/rishumit/delete_history_line".into()),
+                var("PAAMONIM_DELETE_PARAM").unwrap_or_else(|| "line_id".into()),
+            )),
         }
     }
 }
@@ -77,7 +76,7 @@ pub struct MirrorSummary {
     pub deleted: usize,
     /// Not mirrored by design: no Paamonim budget item, rounds to zero, or wrong sign.
     pub skipped: usize,
-    /// Waiting for a delete endpoint (`PAAMONIM_DELETE_PATH`).
+    /// Edits/deletes waiting because no delete endpoint is configured.
     pub unsupported: usize,
     /// Marked `error`; check them and `POST /api/mirror/paamonim/retry/:id`.
     pub failed: usize,
