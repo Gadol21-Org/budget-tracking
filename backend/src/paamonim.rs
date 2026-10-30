@@ -143,6 +143,28 @@ impl Client {
         parse_item_categories(&body)
     }
 
+    /// Delete a history line. The endpoint is not known from the site's public JS, so the
+    /// caller supplies the path and id parameter name (see `PAAMONIM_DELETE_PATH`).
+    pub async fn delete_item_line(&self, path: &str, param: &str, line_id: &str) -> Result<()> {
+        self.http
+            .get(format!("{}{}", self.base, path))
+            .header("X-Requested-With", "XMLHttpRequest")
+            .query(&[(param, line_id)])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
+    /// A client for a test server, skipping the login.
+    #[cfg(test)]
+    pub fn for_tests(base: &str) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base: base.trim_end_matches('/').to_string(),
+        }
+    }
+
     /// Mirror a line to Paamonim. `amount_shekels` must already be rounded.
     pub async fn save_item_line(&self, fields: &[(&str, String)]) -> Result<()> {
         self.http
@@ -156,7 +178,7 @@ impl Client {
     }
 }
 
-const HEBREW_MONTHS: [&str; 12] = [
+pub(crate) const HEBREW_MONTHS: [&str; 12] = [
     "ינואר",
     "פברואר",
     "מרץ",

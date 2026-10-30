@@ -9,7 +9,7 @@
 //! An occurrence is *unsettled* until its date has passed. Unsettled ones exist only as
 //! generated previews (shown as upcoming, counted in totals) and are the only ones a series
 //! change may touch. When the date passes, [`settle_due`] turns the occurrence into an
-//! ordinary transaction (sync state `local`: not mirrored to Paamonim), which flows into the
+//! ordinary transaction (sync state `pending`: mirrored to Paamonim like any other), which flows into the
 //! totals, the Google Sheets export and so on like any other and is never rewritten by a
 //! later change to the series.
 
@@ -524,7 +524,7 @@ mod tests {
         assert_eq!(txs.len(), 2);
         assert!(txs
             .iter()
-            .all(|t| t.recurring_series_id == Some(id) && t.sync_state == "local"));
+            .all(|t| t.recurring_series_id == Some(id) && t.sync_state == "pending"));
         // A deleted settled transaction is not brought back.
         s.delete_transaction(txs[0].id).await.unwrap();
         assert_eq!(settle_due(&s, day("2026-03-16")).await.unwrap(), 0);

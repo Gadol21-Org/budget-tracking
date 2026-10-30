@@ -134,34 +134,84 @@ pub struct ImportSummary {
     pub transactions_added: usize,
     /// Already imported (same Paamonim line id); import is idempotent.
     pub transactions_skipped: usize,
+    /// Lines we posted whose id was never recorded; linked to the local transaction (exact
+    /// amount kept) instead of added again.
+    pub transactions_adopted: usize,
 }
 
-/// A locally created transaction waiting to be mirrored to Paamonim.
+/// A transaction whose Paamonim copy is missing or out of date.
+///
+/// `state` says which: `pending` (never sent), `modified` (edited after it was sent; the old
+/// line in Paamonim has to be replaced) or `verifying` (a request may have been sent but its
+/// outcome wasn't confirmed, so it must be checked before anything is posted again).
+#[derive(Debug, Clone)]
 pub struct PendingMirror {
     pub id: i64,
+    pub state: String,
     pub date: String,
     pub amount_agorot: i64,
     pub note: String,
     /// `e:<id>` / `i:<id>` of the Paamonim budget item; None for categories made locally.
     pub item_key: Option<String>,
+    /// Name of the local category, which is the Paamonim item name for imported ones.
+    pub item_name: Option<String>,
     pub payment_key: Option<String>,
+    /// The Paamonim line this transaction is linked to, if any.
+    pub line_id: Option<String>,
+    /// The day that line has in Paamonim (differs from `date` after a local date edit).
+    pub mirror_date: Option<String>,
+}
+
+/// A line in Paamonim that no longer has a local transaction (deleted or replaced locally).
+/// `date` is the day it has in Paamonim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineDelete {
+    pub line_id: String,
+    pub date: String,
+}
+
+/// True when `local` (exact agorot) is what Paamonim would hold for `imported` (whole shekels
+/// as agorot, signed): lets a line we posted be recognised on import despite rounding.
+pub fn rounds_to(local: i64, imported: i64) -> bool {
+    (local < 0) == (imported < 0)
+        && crate::money::to_paamonim_shekels(local.abs()) * 100 == imported.abs()
 }
 
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
+    /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
-    /// Record that the transaction now exists in Paamonim as `line_id`.
-    async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()>;
-    async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()>;
-    /// Paamonim line ids already known locally.
+    /// Set `sync_state` (e.g. `verifying` before a request, `error`, `local`).
+    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()>;
+    /// Record that `posted` now exists in Paamonim as `line_id`. The line it replaces (if the
+    /// transaction was already linked) is queued for deletion. If the transaction changed
+    /// since `posted` was read it becomes `modified` instead of `synced`. Returns false when
+    /// the transaction no longer exists (the caller then queues `line_id` for deletion).
+    async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool>;
+    /// Stop mirroring a transaction (e.g. moved to a category Paamonim doesn't have): queue
+    /// its line for deletion, unlink it and mark it `local`.
+    async fn detach_mirror(&self, id: i64) -> anyhow::Result<()>;
+    /// `error` -> `pending`/`modified`, for a manual retry. False if it wasn't in `error`.
+    async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool>;
+    /// Lines to delete in Paamonim.
+    async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>>;
+    async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()>;
+    async fn finish_line_delete(&self, line_id: &str) -> anyhow::Result<()>;
+    /// Paamonim line ids already known locally, including ones queued for deletion.
     async fn known_line_ids(&self) -> anyhow::Result<Vec<String>>;
+    /// Called once at start when mirroring is on: the first time, whatever is unsent or
+    /// edited so far (made while mirroring was off) is excluded from mirroring, so turning it
+    /// on never replays history. Returns how many transactions were set aside.
+    async fn baseline_mirror(&self) -> anyhow::Result<usize>;
+    /// Called at start when mirroring is off, so the next time it is turned on starts afresh.
+    async fn clear_mirror_baseline(&self) -> anyhow::Result<()>;
     /// Idempotent: lookups are upserted by key, transactions skipped if their line id exists.
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary>;
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
-    /// Local edit. A line already in Paamonim is flagged `modified`: edits are not pushed there.
+    /// Local edit. A line already in Paamonim is flagged `modified` so mirroring replaces it.
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()>;
     /// Live categories only; ones deleted locally are hidden.
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
@@ -389,39 +439,114 @@ impl Storage for SqliteStorage {
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.id, t.date, t.amount_agorot, t.note, c.paamonim_item_id, p.paamonim_id
+            "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note, c.paamonim_item_id,
+                    c.name, p.paamonim_id, t.paamonim_line_id, t.mirror_date
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
-             WHERE t.sync_state = 'pending' ORDER BY t.id",
+             WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(PendingMirror {
                     id: r.get(0)?,
-                    date: r.get(1)?,
-                    amount_agorot: r.get(2)?,
-                    note: r.get(3)?,
-                    item_key: r.get(4)?,
-                    payment_key: r.get(5)?,
+                    state: r.get(1)?,
+                    date: r.get(2)?,
+                    amount_agorot: r.get(3)?,
+                    note: r.get(4)?,
+                    item_key: r.get(5)?,
+                    item_name: r.get(6)?,
+                    payment_key: r.get(7)?,
+                    line_id: r.get(8)?,
+                    mirror_date: r.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
-    async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()> {
+    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute(
-            "UPDATE transactions SET sync_state = 'synced', paamonim_line_id = ?2 WHERE id = ?1",
-            params![id, line_id],
+            "UPDATE transactions SET sync_state = ?2 WHERE id = ?1",
+            params![id, state],
         )?;
         Ok(())
     }
 
-    async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "UPDATE transactions SET sync_state = 'error' WHERE id = ?1",
+    async fn mark_mirrored(&self, p: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ?1 AND paamonim_line_id IS NOT NULL AND paamonim_line_id <> ?2",
+            params![p.id, line_id],
+        )?;
+        let n = tx.execute(
+            "UPDATE transactions SET paamonim_line_id = ?2, mirror_date = ?3,
+               sync_state = CASE WHEN date = ?3 AND amount_agorot = ?4 AND note = ?5
+                            THEN 'synced' ELSE 'modified' END
+             WHERE id = ?1",
+            params![p.id, line_id, p.date, p.amount_agorot, p.note],
+        )?;
+        tx.commit()?;
+        Ok(n == 1)
+    }
+
+    async fn detach_mirror(&self, id: i64) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ?1 AND paamonim_line_id IS NOT NULL",
             params![id],
+        )?;
+        tx.execute(
+            "UPDATE transactions SET paamonim_line_id = NULL, mirror_date = NULL,
+               sync_state = 'local' WHERE id = ?1",
+            params![id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool> {
+        let n = self.0.lock().unwrap().execute(
+            "UPDATE transactions SET sync_state =
+               CASE WHEN paamonim_line_id IS NULL THEN 'pending' ELSE 'modified' END
+             WHERE id = ?1 AND sync_state = 'error'",
+            params![id],
+        )?;
+        Ok(n == 1)
+    }
+
+    async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT line_id, date FROM mirror_deletes ORDER BY rowid")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(LineDelete {
+                    line_id: r.get(0)?,
+                    date: r.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT OR IGNORE INTO mirror_deletes (line_id, date) VALUES (?1, ?2)",
+            params![line_id, date],
+        )?;
+        Ok(())
+    }
+
+    async fn finish_line_delete(&self, line_id: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "DELETE FROM mirror_deletes WHERE line_id = ?1",
+            params![line_id],
         )?;
         Ok(())
     }
@@ -429,12 +554,51 @@ impl Storage for SqliteStorage {
     async fn known_line_ids(&self) -> anyhow::Result<Vec<String>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL",
+            "SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL
+             UNION SELECT line_id FROM mirror_deletes",
         )?;
         let ids = stmt
             .query_map([], |r| r.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
         Ok(ids)
+    }
+
+    async fn baseline_mirror(&self) -> anyhow::Result<usize> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let done = tx
+            .prepare("SELECT 1 FROM mirror_meta WHERE k = 'baseline'")?
+            .exists([])?;
+        let mut n = 0;
+        if !done {
+            // Edited lines count as in step (their divergence is accepted); unsent ones are
+            // set aside as `local` and never sent.
+            tx.execute(
+                "UPDATE transactions SET sync_state = 'synced'
+                 WHERE sync_state = 'modified' AND paamonim_line_id IS NOT NULL",
+                [],
+            )?;
+            n = tx.execute(
+                "UPDATE transactions SET sync_state = 'local'
+                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error')",
+                [],
+            )?;
+            tx.execute("DELETE FROM mirror_deletes", [])?;
+            tx.execute(
+                "INSERT INTO mirror_meta (k, v) VALUES ('baseline', '1')",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    async fn clear_mirror_baseline(&self) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM mirror_meta WHERE k = 'baseline'", [])?;
+        Ok(())
     }
 
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary> {
@@ -511,10 +675,50 @@ impl Storage for SqliteStorage {
                 .copied()
                 .flatten();
             let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
+            // Deleted here and waiting to be deleted there: don't bring it back.
+            let queued = tx
+                .prepare("SELECT 1 FROM mirror_deletes WHERE line_id = ?1")?
+                .exists(params![t.line_id])?;
+            if queued {
+                sum.transactions_skipped += 1;
+                continue;
+            }
+            let linked = tx
+                .prepare("SELECT 1 FROM transactions WHERE paamonim_line_id = ?1")?
+                .exists(params![t.line_id])?;
+            if !linked {
+                // A line we posted whose id we never recorded: link it, keeping the exact
+                // local amount, rather than adding it a second time.
+                let candidates: Vec<(i64, i64)> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT id, amount_agorot FROM transactions
+                         WHERE paamonim_line_id IS NULL AND sync_state IN ('verifying', 'error')
+                           AND date = ?1 AND category_id IS ?2 ORDER BY id",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![t.date, cat], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    rows
+                };
+                if let Some((id, _)) = candidates
+                    .into_iter()
+                    .find(|(_, a)| rounds_to(*a, t.amount_agorot))
+                {
+                    tx.execute(
+                        "UPDATE transactions SET paamonim_line_id = ?2, mirror_date = date,
+                           sync_state = 'synced', payment_method_id = COALESCE(payment_method_id, ?3)
+                         WHERE id = ?1",
+                        params![id, t.line_id, pm],
+                    )?;
+                    sum.transactions_adopted += 1;
+                    continue;
+                }
+            }
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO transactions
-                   (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id, sync_state)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'synced')",
+                   (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id,
+                    mirror_date, sync_state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?1, 'synced')",
                 params![t.date, t.amount_agorot, cat, pm, t.note, t.line_id],
             )?;
             if inserted == 1 {
@@ -589,10 +793,17 @@ impl Storage for SqliteStorage {
     }
 
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        // Queue its Paamonim line (if any) for deletion there.
+        tx.execute(
+            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ?1 AND paamonim_line_id IS NOT NULL",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -773,7 +984,7 @@ impl Storage for SqliteStorage {
             tx.execute(
                 "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                            note, sync_state, recurring_series_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
                 params![
                     t.date,
                     t.amount_agorot,
@@ -801,7 +1012,7 @@ impl Storage for SqliteStorage {
                 tx.execute(
                     "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                                note, sync_state, recurring_series_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
                     params![
                         o.date,
                         o.amount_agorot,
@@ -822,6 +1033,18 @@ impl Storage for SqliteStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Record a pending transaction as sent to Paamonim under `line`.
+    async fn mark(s: &SqliteStorage, id: i64, line: &str) {
+        let p = s
+            .pending_mirrors()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap();
+        assert!(s.mark_mirrored(&p, line).await.unwrap());
+    }
 
     fn tx(date: &str, amount: i64, cat: Option<i64>) -> NewTransaction {
         NewTransaction {
@@ -848,7 +1071,7 @@ mod tests {
             (t.date.as_str(), t.amount_agorot, t.sync_state.as_str()),
             ("2026-10-04", -2000, "pending")
         );
-        s.mark_mirrored(id, "77").await.unwrap();
+        mark(&s, id, "77").await;
         s.update_transaction(id, &tx("2026-10-05", -2500, None))
             .await
             .unwrap();
@@ -1083,7 +1306,7 @@ mod tests {
             .create_transaction(&tx("2026-10-03", -100, Some(a)))
             .await
             .unwrap();
-        s.mark_mirrored(synced, "5").await.unwrap();
+        mark(&s, synced, "5").await;
         s.create_transaction(&tx("2026-10-04", -100, Some(a)))
             .await
             .unwrap();

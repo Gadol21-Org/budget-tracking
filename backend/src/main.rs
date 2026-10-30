@@ -55,15 +55,7 @@ async fn create_transaction(
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     let id = db.create_transaction(&t).await.map_err(internal)?;
-    if mirroring_enabled() {
-        // Best effort in the background; failed lines stay visible via sync_state.
-        let db = db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_mirror(db.as_ref()).await {
-                tracing::warn!("paamonim mirror failed: {e}");
-            }
-        });
-    }
+    trigger_mirror(&db);
     Ok(Json(id))
 }
 
@@ -75,6 +67,7 @@ async fn update_transaction(
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     db.update_transaction(id, &t).await.map_err(internal)?;
+    trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -83,6 +76,7 @@ async fn delete_transaction(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     db.delete_transaction(id).await.map_err(internal)?;
+    trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -318,7 +312,37 @@ async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
     let _guard = MIRROR_LOCK.lock().await;
     let (base, user, pass) = paamonim_credentials().map_err(|e| anyhow::anyhow!(e.1))?;
     let client = paamonim::Client::login(&base, &user, &pass).await?;
-    mirror::run(&client, db).await
+    mirror::run(&client, db, &mirror::Options::from_env()).await
+}
+
+/// After a local change: mirror it, in the background. Failures stay visible via `sync_state`
+/// and the log; nothing is retried blindly.
+fn trigger_mirror(db: &Db) {
+    if mirroring_enabled() {
+        let db = db.clone();
+        tokio::spawn(async move {
+            match run_mirror(db.as_ref()).await {
+                Ok(s) => {
+                    if let Some(why) = &s.stopped {
+                        tracing::warn!("paamonim mirror stopped: {why}");
+                    }
+                }
+                Err(e) => tracing::warn!("paamonim mirror failed: {e}"),
+            }
+        });
+    }
+}
+
+/// Put a transaction in `error` back in the queue (after checking Paamonim by hand).
+async fn retry_mirror(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if db.retry_mirror(id).await.map_err(internal)? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::CONFLICT, "transaction is not in error".into()))
+    }
 }
 
 async fn mirror_paamonim(
@@ -424,6 +448,10 @@ fn router(db: Db) -> Router {
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
+        .route(
+            "/api/mirror/paamonim/retry/:id",
+            axum::routing::post(retry_mirror),
+        )
         .with_state(db)
         .fallback(assets::static_handler)
 }
@@ -447,6 +475,41 @@ async fn main() -> anyhow::Result<()> {
         }
         other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or mysql)"),
     };
+
+    // Writing to Paamonim starts from now: whatever was unsent or edited while it was off is
+    // never replayed. Turning it off forgets the baseline so the next start is fresh again.
+    if mirroring_enabled() {
+        let n = db.baseline_mirror().await?;
+        if n > 0 {
+            tracing::info!("paamonim mirror: {n} earlier transactions set aside, not mirrored");
+        }
+        // Also sweeps up what no request triggered: settled repeating charges, category
+        // merges, and the rest of a run that hit its operation limit.
+        let mins: u64 = std::env::var("PAAMONIM_MIRROR_INTERVAL_MINUTES")
+            .ok()
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(10);
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(mins.max(1) * 60));
+            loop {
+                tick.tick().await;
+                if let Err(e) = recurring::settle_due(db.as_ref(), today()).await {
+                    tracing::warn!("settling repeating charges failed: {e}");
+                }
+                match run_mirror(db.as_ref()).await {
+                    Ok(s) => {
+                        if let Some(why) = &s.stopped {
+                            tracing::warn!("paamonim mirror stopped: {why}");
+                        }
+                    }
+                    Err(e) => tracing::warn!("paamonim mirror failed: {e}"),
+                }
+            }
+        });
+    } else {
+        db.clear_mirror_baseline().await?;
+    }
 
     // Nightly (configurable) snapshot to Google Sheets, only when configured.
     if std::env::var("GOOGLE_SHEET_ID").is_ok() {
