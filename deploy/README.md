@@ -28,17 +28,7 @@ The database has no public address. It lives in the same virtual network as the 
 2. **Create the DB system.** Databases > MySQL > DB Systems > Create DB system. Choose **Always Free** (shape `MySQL.Free`; Always Free needs the home region and gives about 50 GB, no HeatWave cluster). Set an admin username and password. Under Networking pick the **same VCN** as the VM and the same (or any) subnet. Leave "Enable HeatWave cluster" off. Create it and wait until it is Active.
 3. **Copy its private IP** from the DB system's page (Endpoint, e.g. `10.0.1.20`, port 3306).
 4. **Allow the VM to connect.** Networking > Virtual cloud networks > your VCN > the DB system's subnet > Security list (or network security group): add an **ingress rule** with source CIDR of the VM's subnet (e.g. `10.0.0.0/24`), protocol TCP, destination port **3306**. If the VM and database share a subnet, that one rule is enough; otherwise also check the VM subnet's egress allows it (the default allows all egress).
-5. **Create the database and a user** (from the VM, which can reach it):
-   ```bash
-   docker run --rm -it mysql:8 mysql -h 10.0.1.20 -u <admin> -p
-   ```
-   ```sql
-   CREATE DATABASE budget CHARACTER SET utf8mb4;
-   CREATE USER 'budget'@'%' IDENTIFIED BY '<a long password>';
-   GRANT ALL ON budget.* TO 'budget'@'%';
-   ```
-   The app creates its tables itself on startup.
-6. Put the connection string in `BUDGET_ENV` (below). Percent-encode special characters in the password (`#` is `%23`, `@` is `%40`).
+5. **Connection string.** Use the admin user from step 2 in `MYSQL_URL` (below). On first start the app creates the `budget` database and its tables itself. Percent-encode special characters in the password (`#` is `%23`, `@` is `%40`). (If you prefer a restricted account, create the database and a user with rights on it by hand from the VM, `docker run --rm -it mysql:8 mysql -h <ip> -u <admin> -p`, and use that user instead.)
 
 Nothing about the database is opened to the internet, and no IAM policy is needed.
 
@@ -73,7 +63,7 @@ In this repo, **Settings > Secrets and variables > Actions**:
 
 ```
 STORAGE=mysql
-MYSQL_URL=mysql://budget:<password>@10.0.1.20:3306/budget
+MYSQL_URL=mysql://<admin user>:<password>@10.0.1.20:3306/budget
 ```
 
 Add `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` for the nightly Sheets export if you want it. Leave `PAAMONIM_MIRROR` unset (off).

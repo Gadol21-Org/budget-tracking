@@ -9,7 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::ConnectOptions;
 use sqlx::Row;
 
 use crate::storage::{
@@ -54,9 +55,25 @@ pub struct MySqlStorage {
 impl MySqlStorage {
     pub async fn connect() -> Result<Self> {
         let url = std::env::var("MYSQL_URL").context("MYSQL_URL is not set")?;
+        let opts: MySqlConnectOptions = url.parse().context("parsing MYSQL_URL")?;
+        // Create the database on first use (the account needs the CREATE privilege;
+        // if it lacks it and the database already exists, this is skipped).
+        if let Some(db) = opts.get_database() {
+            let server = opts.clone().database("");
+            let mut conn = server.connect().await.context("connecting to MySQL")?;
+            let name = db.replace('`', "``");
+            if let Err(e) = sqlx::query(&format!(
+                "CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4"
+            ))
+            .execute(&mut conn)
+            .await
+            {
+                tracing::debug!("not creating database {db}: {e}");
+            }
+        }
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
-            .connect(&url)
+            .connect_with(opts)
             .await
             .context("connecting to MySQL")?;
         for ddl in SCHEMA {
