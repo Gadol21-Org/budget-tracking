@@ -1,3 +1,4 @@
+mod assets;
 mod db;
 mod import;
 mod mirror;
@@ -17,7 +18,6 @@ use axum::{
 };
 use serde::Deserialize;
 use storage::{Category, MonthlyTotal, NewTransaction, SqliteStorage, Storage, Transaction};
-use tower_http::services::{ServeDir, ServeFile};
 
 type Db = Arc<dyn Storage>;
 
@@ -175,14 +175,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Default to the repo's frontend/dist whatever the working directory is.
-    let static_dir = std::env::var("STATIC_DIR")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../frontend/dist").into());
-    if !std::path::Path::new(&static_dir).join("index.html").exists() {
-        tracing::warn!("no built frontend at {static_dir}: run `npm install && npm run build` in frontend/ (or use `npm run dev` and open http://localhost:5173)");
-    }
-    let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
-
     let app = Router::new()
         .route("/api/transactions", get(list_transactions).post(create_transaction))
         .route("/api/transactions/:id", delete(delete_transaction))
@@ -192,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
         .with_state(db)
-        .fallback_service(spa);
+        .fallback(assets::static_handler);
 
     let addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     tracing::info!("listening on http://{addr}");

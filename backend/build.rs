@@ -19,6 +19,8 @@ fn main() {
     for p in ["src", "public", "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts"] {
         println!("cargo:rerun-if-changed={}", frontend.join(p).display());
     }
+    // The embedding macro needs the folder to exist even if the build is skipped or fails.
+    let _ = std::fs::create_dir_all(frontend.join("dist"));
     if std::env::var_os("SKIP_FRONTEND_BUILD").is_some() {
         return;
     }
