@@ -53,6 +53,7 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .rows { display: flex; flex-direction: column; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .row:last-child { border-bottom: 0; }
+.row.sub { padding: 4px 0 4px 0; padding-inline-start: 16px; border-bottom: 0; font-size: .9rem; }
 .row .grow { flex: 1; min-width: 0; }
 .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; }

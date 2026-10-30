@@ -196,12 +196,15 @@ impl Storage for NoSqlStorage {
             let k = ("category".to_string(), c.key.clone());
             let new = !ids.contains_key(&k);
             let id = *ids.entry(k).or_insert_with(|| self.next_id());
-            let row = MapValue::new()
+            let mut row = MapValue::new()
                 .str("kind", "category")
                 .i64("id", id)
                 .str("name", &c.name)
                 .column("is_income", c.is_income)
                 .str("paamonim_id", &c.key);
+            if let Some(p) = c.parent_key.as_ref().and_then(|k| cats.get(k)) {
+                row = row.i64("parent_id", *p);
+            }
             PutRequest::new(LOOKUPS).value(row).execute(&self.handle).await?;
             sum.categories_added += new as usize;
             cats.insert(c.key.clone(), id);
@@ -317,6 +320,7 @@ impl Storage for NoSqlStorage {
                     id: r.get_i64("id")?,
                     name: r.get_string("name")?,
                     is_income: r.get_bool("is_income").unwrap_or(false),
+                    parent_id: r.get_i64("parent_id"),
                 })
             })
             .collect();

@@ -77,7 +77,18 @@ fn money(agorot: i64) -> f64 {
 
 /// Build the two tabs as rows of cells.
 pub async fn build_tabs(storage: &dyn Storage) -> Result<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
-    let cats: HashMap<i64, String> = storage.list_categories().await?.into_iter().map(|c| (c.id, c.name)).collect();
+    let all = storage.list_categories().await?;
+    // "parent › child" for sub-categories.
+    let cats: HashMap<i64, String> = all
+        .iter()
+        .map(|c| {
+            let name = match c.parent_id.and_then(|p| all.iter().find(|x| x.id == p)) {
+                Some(p) => format!("{} › {}", p.name, c.name),
+                None => c.name.clone(),
+            };
+            (c.id, name)
+        })
+        .collect();
     let pms: HashMap<i64, String> = storage.list_payment_methods().await?.into_iter().map(|p| (p.id, p.name)).collect();
     let name = |m: &HashMap<i64, String>, id: Option<i64>| id.and_then(|i| m.get(&i).cloned()).unwrap_or_default();
 

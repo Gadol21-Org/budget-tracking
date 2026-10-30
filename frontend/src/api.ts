@@ -12,6 +12,7 @@ export interface Category {
   id: number;
   name: string;
   is_income: boolean;
+  parent_id: number | null;
 }
 
 export interface MonthlyTotal {

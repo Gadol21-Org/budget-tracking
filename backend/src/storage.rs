@@ -38,6 +38,8 @@ pub struct Category {
     pub id: i64,
     pub name: String,
     pub is_income: bool,
+    /// Top-level categories have none; transactions are normally on the children.
+    pub parent_id: Option<i64>,
 }
 
 /// Per-month, per-category totals, computed from transactions on demand.
@@ -55,6 +57,8 @@ pub struct ImportCategory {
     pub key: String,
     pub name: String,
     pub is_income: bool,
+    /// Key of a parent that appears earlier in the batch.
+    pub parent_key: Option<String>,
 }
 
 pub struct ImportPaymentMethod {
@@ -205,10 +209,11 @@ impl Storage for SqliteStorage {
             let existed: Option<i64> = tx
                 .query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))
                 .ok();
+            let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
             tx.execute(
-                "INSERT INTO categories (name, is_income, paamonim_item_id) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(paamonim_item_id) DO UPDATE SET name = excluded.name",
-                params![c.name, c.is_income, c.key],
+                "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(paamonim_item_id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id",
+                params![c.name, c.is_income, c.key, parent],
             )?;
             let id: i64 = tx.query_row("SELECT id FROM categories WHERE paamonim_item_id = ?1", params![c.key], |r| r.get(0))?;
             sum.categories_added += existed.is_none() as usize;
@@ -240,6 +245,14 @@ impl Storage for SqliteStorage {
             if inserted == 1 {
                 sum.transactions_added += 1;
             } else {
+                // Already imported: only fill in links that were missing (e.g. before custom
+                // items or sub-categories were understood); never overwrite local edits.
+                tx.execute(
+                    "UPDATE transactions SET category_id = COALESCE(category_id, ?2),
+                       payment_method_id = COALESCE(payment_method_id, ?3)
+                     WHERE paamonim_line_id = ?1",
+                    params![t.line_id, cat, pm],
+                )?;
                 sum.transactions_skipped += 1;
             }
         }
@@ -299,10 +312,10 @@ impl Storage for SqliteStorage {
 
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
         let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, name, is_income FROM categories ORDER BY name")?;
+        let mut stmt = conn.prepare("SELECT id, name, is_income, parent_id FROM categories ORDER BY name")?;
         let rows = stmt
             .query_map([], |r| {
-                Ok(Category { id: r.get(0)?, name: r.get(1)?, is_income: r.get::<_, i64>(2)? != 0 })
+                Ok(Category { id: r.get(0)?, name: r.get(1)?, is_income: r.get::<_, i64>(2)? != 0, parent_id: r.get(3)? })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
@@ -330,10 +343,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_links_parents_and_fills_missing_links_on_rerun() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let line = |cat: Option<&str>| ImportTransaction {
+            line_id: "1".into(),
+            date: "2026-10-03".into(),
+            amount_agorot: -100,
+            category_key: cat.map(String::from),
+            payment_key: None,
+            note: String::new(),
+        };
+        let cat = |key: &str, parent: Option<&str>| ImportCategory { key: key.into(), name: key.into(), is_income: false, parent_key: parent.map(String::from) };
+        // First run does not know the item yet, so the line has no category.
+        let first = ImportBatch { transactions: vec![line(None)], ..Default::default() };
+        s.import_paamonim(&first).await.unwrap();
+        let second = ImportBatch { categories: vec![cat("ce:3", None), cat("e:1", Some("ce:3"))], transactions: vec![line(Some("e:1"))], ..Default::default() };
+        s.import_paamonim(&second).await.unwrap();
+        let cats = s.list_categories().await.unwrap();
+        let child = cats.iter().find(|c| c.name == "e:1").unwrap();
+        let parent = cats.iter().find(|c| c.name == "ce:3").unwrap();
+        assert_eq!(child.parent_id, Some(parent.id));
+        assert_eq!(s.list_transactions().await.unwrap()[0].category_id, Some(child.id));
+    }
+
+    #[tokio::test]
     async fn import_is_idempotent() {
         let s = SqliteStorage::open(":memory:").unwrap();
         let batch = ImportBatch {
-            categories: vec![ImportCategory { key: "e:1".into(), name: "Food".into(), is_income: false }],
+            categories: vec![ImportCategory { key: "e:1".into(), name: "Food".into(), is_income: false, parent_key: None }],
             payment_methods: vec![ImportPaymentMethod { key: "7".into(), name: "Card".into() }],
             transactions: vec![ImportTransaction {
                 line_id: "100".into(),

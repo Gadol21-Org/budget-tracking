@@ -24,7 +24,14 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
-const catName = (id: number | null) => state.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
+const catById = (id: number | null) => state.cats.find((c) => c.id === id);
+const catName = (id: number | null) => catById(id)?.name ?? "ללא קטגוריה";
+/** "parent › child" for sub-categories. */
+const catPath = (id: number | null) => {
+  const c = catById(id);
+  const p = c?.parent_id != null ? catById(c.parent_id) : undefined;
+  return p && c ? `${p.name} › ${c.name}` : catName(id);
+};
 
 function shiftMonth(m: string, delta: number): string {
   const [y, mo] = m.split("-").map(Number);
@@ -54,12 +61,18 @@ function monthView(): HTMLElement {
   const stat = (label: string, value: HTMLElement) =>
     el("div", { className: "card" }, el("div", { className: "label", textContent: label }), el("div", { className: "value" }, value));
 
-  const byCat = new Map<number | null, number>();
+  // Group expenses by top-level category; sub-categories are listed under their parent.
+  const groups = new Map<number | null, { total: number; kids: Map<number | null, number> }>();
   for (const t of txs.filter((t) => t.amount_agorot < 0)) {
-    byCat.set(t.category_id, (byCat.get(t.category_id) ?? 0) + -t.amount_agorot);
+    const own = catById(t.category_id);
+    const top = own?.parent_id ?? t.category_id;
+    const g = groups.get(top) ?? { total: 0, kids: new Map() };
+    g.total += -t.amount_agorot;
+    if (top !== t.category_id) g.kids.set(t.category_id, (g.kids.get(t.category_id) ?? 0) + -t.amount_agorot);
+    groups.set(top, g);
   }
-  const rows = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
-  const max = rows[0]?.[1] ?? 1;
+  const rows = [...groups.entries()].sort((a, b) => b[1].total - a[1].total);
+  const max = rows[0]?.[1].total ?? 1;
 
   return el(
     "div",
@@ -72,12 +85,21 @@ function monthView(): HTMLElement {
       : el(
           "div",
           { className: "card rows" },
-          ...rows.map(([id, total]) =>
+          ...rows.map(([id, g]) =>
             el(
               "div",
-              { className: "row" },
-              el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (total / max) * 100)}%` }))),
-              money(total),
+              {},
+              el(
+                "div",
+                { className: "row" },
+                el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%` }))),
+                money(g.total),
+              ),
+              ...[...g.kids.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([kid, total]) =>
+                  el("div", { className: "row sub" }, el("div", { className: "grow muted", textContent: catName(kid) }), money(total)),
+                ),
             ),
           ),
         ),
@@ -116,7 +138,7 @@ function listView(): HTMLElement {
               el(
                 "div",
                 { className: "grow" },
-                el("div", { className: "name", textContent: catName(t.category_id) }),
+                el("div", { className: "name", textContent: catPath(t.category_id) }),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
                 badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
               ),
@@ -187,7 +209,17 @@ function openTransactionDialog(existing?: Transaction) {
     expBtn.setAttribute("aria-pressed", String(!isIncome));
     incBtn.setAttribute("aria-pressed", String(isIncome));
     const keep = category.value || (existing?.category_id != null ? String(existing.category_id) : "");
-    category.replaceChildren(el("option", { value: "", textContent: "ללא קטגוריה" }), ...state.cats.filter((c) => c.is_income === isIncome).map((c) => el("option", { value: String(c.id), textContent: c.name })));
+    const opt = (c: Category) => el("option", { value: String(c.id), textContent: c.name });
+    const ofKind = state.cats.filter((c) => c.is_income === isIncome);
+    const tops = ofKind.filter((c) => c.parent_id == null);
+    category.replaceChildren(
+      el("option", { value: "", textContent: "ללא קטגוריה" }),
+      ...tops.map((c) => {
+        const kids = ofKind.filter((k) => k.parent_id === c.id);
+        // A parent is only a heading; transactions go on its sub-categories.
+        return kids.length ? el("optgroup", { label: c.name }, ...kids.map(opt)) : opt(c);
+      }),
+    );
     category.value = keep;
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());

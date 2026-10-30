@@ -66,7 +66,8 @@ async fn history_ids(client: &Client, date: &str) -> Result<HashSet<String>> {
 pub async fn run(client: &Client, storage: &dyn Storage) -> Result<MirrorSummary> {
     let mut sum = MirrorSummary::default();
     for p in storage.pending_mirrors().await? {
-        let Some(item_id) = p.item_key.as_deref().and_then(|k| k.get(2..)) else {
+        // Only Paamonim budget items (`e:<id>` / `i:<id>`) can be written; parent categories can't.
+        let Some(item_id) = p.item_key.as_deref().and_then(|k| k.strip_prefix("e:").or_else(|| k.strip_prefix("i:"))) else {
             sum.skipped += 1;
             continue;
         };
