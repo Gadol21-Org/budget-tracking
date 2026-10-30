@@ -5,6 +5,7 @@ mod mirror;
 mod money;
 mod mysql;
 mod paamonim;
+mod recurring;
 mod sheets;
 mod storage;
 
@@ -28,9 +29,22 @@ fn internal<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+/// Make charges that have come due real transactions before anything reads them.
+async fn settle(db: &dyn Storage) -> Result<(), (StatusCode, String)> {
+    recurring::settle_due(db, today())
+        .await
+        .map(|_| ())
+        .map_err(internal)
+}
+
 async fn list_transactions(
     State(db): State<Db>,
 ) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
     db.list_transactions().await.map(Json).map_err(internal)
 }
 
@@ -116,10 +130,122 @@ async fn delete_category(
         .map_err(category_error)
 }
 
+/// Totals of real transactions plus the upcoming repeating ones up to the default horizon.
 async fn monthly_totals(
     State(db): State<Db>,
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
-    db.monthly_totals().await.map(Json).map_err(internal)
+    settle(db.as_ref()).await?;
+    let mut totals = db.monthly_totals().await.map_err(internal)?;
+    let through = recurring::default_through(today());
+    let ahead = recurring::upcoming_stored(db.as_ref(), &through, today())
+        .await
+        .map_err(internal)?;
+    recurring::add_to_totals(&mut totals, &ahead);
+    Ok(Json(totals))
+}
+
+fn recurring_error(e: recurring::RecurringError) -> (StatusCode, String) {
+    match e {
+        recurring::RecurringError::Invalid(m) => (StatusCode::BAD_REQUEST, m),
+        recurring::RecurringError::Storage(e) => internal(e),
+    }
+}
+
+async fn list_recurring(
+    State(db): State<Db>,
+) -> Result<Json<Vec<recurring::RecurringSegment>>, (StatusCode, String)> {
+    db.list_recurring().await.map(Json).map_err(internal)
+}
+
+#[derive(Deserialize)]
+struct OccurrencesQuery {
+    /// Last month to generate, YYYY-MM; defaults to two years ahead. Only upcoming
+    /// (unsettled) occurrences are returned; settled ones are transactions.
+    through: Option<String>,
+}
+
+async fn recurring_occurrences(
+    State(db): State<Db>,
+    Query(q): Query<OccurrencesQuery>,
+) -> Result<Json<Vec<recurring::Occurrence>>, (StatusCode, String)> {
+    let through = match q.through {
+        Some(m) if recurring::is_month(&m) => m,
+        Some(_) => return Err((StatusCode::BAD_REQUEST, "through must be YYYY-MM".into())),
+        None => recurring::default_through(today()),
+    };
+    settle(db.as_ref()).await?;
+    recurring::upcoming_stored(db.as_ref(), &through, today())
+        .await
+        .map(Json)
+        .map_err(internal)
+}
+
+/// Start a series; returns its id.
+async fn create_recurring(
+    State(db): State<Db>,
+    Json(r): Json<recurring::NewRecurring>,
+) -> Result<Json<i64>, (StatusCode, String)> {
+    recurring::create(db.as_ref(), &r)
+        .await
+        .map(Json)
+        .map_err(recurring_error)
+}
+
+/// Change the series from `start_month` of the body onward; earlier months are untouched.
+async fn change_recurring(
+    State(db): State<Db>,
+    Path(series_id): Path<i64>,
+    Json(r): Json<recurring::NewRecurring>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::change_from(db.as_ref(), series_id, &r, today())
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Edit one month of a series on its own (`month` is YYYY-MM): it becomes a transaction with
+/// the body's values and the rest of the series is unchanged.
+async fn settle_recurring_month(
+    State(db): State<Db>,
+    Path((series_id, month)): Path<(i64, String)>,
+    Json(t): Json<NewTransaction>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::settle_month(db.as_ref(), series_id, &month, &t)
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Skip one month of a series (`month` is YYYY-MM); the rest is unchanged.
+async fn skip_recurring_month(
+    State(db): State<Db>,
+    Path((series_id, month)): Path<(i64, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::skip_month(db.as_ref(), series_id, &month)
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct CancelQuery {
+    /// First month without an occurrence, YYYY-MM.
+    from: String,
+}
+
+async fn cancel_recurring(
+    State(db): State<Db>,
+    Path(series_id): Path<i64>,
+    Query(q): Query<CancelQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
+    recurring::cancel_from(db.as_ref(), series_id, &q.from, today())
+        .await
+        .map_err(recurring_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
@@ -210,6 +336,7 @@ async fn mirror_paamonim(
 async fn export_sheets(
     State(db): State<Db>,
 ) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
+    settle(db.as_ref()).await?;
     sheets::export(db.as_ref())
         .await
         .map(Json)
@@ -296,6 +423,9 @@ async fn main() -> anyhow::Result<()> {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(hours * 3600));
             loop {
                 tick.tick().await;
+                if let Err(e) = recurring::settle_due(db.as_ref(), today()).await {
+                    tracing::warn!("settling repeating charges failed: {e}");
+                }
                 if let Err(e) = sheets::export(db.as_ref()).await {
                     tracing::warn!("sheets export failed: {e}");
                 }
@@ -317,6 +447,17 @@ async fn main() -> anyhow::Result<()> {
             get(list_categories).post(create_category),
         )
         .route("/api/categories/:id", delete(delete_category))
+        .route("/api/categories", get(list_categories))
+        .route("/api/recurring", get(list_recurring).post(create_recurring))
+        .route("/api/recurring/occurrences", get(recurring_occurrences))
+        .route(
+            "/api/recurring/:series_id/months/:month",
+            axum::routing::post(settle_recurring_month).delete(skip_recurring_month),
+        )
+        .route(
+            "/api/recurring/:series_id",
+            axum::routing::put(change_recurring).delete(cancel_recurring),
+        )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))

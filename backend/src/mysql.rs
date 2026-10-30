@@ -13,12 +13,13 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::ConnectOptions;
 use sqlx::Row;
 
+use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, PaymentMethod,
     PendingMirror, Storage, Transaction,
 };
 
-const SCHEMA: [&str; 3] = [
+const SCHEMA: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -44,11 +45,31 @@ const SCHEMA: [&str; 3] = [
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
          paamonim_line_id VARCHAR(100) UNIQUE,   -- set once mirrored/imported
-         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error
+         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
+         recurring_series_id BIGINT NULL,        -- set on a settled repeating transaction
          INDEX idx_tx_date (date),
          INDEX idx_tx_category_date (category_id, date),
          FOREIGN KEY (category_id) REFERENCES categories(id),
          FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+     )",
+    "CREATE TABLE IF NOT EXISTS recurring (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         series_id BIGINT NOT NULL,              -- id of the series' first segment
+         start_month VARCHAR(7) NOT NULL,        -- YYYY-MM
+         end_month VARCHAR(7) NULL,              -- inclusive; NULL = forever
+         day INT NOT NULL,
+         amount_agorot BIGINT NOT NULL,
+         category_id BIGINT NULL,
+         payment_method_id BIGINT NULL,
+         note TEXT NOT NULL,
+         INDEX idx_recurring_series (series_id),
+         FOREIGN KEY (category_id) REFERENCES categories(id),
+         FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+     )",
+    "CREATE TABLE IF NOT EXISTS recurring_settled (
+         series_id BIGINT NOT NULL,
+         month VARCHAR(7) NOT NULL,
+         PRIMARY KEY (series_id, month)
      )",
 ];
 
@@ -98,6 +119,10 @@ impl MySqlStorage {
                 .execute(&pool)
                 .await?;
         }
+        // Tables created before repeating transactions existed; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN recurring_series_id BIGINT NULL")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
 }
@@ -131,6 +156,7 @@ fn tx_from_row(r: &MySqlRow) -> Result<Transaction> {
         payment_method_id: r.try_get("payment_method_id")?,
         note: r.try_get("note")?,
         sync_state: r.try_get("sync_state")?,
+        recurring_series_id: r.try_get("recurring_series_id")?,
     })
 }
 
@@ -342,7 +368,8 @@ impl Storage for MySqlStorage {
 
     async fn list_transactions(&self) -> Result<Vec<Transaction>> {
         let rows = sqlx::query(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
              FROM transactions ORDER BY date DESC, id DESC",
         )
         .fetch_all(&self.pool)
@@ -439,6 +466,11 @@ impl Storage for MySqlStorage {
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
+                sqlx::query("UPDATE recurring SET category_id = ? WHERE category_id = ?")
+                    .bind(to)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
             }
             let from_paamonim: bool = sqlx::query_scalar(
                 "SELECT paamonim_item_id IS NOT NULL FROM categories WHERE id = ?",
@@ -461,6 +493,161 @@ impl Storage for MySqlStorage {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn list_recurring(&self) -> Result<Vec<RecurringSegment>> {
+        let rows = sqlx::query(
+            "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
+                    payment_method_id, note
+             FROM recurring ORDER BY series_id, start_month",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(RecurringSegment {
+                    id: r.try_get("id")?,
+                    series_id: r.try_get("series_id")?,
+                    start_month: r.try_get("start_month")?,
+                    end_month: r.try_get("end_month")?,
+                    day: r.try_get::<i32, _>("day")? as u32,
+                    amount_agorot: r.try_get("amount_agorot")?,
+                    category_id: r.try_get("category_id")?,
+                    payment_method_id: r.try_get("payment_method_id")?,
+                    note: r.try_get("note")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_recurring(&self, series_id: Option<i64>, r: &NewRecurring) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
+                                    category_id, payment_method_id, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(series_id.unwrap_or(0))
+        .bind(&r.start_month)
+        .bind(&r.end_month)
+        .bind(r.day)
+        .bind(r.amount_agorot)
+        .bind(r.category_id)
+        .bind(r.payment_method_id)
+        .bind(&r.note)
+        .execute(&mut *tx)
+        .await?;
+        let id = res.last_insert_id() as i64;
+        if series_id.is_none() {
+            sqlx::query("UPDATE recurring SET series_id = id WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    async fn update_recurring(&self, id: i64, r: &NewRecurring) -> Result<()> {
+        sqlx::query(
+            "UPDATE recurring SET start_month = ?, end_month = ?, day = ?, amount_agorot = ?,
+               category_id = ?, payment_method_id = ?, note = ?
+             WHERE id = ?",
+        )
+        .bind(&r.start_month)
+        .bind(&r.end_month)
+        .bind(r.day)
+        .bind(r.amount_agorot)
+        .bind(r.category_id)
+        .bind(r.payment_method_id)
+        .bind(&r.note)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_recurring(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM recurring WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn settled_recurring(&self) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query("SELECT series_id, month FROM recurring_settled")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("series_id")?, r.try_get("month")?)))
+            .collect()
+    }
+
+    async fn settle_recurring_month(
+        &self,
+        series_id: i64,
+        month: &str,
+        t: Option<&NewTransaction>,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let new =
+            sqlx::query("INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)")
+                .bind(series_id)
+                .bind(month)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        if let (1, Some(t)) = (new, t) {
+            sqlx::query(
+                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                           note, sync_state, recurring_series_id)
+                 VALUES (?, ?, ?, ?, ?, 'local', ?)",
+            )
+            .bind(&t.date)
+            .bind(t.amount_agorot)
+            .bind(t.category_id)
+            .bind(t.payment_method_id)
+            .bind(&t.note)
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(new == 1)
+    }
+
+    async fn settle_recurring(&self, due: &[Occurrence]) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        let mut added = 0;
+        for o in due {
+            let new = sqlx::query(
+                "INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)",
+            )
+            .bind(o.series_id)
+            .bind(&o.date[..7])
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if new == 1 {
+                sqlx::query(
+                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                               note, sync_state, recurring_series_id)
+                     VALUES (?, ?, ?, ?, ?, 'local', ?)",
+                )
+                .bind(&o.date)
+                .bind(o.amount_agorot)
+                .bind(o.category_id)
+                .bind(o.payment_method_id)
+                .bind(&o.note)
+                .bind(o.series_id)
+                .execute(&mut *tx)
+                .await?;
+                added += 1;
+            }
+        }
+        tx.commit().await?;
+        Ok(added)
     }
 
     /// Aggregated in the database.

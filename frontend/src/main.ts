@@ -1,6 +1,6 @@
 import "./style.css";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
-import { api, formatShekels, parseAgorot, type Category, type Transaction } from "./api";
+import { api, formatShekels, parseAgorot, type Category, type RecurringSegment, type Transaction } from "./api";
 
 type View = "month" | "list" | "settings";
 
@@ -8,7 +8,9 @@ const root = document.getElementById("app")!;
 const state = {
   view: "month" as View,
   period: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  /** Stored transactions plus the generated occurrences of repeating ones. */
   txs: [] as Transaction[],
+  recurring: [] as RecurringSegment[],
   cats: [] as Category[],
   /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
   /** Which side of the summary's category breakdown is shown. */
@@ -241,12 +243,14 @@ function listView(): HTMLElement {
         ...txs
           .filter((t) => t.date === d)
           .map((t) => {
-            const del = el("button", { className: "del", title: "מחיקה", textContent: "✕" });
-            del.onclick = async () => {
-              if (!confirm("למחוק את התנועה?")) return;
-              await api.deleteTransaction(t.id);
-              await load();
-            };
+            // An upcoming line has no row of its own to delete; stopping it is in its edit dialog.
+            const del = t.upcoming ? null : el("button", { className: "del", title: "מחיקה", textContent: "✕" });
+            if (del)
+              del.onclick = async () => {
+                if (!confirm("למחוק את התנועה?")) return;
+                await api.deleteTransaction(t.id);
+                await load();
+              };
             const edit = el("button", { className: "del", title: "עריכה", textContent: "✎" });
             edit.onclick = () => openTransactionDialog(t);
             const badge: Record<string, string> = {
@@ -255,11 +259,16 @@ function listView(): HTMLElement {
             };
             return el(
               "div",
-              { className: "row" },
+              { className: t.upcoming ? "row upcoming" : "row" },
               el(
                 "div",
                 { className: "grow" },
-                el("div", { className: "name", textContent: catPath(t.category_id) }),
+                el(
+                  "div",
+                  { className: "name" },
+                  t.upcoming ? el("span", { className: "upcoming-mark", title: "טרם בוצע: ניתן לשנות מכאן והלאה", textContent: "⏳ " }) : t.recurring_series_id != null ? el("span", { title: "הוצאה חוזרת", textContent: "🔁 " }) : null,
+                  catPath(t.category_id),
+                ),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
                 badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
               ),
@@ -344,7 +353,10 @@ function openDeleteCategoryDialog(cat: Category) {
   openDialog((close) => {
     const subs = state.cats.filter((c) => c.parent_id === cat.id);
     const doomed = new Set([cat.id, ...subs.map((c) => c.id)]);
-    const used = state.txs.filter((t) => t.category_id != null && doomed.has(t.category_id)).length;
+    // Occurrences not yet settled are not in txs, so repeating rules are counted separately.
+    const lines = state.txs.filter((t) => t.category_id != null && doomed.has(t.category_id) && !t.upcoming).length;
+    const rules = new Set(state.recurring.filter((r) => r.category_id != null && doomed.has(r.category_id)).map((r) => r.series_id)).size;
+    const used = lines + rules;
     const target = el("select");
     const opt = (c: Category) => el("option", { value: String(c.id), textContent: catPath(c.id) });
     target.append(
@@ -361,7 +373,7 @@ function openDeleteCategoryDialog(cat: Category) {
       el("h2", { textContent: `מחיקת "${cat.name}"` }),
       subs.length > 0 && el("p", { className: "muted", textContent: `יימחקו גם ${subs.length} תתי-קטגוריות.` }),
       used > 0
-        ? el("label", {}, `${used} תנועות משויכות לקטגוריה. להעביר אותן אל:`, target)
+        ? el("label", {}, `${lines} תנועות ו-${rules} הוצאות חוזרות משויכות לקטגוריה. להעביר אותן אל:`, target)
         : el("p", { className: "muted", textContent: "אין תנועות משויכות." }),
       err,
       el("div", { className: "actions" }, cancel, del),
@@ -456,7 +468,30 @@ function settingsView(): HTMLElement {
   );
 }
 
+/** A button that opens a small menu of choices above it. */
+function menuButton(label: string, items: [string, () => void][], className = "btn"): HTMLElement {
+  const menu = el("div", { className: "menu", hidden: true }, ...items.map(([text, run]) => {
+    const item = el("button", { type: "button", textContent: text });
+    item.onclick = () => ((menu.hidden = true), run());
+    return item;
+  }));
+  const button = el("button", { type: "button", className, textContent: `${label} ▾` });
+  button.onclick = () => (menu.hidden = !menu.hidden);
+  return el("div", { className: "menuwrap" }, button, menu);
+}
+
+const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
+const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);
+
+/**
+ * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
+ * the series from that occurrence's month on; earlier months are left as they were.
+ */
 function openTransactionDialog(existing?: Transaction) {
+  const seriesId = existing?.upcoming ? existing.recurring_series_id! : undefined;
+  const segment = state.recurring.find((s) => s.id === existing?.recurring_segment_id);
+  /** The month of the occurrence being edited; the date field may move the charge out of it. */
+  const month = existing?.date.slice(0, 7) ?? "";
   let isIncome = existing ? existing.amount_agorot > 0 : false;
   const dlg = el("dialog");
   const amount = el("input", {
@@ -471,6 +506,22 @@ function openTransactionDialog(existing?: Transaction) {
   const category = el("select");
   const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35, value: existing?.note ?? "" });
   const err = el("div", { className: "error" });
+
+  // Repeating monthly: for a new transaction it is opt-in; for an occurrence it is always on.
+  const repeat = el("input", { type: "checkbox", checked: seriesId !== undefined, disabled: seriesId !== undefined });
+  const forever = el("select", {}, el("option", { value: "forever", textContent: "ללא הגבלה" }), el("option", { value: "months", textContent: "למשך מספר חודשים" }));
+  const months = el("input", { type: "number", min: "1", step: "1", inputMode: "numeric", value: "12" });
+  if (segment?.end_month) {
+    forever.value = "months";
+    months.value = String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1);
+  }
+  const repeatBox = el("div", { style: "display:flex;flex-direction:column;gap:12px" }, el("label", {}, "משך", forever), el("label", {}, "מספר חודשים (כולל החודש הזה)", months));
+  const showRepeat = () => {
+    repeatBox.style.display = repeat.checked ? "flex" : "none";
+    months.parentElement!.style.display = forever.value === "months" ? "" : "none";
+  };
+  repeat.onchange = forever.onchange = showRepeat;
+  showRepeat();
 
   const expBtn = el("button", { type: "button", textContent: "הוצאה" });
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
@@ -495,9 +546,50 @@ function openTransactionDialog(existing?: Transaction) {
   incBtn.onclick = () => ((isIncome = true), fillCats());
   fillCats();
 
-  const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+  const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
   const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
+  // Only this month: becomes a transaction with these values; later months are unchanged.
+  const updateOnce = async () => {
+    try {
+      const abs = Math.abs(parseAgorot(amount.value));
+      if (abs === 0) throw new Error("יש להזין סכום");
+      await api.settleRecurringMonth(seriesId!, month, {
+        date: date.value,
+        amount_agorot: isIncome ? abs : -abs,
+        category_id: category.value ? Number(category.value) : null,
+        payment_method_id: existing?.payment_method_id ?? null,
+        note: note.value,
+      });
+      state.period = monthOf(date.value);
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+    }
+  };
+  // Stop the series: this month and later disappear, earlier months stay.
+  const stopFromHere = async () => {
+    if (!confirm("לבטל את ההוצאה החוזרת מחודש זה והלאה? חודשים קודמים לא ישתנו.")) return;
+    try {
+      await api.cancelRecurring(seriesId!, month);
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+    }
+  };
+  // Skip only this month; the series carries on around it.
+  const skipOnce = async () => {
+    if (!confirm("לדלג על החיוב של חודש זה בלבד?")) return;
+    try {
+      await api.skipRecurringMonth(seriesId!, month);
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+    }
+  };
   const form = el(
     "form",
     { className: "add", method: "dialog" },
@@ -506,8 +598,18 @@ function openTransactionDialog(existing?: Transaction) {
     el("label", {}, "קטגוריה", category),
     el("label", {}, "תאריך", date),
     el("label", {}, "הערה", note),
+    !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
+    repeatBox,
     err,
-    el("div", { className: "actions" }, cancel, save),
+    seriesId !== undefined
+      ? el(
+          "div",
+          { className: "actions" },
+          cancel,
+          menuButton("ביטול חיוב", [["חודש זה בלבד", skipOnce], ["מכאן והלאה", stopFromHere]]),
+          menuButton("עדכון", [["חודש זה בלבד", updateOnce], ["מכאן והלאה", () => dlg.querySelector("form")!.requestSubmit()]], "btn primary"),
+        )
+      : el("div", { className: "actions" }, cancel, save),
   );
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -522,7 +624,23 @@ function openTransactionDialog(existing?: Transaction) {
         payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
       };
-      if (existing) await api.updateTransaction(existing.id, body);
+      if (repeat.checked) {
+        const n = Number(months.value);
+        if (forever.value === "months" && !(Number.isInteger(n) && n >= 1)) throw new Error("מספר החודשים אינו תקין");
+        // A series change starts from the occurrence's own month, whatever date was typed.
+        const start = seriesId !== undefined ? month : date.value.slice(0, 7);
+        const rule = {
+          start_month: start,
+          end_month: forever.value === "months" ? addMonths(start, n - 1) : null,
+          day: seriesId !== undefined && date.value.slice(0, 7) !== month ? (segment?.day ?? 1) : Number(date.value.slice(8)),
+          amount_agorot: body.amount_agorot,
+          category_id: body.category_id,
+          payment_method_id: body.payment_method_id,
+          note: body.note,
+        };
+        if (seriesId !== undefined) await api.changeRecurring(seriesId, rule);
+        else await api.addRecurring(rule);
+      } else if (existing) await api.updateTransaction(existing.id, body);
       else await api.addTransaction(body);
       state.period = monthOf(date.value);
       dlg.close();
@@ -561,7 +679,22 @@ function render() {
 }
 
 async function load() {
-  [state.cats, state.txs] = await Promise.all([api.categories(), api.transactions()]);
+  const [cats, txs, recurring, occurrences] = await Promise.all([api.categories(), api.transactions(), api.recurring(), api.occurrences()]);
+  state.cats = cats;
+  state.recurring = recurring;
+  const generated: Transaction[] = occurrences.map((o) => ({
+    id: 0,
+    date: o.date,
+    amount_agorot: o.amount_agorot,
+    category_id: o.category_id,
+    payment_method_id: o.payment_method_id,
+    note: o.note,
+    sync_state: "synced",
+    recurring_series_id: o.series_id,
+    recurring_segment_id: o.segment_id,
+    upcoming: true,
+  }));
+  state.txs = [...txs, ...generated];
   render();
 }
 

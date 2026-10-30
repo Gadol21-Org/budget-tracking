@@ -28,7 +28,26 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              payment_method_id INTEGER REFERENCES payment_methods(id),
              note TEXT NOT NULL DEFAULT '',
              paamonim_line_id TEXT UNIQUE,       -- set once mirrored/imported
-             sync_state TEXT NOT NULL DEFAULT 'pending' -- pending | synced | error
+             sync_state TEXT NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
+             recurring_series_id INTEGER          -- set on a settled repeating transaction
+         );
+         -- Months already turned into transactions, kept even if the transaction is deleted.
+         CREATE TABLE IF NOT EXISTS recurring_settled (
+             series_id INTEGER NOT NULL,
+             month TEXT NOT NULL,
+             PRIMARY KEY (series_id, month)
+         );
+         -- Rules for repeating transactions; occurrences are generated, not stored.
+         CREATE TABLE IF NOT EXISTS recurring (
+             id INTEGER PRIMARY KEY,
+             series_id INTEGER NOT NULL,         -- id of the series' first segment
+             start_month TEXT NOT NULL,          -- YYYY-MM
+             end_month TEXT,                     -- inclusive; NULL = forever
+             day INTEGER NOT NULL,
+             amount_agorot INTEGER NOT NULL,
+             category_id INTEGER REFERENCES categories(id),
+             payment_method_id INTEGER REFERENCES payment_methods(id),
+             note TEXT NOT NULL DEFAULT ''
          );
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
@@ -51,6 +70,17 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
         conn.execute_batch(
             "ALTER TABLE categories ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
              ALTER TABLE categories ADD COLUMN merged_into INTEGER REFERENCES categories(id);",
+        )?;
+    }
+    let has_series = conn
+        .prepare(
+            "SELECT 1 FROM pragma_table_info('transactions') WHERE name = 'recurring_series_id'",
+        )?
+        .exists([])?;
+    if !has_series {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN recurring_series_id INTEGER",
+            [],
         )?;
     }
     Ok(conn)

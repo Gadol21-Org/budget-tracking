@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
+
 #[derive(Serialize, Clone)]
 pub struct Transaction {
     pub id: i64,
@@ -15,6 +17,8 @@ pub struct Transaction {
     pub payment_method_id: Option<i64>,
     pub note: String,
     pub sync_state: String,
+    /// Set on a settled occurrence of a repeating transaction.
+    pub recurring_series_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -56,9 +60,11 @@ pub struct NewCategory {
 pub enum CategoryError {
     NotFound,
     Invalid(String),
-    /// The category (or a sub-category) has transactions and no `move_to` was given.
+    /// The category (or a sub-category) has transactions or repeating rules and no `move_to`
+    /// was given.
     NeedsReplacement {
         transactions: usize,
+        rules: usize,
     },
 }
 
@@ -67,9 +73,13 @@ impl std::fmt::Display for CategoryError {
         match self {
             Self::NotFound => write!(f, "category not found"),
             Self::Invalid(m) => write!(f, "{m}"),
-            Self::NeedsReplacement { transactions } => write!(
+            Self::NeedsReplacement {
+                transactions,
+                rules,
+            } => write!(
                 f,
-                "category has {transactions} transactions; choose a category to move them to"
+                "category has {transactions} transactions and {rules} repeating rules; \
+                 choose a category to move them to"
             ),
         }
     }
@@ -203,7 +213,8 @@ pub trait Storage: Send + Sync {
     }
 
     /// Delete a category together with its sub-categories. Their transactions go to
-    /// `move_to`, which is required when there are any. Returns how many were moved.
+    /// `move_to` along with the repeating rules that use them; it is required when there are
+    /// any. Returns how many transactions were moved.
     async fn delete_category(&self, id: i64, move_to: Option<i64>) -> anyhow::Result<usize> {
         let all = self.list_categories().await?;
         let cat = all
@@ -223,6 +234,15 @@ pub trait Storage: Send + Sync {
             .iter()
             .filter(|t| t.category_id.is_some_and(|c| ids.contains(&c)))
             .count();
+        // Segments of one series count once.
+        let rules = self
+            .list_recurring()
+            .await?
+            .iter()
+            .filter(|r| r.category_id.is_some_and(|c| ids.contains(&c)))
+            .map(|r| r.series_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         if let Some(target) = move_to {
             let t = all.iter().find(|c| c.id == target).ok_or_else(|| {
                 CategoryError::Invalid("the category to move to was not found".into())
@@ -239,14 +259,56 @@ pub trait Storage: Send + Sync {
                 )
                 .into());
             }
-        } else if moved > 0 {
+        } else if moved > 0 || rules > 0 {
             return Err(CategoryError::NeedsReplacement {
                 transactions: moved,
+                rules,
             }
             .into());
         }
         self.remove_categories(&ids, move_to).await?;
         Ok(moved)
+    }
+
+    /// Repeating-transaction rules (see `recurring.rs`). Backends without support have none.
+    async fn list_recurring(&self) -> anyhow::Result<Vec<RecurringSegment>> {
+        Ok(Vec::new())
+    }
+    /// Add a segment and return its id; `series_id` None starts a new series, whose id is
+    /// that of its first segment.
+    async fn insert_recurring(
+        &self,
+        _series_id: Option<i64>,
+        _r: &NewRecurring,
+    ) -> anyhow::Result<i64> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    async fn update_recurring(&self, _id: i64, _r: &NewRecurring) -> anyhow::Result<()> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    async fn delete_recurring(&self, _id: i64) -> anyhow::Result<()> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    /// Turn occurrences that have come due into real transactions (sync state `local`, so
+    /// they are not mirrored). Each (series, month) is settled once, even if the transaction
+    /// is later deleted. Returns how many were added.
+    async fn settle_recurring(&self, _due: &[Occurrence]) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+    /// (series id, YYYY-MM) of every month that has settled.
+    async fn settled_recurring(&self) -> anyhow::Result<Vec<(i64, String)>> {
+        Ok(Vec::new())
+    }
+    /// Settle one month of a series early, with these values instead of the rule's (a salary
+    /// that came early, a bill that differed), or with `None` to skip the month. False if the
+    /// month had already settled.
+    async fn settle_recurring_month(
+        &self,
+        _series_id: i64,
+        _month: &str,
+        _t: Option<&NewTransaction>,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("repeating transactions are not supported by this storage backend")
     }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
@@ -476,7 +538,8 @@ impl Storage for SqliteStorage {
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
              FROM transactions ORDER BY date DESC, id DESC",
         )?;
         let rows = stmt
@@ -489,6 +552,7 @@ impl Storage for SqliteStorage {
                     payment_method_id: r.get(4)?,
                     note: r.get(5)?,
                     sync_state: r.get(6)?,
+                    recurring_series_id: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -576,6 +640,10 @@ impl Storage for SqliteStorage {
                      WHERE category_id = ?1",
                     params![id, to],
                 )?;
+                tx.execute(
+                    "UPDATE recurring SET category_id = ?2 WHERE category_id = ?1",
+                    params![id, to],
+                )?;
             }
             let from_paamonim: bool = tx.query_row(
                 "SELECT paamonim_item_id IS NOT NULL FROM categories WHERE id = ?1",
@@ -593,6 +661,161 @@ impl Storage for SqliteStorage {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    async fn list_recurring(&self) -> anyhow::Result<Vec<RecurringSegment>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
+                    payment_method_id, note
+             FROM recurring ORDER BY series_id, start_month",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(RecurringSegment {
+                    id: r.get(0)?,
+                    series_id: r.get(1)?,
+                    start_month: r.get(2)?,
+                    end_month: r.get(3)?,
+                    day: r.get(4)?,
+                    amount_agorot: r.get(5)?,
+                    category_id: r.get(6)?,
+                    payment_method_id: r.get(7)?,
+                    note: r.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn insert_recurring(
+        &self,
+        series_id: Option<i64>,
+        r: &NewRecurring,
+    ) -> anyhow::Result<i64> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
+                                    category_id, payment_method_id, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                series_id.unwrap_or(0),
+                r.start_month,
+                r.end_month,
+                r.day,
+                r.amount_agorot,
+                r.category_id,
+                r.payment_method_id,
+                r.note
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        if series_id.is_none() {
+            tx.execute(
+                "UPDATE recurring SET series_id = ?1 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(id)
+    }
+
+    async fn update_recurring(&self, id: i64, r: &NewRecurring) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE recurring SET start_month = ?2, end_month = ?3, day = ?4, amount_agorot = ?5,
+               category_id = ?6, payment_method_id = ?7, note = ?8
+             WHERE id = ?1",
+            params![
+                id,
+                r.start_month,
+                r.end_month,
+                r.day,
+                r.amount_agorot,
+                r.category_id,
+                r.payment_method_id,
+                r.note
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn delete_recurring(&self, id: i64) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM recurring WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    async fn settled_recurring(&self) -> anyhow::Result<Vec<(i64, String)>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT series_id, month FROM recurring_settled")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn settle_recurring_month(
+        &self,
+        series_id: i64,
+        month: &str,
+        t: Option<&NewTransaction>,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let new = tx.execute(
+            "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
+            params![series_id, month],
+        )?;
+        if let (1, Some(t)) = (new, t) {
+            tx.execute(
+                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                           note, sync_state, recurring_series_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                params![
+                    t.date,
+                    t.amount_agorot,
+                    t.category_id,
+                    t.payment_method_id,
+                    t.note,
+                    series_id
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(new == 1)
+    }
+
+    async fn settle_recurring(&self, due: &[Occurrence]) -> anyhow::Result<usize> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut added = 0;
+        for o in due {
+            let new = tx.execute(
+                "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
+                params![o.series_id, &o.date[..7]],
+            )?;
+            if new == 1 {
+                tx.execute(
+                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                               note, sync_state, recurring_series_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'local', ?6)",
+                    params![
+                        o.date,
+                        o.amount_agorot,
+                        o.category_id,
+                        o.payment_method_id,
+                        o.note,
+                        o.series_id
+                    ],
+                )?;
+                added += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(added)
     }
 }
 
@@ -819,7 +1042,10 @@ mod tests {
         // Used through a sub-category, so deleting the parent needs a replacement too.
         assert_eq!(
             err(s.delete_category(home, None).await),
-            CategoryError::NeedsReplacement { transactions: 1 }
+            CategoryError::NeedsReplacement {
+                transactions: 1,
+                rules: 0
+            }
         );
         assert!(matches!(
             err(s.delete_category(home, Some(rent)).await),
@@ -949,5 +1175,39 @@ mod tests {
             .unwrap();
         assert!(s.list_categories().await.unwrap().is_empty());
         assert_eq!(s.list_transactions().await.unwrap()[0].category_id, None);
+    }
+
+    #[tokio::test]
+    async fn repeating_rules_count_as_references_and_move_with_the_category() {
+        use crate::recurring::NewRecurring;
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let a = s.create_category(&new_cat("A", None, false)).await.unwrap();
+        let b = s.create_category(&new_cat("B", None, false)).await.unwrap();
+        let rule = |month: &str| NewRecurring {
+            start_month: month.into(),
+            end_month: None,
+            day: 1,
+            amount_agorot: -500,
+            category_id: Some(a),
+            payment_method_id: None,
+            note: String::new(),
+        };
+        let first = s.insert_recurring(None, &rule("2026-01")).await.unwrap();
+        s.insert_recurring(Some(first), &rule("2026-06"))
+            .await
+            .unwrap();
+        // No transactions, but one series (two segments) still uses the category.
+        let err = s.delete_category(a, None).await.unwrap_err();
+        assert_eq!(
+            err.downcast::<CategoryError>().unwrap(),
+            CategoryError::NeedsReplacement {
+                transactions: 0,
+                rules: 1
+            }
+        );
+        s.delete_category(a, Some(b)).await.unwrap();
+        let rules = s.list_recurring().await.unwrap();
+        assert!(rules.iter().all(|r| r.category_id == Some(b)));
+        assert_eq!(rules.len(), 2);
     }
 }
