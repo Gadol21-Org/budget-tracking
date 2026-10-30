@@ -3,16 +3,15 @@
 //! (`ORACLE_NOSQL_AUTH=user`) or a local Cloud Simulator
 //! (`ORACLE_NOSQL_AUTH=cloudsim`, `ORACLE_NOSQL_ENDPOINT=http://localhost:8080`).
 //!
-//! Three tables only (the Always Free tier allows three): `transactions`,
-//! `lookups` (categories and payment methods, keyed by kind + id) and
-//! `monthly_rollups`.
+//! Two tables (the Always Free tier allows three): `transactions` and
+//! `lookups` (categories and payment methods, keyed by kind + id).
 //!
 //! NOTE: written against the SDK docs; not yet run against a live service.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use oracle_nosql_rust_sdk::types::{MapValue, TableLimits};
 use oracle_nosql_rust_sdk::{
     DeleteRequest, GetRequest, Handle, PutRequest, QueryRequest, TableRequest,
@@ -20,12 +19,10 @@ use oracle_nosql_rust_sdk::{
 
 use std::collections::{HashMap, HashSet};
 
-use crate::storage::{Category, ImportBatch, PaymentMethod, PendingMirror, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
+use crate::storage::{Category, ImportBatch, PaymentMethod, PendingMirror, ImportSummary, NewTransaction, Storage, Transaction};
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
-const ROLLUPS: &str = "monthly_rollups";
-const MAX_ROLLUP_RETRIES: usize = 8;
 
 pub struct NoSqlStorage {
     handle: Handle,
@@ -62,12 +59,6 @@ impl NoSqlStorage {
         self.ddl(
             "create table if not exists lookups (kind string, id long, name string, \
              is_income boolean, paamonim_id string, primary key(kind, id))",
-            limits(),
-        )
-        .await?;
-        self.ddl(
-            "create table if not exists monthly_rollups (month string, category_id long, \
-             total_agorot long, count long, primary key(month, category_id))",
             limits(),
         )
         .await?;
@@ -115,35 +106,6 @@ impl NoSqlStorage {
         }
         PutRequest::new(TX).value(row).execute(&self.handle).await?;
         Ok(())
-    }
-
-    /// Optimistic read-modify-write; retries when another writer got in between.
-    async fn adjust_rollup(&self, date: &str, category_id: Option<i64>, delta: i64, dcount: i64) -> Result<()> {
-        let month = date.get(..7).ok_or_else(|| anyhow!("bad date {date}"))?;
-        let cat = category_id.unwrap_or(0);
-        for _ in 0..MAX_ROLLUP_RETRIES {
-            let key = MapValue::new().str("month", month).i64("category_id", cat);
-            let got = GetRequest::new(ROLLUPS).key(key).execute(&self.handle).await?;
-            let (total, count) = got
-                .row()
-                .map(|r| (r.get_i64("total_agorot").unwrap_or(0), r.get_i64("count").unwrap_or(0)))
-                .unwrap_or((0, 0));
-            let row = MapValue::new()
-                .str("month", month)
-                .i64("category_id", cat)
-                .i64("total_agorot", total + delta)
-                .i64("count", count + dcount);
-            let mut put = PutRequest::new(ROLLUPS).value(row);
-            put = match got.version() {
-                Some(v) => put.if_version(v),
-                None => put.if_absent(),
-            };
-            // No version back means the condition failed: someone else wrote first.
-            if put.execute(&self.handle).await?.version().is_some() {
-                return Ok(());
-            }
-        }
-        bail!("could not update monthly rollup for {month} after {MAX_ROLLUP_RETRIES} attempts")
     }
 }
 
@@ -266,8 +228,6 @@ impl Storage for NoSqlStorage {
             .iter()
             .filter_map(|r| r.get_string("paamonim_line_id"))
             .collect();
-        // Aggregate rollup deltas first so each (month, category) is written once.
-        let mut deltas: HashMap<(String, Option<i64>), (i64, i64)> = HashMap::new();
         for t in &batch.transactions {
             if existing.contains(&t.line_id) {
                 sum.transactions_skipped += 1;
@@ -289,13 +249,7 @@ impl Storage for NoSqlStorage {
                 row = row.i64("payment_method_id", p);
             }
             PutRequest::new(TX).value(row).execute(&self.handle).await?;
-            let d = deltas.entry((t.date[..7].to_string(), cat)).or_default();
-            d.0 += t.amount_agorot;
-            d.1 += 1;
             sum.transactions_added += 1;
-        }
-        for ((month, cat), (total, count)) in deltas {
-            self.adjust_rollup(&format!("{month}-01"), cat, total, count).await?;
         }
         Ok(sum)
     }
@@ -322,17 +276,11 @@ impl Storage for NoSqlStorage {
             row = row.i64("payment_method_id", p);
         }
         PutRequest::new(TX).value(row).execute(&self.handle).await?;
-        self.adjust_rollup(&t.date, t.category_id, t.amount_agorot, 1).await?;
         Ok(id)
     }
 
     async fn delete_transaction(&self, id: i64) -> Result<()> {
-        let got = GetRequest::new(TX).key(MapValue::new().i64("id", id)).execute(&self.handle).await?;
-        let Some(row) = got.row() else { return Ok(()) };
-        let tx = tx_from_row(row)?;
-        if DeleteRequest::new(TX, MapValue::new().i64("id", id)).execute(&self.handle).await?.success() {
-            self.adjust_rollup(&tx.date, tx.category_id, -tx.amount_agorot, -1).await?;
-        }
+        DeleteRequest::new(TX, MapValue::new().i64("id", id)).execute(&self.handle).await?;
         Ok(())
     }
 
@@ -350,25 +298,6 @@ impl Storage for NoSqlStorage {
             .collect();
         cats.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(cats)
-    }
-
-    async fn monthly_totals(&self) -> Result<Vec<MonthlyTotal>> {
-        let rows = self.query_all(&format!("select * from {ROLLUPS}")).await?;
-        let mut totals: Vec<MonthlyTotal> = rows
-            .iter()
-            .filter_map(|r| {
-                let count = r.get_i64("count")?;
-                let cat = r.get_i64("category_id")?;
-                (count > 0).then(|| MonthlyTotal {
-                    month: r.get_string("month").unwrap_or_default(),
-                    category_id: (cat != 0).then_some(cat),
-                    total_agorot: r.get_i64("total_agorot").unwrap_or(0),
-                    count,
-                })
-            })
-            .collect();
-        totals.sort_by(|a, b| b.month.cmp(&a.month).then(a.category_id.cmp(&b.category_id)));
-        Ok(totals)
     }
 }
 

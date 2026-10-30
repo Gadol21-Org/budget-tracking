@@ -17,7 +17,7 @@ Oracle NoSQL support is behind the `nosql` cargo feature, because Oracle's Rust 
 - **Local:** the [Oracle NoSQL Cloud Simulator](https://www.oracle.com/downloads/cloud/nosql-cloud-sdk-downloads.html) with `ORACLE_NOSQL_AUTH=cloudsim` and `ORACLE_NOSQL_ENDPOINT=http://localhost:8080`.
 - **Cloud:** `ORACLE_NOSQL_AUTH=user` with an OCI config file, region and compartment.
 
-Tables are created on startup (three, to stay within the Always Free limit). The NoSQL backend has not yet been run against the simulator or the cloud service.
+Two tables (`transactions`, `lookups`) are created on startup, leaving one free under the Always Free limit of three. The NoSQL backend has not yet been run against the simulator or the cloud service.
 
 ## Paamonim import
 `cargo run -p budget-backend -- probe probe-out` logs in (needs `PAAMONIM_USERNAME`/`PAAMONIM_PASSWORD`) and saves raw responses from the `/rishumit/*` endpoints to `probe-out/` (git-ignored, contains your financial data). The import parser is written from those samples.
@@ -29,7 +29,7 @@ Off by default. With `PAAMONIM_MIRROR=1`, new transactions that use a Paamonim-i
 Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet with the service account as Editor). The `Transactions` and `Monthly` tabs are rewritten by `POST /api/export/sheets` and nightly (`SHEETS_EXPORT_INTERVAL_HOURS`). Verified live against Google Sheets.
 
 ## Layout
-- `backend/src/storage.rs` – `Storage` trait (SQLite and Oracle NoSQL) plus the `monthly_rollups` table maintained on every write, which dashboards read via `/api/monthly-totals`.
+- `backend/src/storage.rs` – `Storage` trait (SQLite and Oracle NoSQL). Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
 - `backend/src/nosql.rs` – Oracle NoSQL implementation of `Storage`.
 - `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). Unverified against a real account yet.
 - `backend/src/money.rs` – agorot to shekel rounding for export.

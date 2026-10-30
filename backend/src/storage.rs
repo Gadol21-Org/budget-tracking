@@ -40,7 +40,7 @@ pub struct Category {
     pub is_income: bool,
 }
 
-/// One row of the pre-aggregated monthly rollup that dashboards read.
+/// Per-month, per-category totals, computed from transactions on demand.
 #[derive(Serialize)]
 pub struct MonthlyTotal {
     pub month: String, // YYYY-MM
@@ -113,8 +113,22 @@ pub trait Storage: Send + Sync {
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
-    /// Dashboards read this instead of scanning transactions.
-    async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>>;
+    /// Computed on demand from transactions. Fast enough at this data size; add
+    /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
+    async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
+        let mut by_key: std::collections::BTreeMap<(String, Option<i64>), (i64, i64)> = Default::default();
+        for t in self.list_transactions().await? {
+            let e = by_key.entry((t.date[..7].to_string(), t.category_id)).or_default();
+            e.0 += t.amount_agorot;
+            e.1 += 1;
+        }
+        let mut totals: Vec<MonthlyTotal> = by_key
+            .into_iter()
+            .map(|((month, category_id), (total_agorot, count))| MonthlyTotal { month, category_id, total_agorot, count })
+            .collect();
+        totals.sort_by(|a, b| b.month.cmp(&a.month).then(a.category_id.cmp(&b.category_id)));
+        Ok(totals)
+    }
 }
 
 pub struct SqliteStorage(Mutex<Connection>);
@@ -123,17 +137,6 @@ impl SqliteStorage {
     pub fn open(path: &str) -> anyhow::Result<Self> {
         Ok(Self(Mutex::new(crate::db::open(path)?)))
     }
-}
-
-/// Rollup rows use category_id = 0 for "uncategorised" so the key is never NULL.
-fn adjust_rollup(conn: &Connection, date: &str, category_id: Option<i64>, delta: i64, dcount: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO monthly_rollups (month, category_id, total_agorot, count) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(month, category_id) DO UPDATE SET
-           total_agorot = total_agorot + ?3, count = count + ?4",
-        params![&date[..7], category_id.unwrap_or(0), delta, dcount],
-    )?;
-    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -233,7 +236,6 @@ impl Storage for SqliteStorage {
                 params![t.date, t.amount_agorot, cat, pm, t.note, t.line_id],
             )?;
             if inserted == 1 {
-                adjust_rollup(&tx, &t.date, cat, t.amount_agorot, 1)?;
                 sum.transactions_added += 1;
             } else {
                 sum.transactions_skipped += 1;
@@ -274,26 +276,12 @@ impl Storage for SqliteStorage {
             params![t.date, t.amount_agorot, t.category_id, t.payment_method_id, t.note],
         )?;
         let id = tx.last_insert_rowid();
-        adjust_rollup(&tx, &t.date, t.category_id, t.amount_agorot, 1)?;
         tx.commit()?;
         Ok(id)
     }
 
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let row: Option<(String, i64, Option<i64>)> = tx
-            .query_row(
-                "SELECT date, amount_agorot, category_id FROM transactions WHERE id = ?1",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .ok();
-        if let Some((date, amount, cat)) = row {
-            tx.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
-            adjust_rollup(&tx, &date, cat, -amount, -1)?;
-        }
-        tx.commit()?;
+        self.0.lock().unwrap().execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -303,26 +291,6 @@ impl Storage for SqliteStorage {
         let rows = stmt
             .query_map([], |r| {
                 Ok(Category { id: r.get(0)?, name: r.get(1)?, is_income: r.get::<_, i64>(2)? != 0 })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn monthly_totals(&self) -> anyhow::Result<Vec<MonthlyTotal>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT month, category_id, total_agorot, count FROM monthly_rollups
-             WHERE count > 0 ORDER BY month DESC, category_id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                let cat: i64 = r.get(1)?;
-                Ok(MonthlyTotal {
-                    month: r.get(0)?,
-                    category_id: if cat == 0 { None } else { Some(cat) },
-                    total_agorot: r.get(2)?,
-                    count: r.get(3)?,
-                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
@@ -361,7 +329,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rollup_tracks_inserts_and_deletes() {
+    async fn monthly_totals_follow_inserts_and_deletes() {
         let s = SqliteStorage::open(":memory:").unwrap();
         let a = s.create_transaction(&tx("2026-10-03", 1050, None)).await.unwrap();
         s.create_transaction(&tx("2026-10-20", 2025, None)).await.unwrap();

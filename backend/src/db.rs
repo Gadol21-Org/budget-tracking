@@ -26,15 +26,7 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              sync_state TEXT NOT NULL DEFAULT 'pending' -- pending | synced | error
          );
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
-         CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);
-         -- Maintained on every write; dashboards read this, not raw rows.
-         CREATE TABLE IF NOT EXISTS monthly_rollups (
-             month TEXT NOT NULL,                -- YYYY-MM
-             category_id INTEGER NOT NULL,       -- 0 = uncategorised
-             total_agorot INTEGER NOT NULL DEFAULT 0,
-             count INTEGER NOT NULL DEFAULT 0,
-             PRIMARY KEY (month, category_id)
-         );",
+         CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
     )?;
     Ok(conn)
 }
