@@ -60,7 +60,7 @@ In this repo, **Settings > Secrets and variables > Actions**:
 | Variable | `ORACLE_USER` | Optional, default `ubuntu`. |
 | Variable | `BUILD_RUNNER` | Optional, default `ubuntu-24.04-arm` (builds natively for an arm64 VM). Use `ubuntu-24.04` for an AMD VM. |
 
-`BUDGET_ENV` holds one `NAME=value` per line, no quotes:
+`BUDGET_ENV` holds one `NAME=value` per line. Write values without quotes (a `#` inside a value is fine, e.g. `PAAMONIM_PASSWORD=pass#`); the workflow strips Windows line endings and one pair of surrounding quotes, because `docker --env-file` would otherwise pass them to the app as part of the value:
 
 ```
 STORAGE=nosql

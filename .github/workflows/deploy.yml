@@ -78,6 +78,9 @@ jobs:
           BUDGET_ENV: ${{ secrets.BUDGET_ENV }}
         run: |
           if [ -z "$BUDGET_ENV" ]; then echo "::error::the BUDGET_ENV secret is not set"; exit 1; fi
+          # docker --env-file keeps quotes and carriage returns as part of the value,
+          # so drop CRs (Windows editors) and one pair of quotes around a value.
+          BUDGET_ENV="$(printf '%s\n' "$BUDGET_ENV" | tr -d '\r' | sed -E "s/^([A-Za-z_][A-Za-z0-9_]*)=(['\"])(.*)\2\$/\1=\3/")"
           for n in STORAGE ORACLE_NOSQL_AUTH ORACLE_NOSQL_REGION ORACLE_NOSQL_COMPARTMENT_ID; do
             if ! printf '%s\n' "$BUDGET_ENV" | grep -q "^$n=."; then
               echo "::error::BUDGET_ENV has no $n= line"; exit 1
