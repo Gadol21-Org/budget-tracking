@@ -15,6 +15,8 @@ const state = {
   /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
   /** Which side of the summary's category breakdown is shown. */
   kind: "expense" as "expense" | "income",
+  /** Which side of the category manager in settings is shown (true = income). */
+  catKind: false,
   filter: undefined as { id: number | null } | undefined,
 };
 
@@ -298,6 +300,139 @@ function listView(): HTMLElement {
   return el("div", {}, monthBar(), header, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
 }
 
+/** Open a modal built by `build`, which gets a way to close it. */
+function openDialog(build: (close: () => void) => HTMLElement) {
+  const dlg = el("dialog");
+  dlg.append(build(() => dlg.close()));
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
+function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
+  openDialog((close) => {
+    const name = el("input", { type: "text", required: true, maxLength: 100, autocomplete: "off" });
+    const parent = el("select");
+    parent.append(
+      el("option", { value: "", textContent: "קטגוריה ראשית" }),
+      ...state.cats.filter((c) => c.parent_id == null && c.is_income === isIncome).map((c) => el("option", { value: String(c.id), textContent: `תת-קטגוריה של ${c.name}` })),
+    );
+    parent.value = parentId != null ? String(parentId) : "";
+    const err = el("div", { className: "error" });
+    const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+    cancel.onclick = close;
+    const save = el("button", { type: "submit", className: "btn primary", textContent: "הוספה" });
+    const form = el(
+      "form",
+      { className: "add", method: "dialog" },
+      el("h2", { textContent: isIncome ? "הוספת קטגוריית הכנסה" : "הוספת קטגוריית הוצאה" }),
+      el("label", {}, "שם", name),
+      el("label", {}, "סוג", parent),
+      el("div", { className: "note muted", textContent: "קטגוריה שנוספה כאן קיימת רק באפליקציה: תנועות עליה לא יועתקו לפעמונים." }),
+      err,
+      el("div", { className: "actions" }, cancel, save),
+    );
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        save.disabled = true;
+        await api.addCategory({ name: name.value, is_income: isIncome, parent_id: parent.value ? Number(parent.value) : null });
+        close();
+        await load();
+      } catch (e2) {
+        err.textContent = e2 instanceof Error ? e2.message : String(e2);
+        save.disabled = false;
+      }
+    };
+    setTimeout(() => name.focus());
+    return form;
+  });
+}
+
+function openDeleteCategoryDialog(cat: Category) {
+  openDialog((close) => {
+    const subs = state.cats.filter((c) => c.parent_id === cat.id);
+    const doomed = new Set([cat.id, ...subs.map((c) => c.id)]);
+    // Occurrences not yet settled are not in txs, so repeating rules are counted separately.
+    const lines = state.txs.filter((t) => t.category_id != null && doomed.has(t.category_id) && !t.upcoming).length;
+    const rules = new Set(state.recurring.filter((r) => r.category_id != null && doomed.has(r.category_id)).map((r) => r.series_id)).size;
+    const used = lines + rules;
+    const target = el("select");
+    const opt = (c: Category) => el("option", { value: String(c.id), textContent: catPath(c.id) });
+    target.append(
+      el("option", { value: "", textContent: "בחירת קטגוריה…" }),
+      ...state.cats.filter((c) => c.is_income === cat.is_income && !doomed.has(c.id)).map(opt),
+    );
+    const err = el("div", { className: "error" });
+    const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+    cancel.onclick = close;
+    const del = el("button", { type: "submit", className: "btn primary", textContent: "מחיקה" });
+    const form = el(
+      "form",
+      { className: "add", method: "dialog" },
+      el("h2", { textContent: `מחיקת "${cat.name}"` }),
+      subs.length > 0 && el("p", { className: "muted", textContent: `יימחקו גם ${subs.length} תתי-קטגוריות.` }),
+      used > 0
+        ? el("label", {}, `${lines} תנועות ו-${rules} הוצאות חוזרות משויכות לקטגוריה. להעביר אותן אל:`, target)
+        : el("p", { className: "muted", textContent: "אין תנועות משויכות." }),
+      err,
+      el("div", { className: "actions" }, cancel, del),
+    );
+    if (used > 0) target.required = true;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        del.disabled = true;
+        await api.deleteCategory(cat.id, target.value ? Number(target.value) : undefined);
+        close();
+        await load();
+      } catch (e2) {
+        err.textContent = e2 instanceof Error ? e2.message : String(e2);
+        del.disabled = false;
+      }
+    };
+    return form;
+  });
+}
+
+function categoriesCard(): HTMLElement {
+  const kinds = [
+    [false, "הוצאות"],
+    [true, "הכנסות"],
+  ] as const;
+  const tabs = kinds.map(([inc, label]) => {
+    const b = el("button", { type: "button", textContent: label });
+    b.onclick = () => ((state.catKind = inc), render());
+    b.setAttribute("aria-pressed", String(state.catKind === inc));
+    return b;
+  });
+  const ofKind = state.cats.filter((c) => c.is_income === state.catKind);
+  const iconBtn = (text: string, title: string, on: () => void) => {
+    const b = el("button", { type: "button", className: "btn", textContent: text, title });
+    b.onclick = on;
+    return b;
+  };
+  const row = (c: Category, sub: boolean) =>
+    el(
+      "div",
+      { className: sub ? "row sub" : "row" },
+      el("div", { className: "grow" }, el("div", { className: "name", textContent: c.name })),
+      !sub && iconBtn("+", "הוספת תת-קטגוריה", () => openAddCategoryDialog(c.is_income, c.id)),
+      iconBtn("🗑", "מחיקה", () => openDeleteCategoryDialog(c)),
+    );
+  const rows = ofKind
+    .filter((c) => c.parent_id == null)
+    .flatMap((c) => [row(c, false), ...ofKind.filter((k) => k.parent_id === c.id).map((k) => row(k, true))]);
+  return el(
+    "div",
+    { className: "card" },
+    el("h2", { textContent: "קטגוריות" }),
+    el("div", { className: "seg" }, ...tabs),
+    el("div", { className: "rows" }, ...(rows.length ? rows : [el("div", { className: "empty", textContent: "אין קטגוריות" })])),
+    el("div", { className: "actions", style: "justify-content:flex-start" }, iconBtn("הוספת קטגוריה", "", () => openAddCategoryDialog(state.catKind, null))),
+  );
+}
+
 function settingsView(): HTMLElement {
   const out = el("div", { className: "note muted" });
   const run = (btn: HTMLButtonElement, work: () => Promise<string>) => async () => {
@@ -329,6 +464,7 @@ function settingsView(): HTMLElement {
     {},
     el("h1", { textContent: "הגדרות" }),
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
+    categoriesCard(),
   );
 }
 

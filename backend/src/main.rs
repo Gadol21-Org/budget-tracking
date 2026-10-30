@@ -18,7 +18,10 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use storage::{Category, MonthlyTotal, NewTransaction, SqliteStorage, Storage, Transaction};
+use storage::{
+    Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction, SqliteStorage, Storage,
+    Transaction,
+};
 
 type Db = Arc<dyn Storage>;
 
@@ -87,6 +90,44 @@ async fn list_categories(
     State(db): State<Db>,
 ) -> Result<Json<Vec<Category>>, (StatusCode, String)> {
     db.list_categories().await.map(Json).map_err(internal)
+}
+
+/// Refusals of a category change are the caller's doing; anything else is a server error.
+fn category_error(e: anyhow::Error) -> (StatusCode, String) {
+    match e.downcast_ref::<CategoryError>() {
+        Some(CategoryError::NotFound) => (StatusCode::NOT_FOUND, e.to_string()),
+        Some(CategoryError::Invalid(_)) => (StatusCode::BAD_REQUEST, e.to_string()),
+        Some(CategoryError::NeedsReplacement { .. }) => (StatusCode::CONFLICT, e.to_string()),
+        None => internal(e),
+    }
+}
+
+async fn create_category(
+    State(db): State<Db>,
+    Json(c): Json<NewCategory>,
+) -> Result<Json<i64>, (StatusCode, String)> {
+    db.create_category(&c)
+        .await
+        .map(Json)
+        .map_err(category_error)
+}
+
+#[derive(Deserialize)]
+struct DeleteCategoryQuery {
+    /// Category that receives the transactions of the one being deleted.
+    move_to: Option<i64>,
+}
+
+/// Also deletes the sub-categories. Answers 409 when transactions need a `move_to`.
+async fn delete_category(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Query(q): Query<DeleteCategoryQuery>,
+) -> Result<Json<usize>, (StatusCode, String)> {
+    db.delete_category(id, q.move_to)
+        .await
+        .map(Json)
+        .map_err(category_error)
 }
 
 /// Totals of real transactions plus the upcoming repeating ones up to the default horizon.
@@ -401,6 +442,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/transactions/:id",
             delete(delete_transaction).put(update_transaction),
         )
+        .route(
+            "/api/categories",
+            get(list_categories).post(create_category),
+        )
+        .route("/api/categories/:id", delete(delete_category))
         .route("/api/categories", get(list_categories))
         .route("/api/recurring", get(list_recurring).post(create_recurring))
         .route("/api/recurring/occurrences", get(recurring_occurrences))

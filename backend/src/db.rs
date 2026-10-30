@@ -9,7 +9,11 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              name TEXT NOT NULL,
              is_income INTEGER NOT NULL DEFAULT 0,
              paamonim_item_id TEXT UNIQUE,
-             parent_id INTEGER REFERENCES categories(id)
+             parent_id INTEGER REFERENCES categories(id),
+             -- Deleted locally. Kept (when it has a Paamonim id) so re-imports skip it;
+             -- its lines go to merged_into, if any.
+             deleted INTEGER NOT NULL DEFAULT 0,
+             merged_into INTEGER REFERENCES categories(id)
          );
          CREATE TABLE IF NOT EXISTS payment_methods (
              id INTEGER PRIMARY KEY,
@@ -56,6 +60,16 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
         conn.execute(
             "ALTER TABLE categories ADD COLUMN parent_id INTEGER REFERENCES categories(id)",
             [],
+        )?;
+    }
+    // Databases created before categories could be deleted.
+    let has_deleted = conn
+        .prepare("SELECT 1 FROM pragma_table_info('categories') WHERE name = 'deleted'")?
+        .exists([])?;
+    if !has_deleted {
+        conn.execute_batch(
+            "ALTER TABLE categories ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE categories ADD COLUMN merged_into INTEGER REFERENCES categories(id);",
         )?;
     }
     let has_series = conn
