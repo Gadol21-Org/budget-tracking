@@ -729,6 +729,18 @@ for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, 
 // and release glides back with an eased transition.
 const PULL_THRESHOLD = 72;
 const PULL_MAX = 120;
+/** Haptic tick: navigator.vibrate on Android; on iOS Safari (17.4+) toggling a hidden `switch` checkbox makes the system click. */
+const hapticSwitch = el("input", { type: "checkbox", id: "haptic" });
+hapticSwitch.setAttribute("switch", "");
+hapticSwitch.setAttribute("aria-hidden", "true");
+hapticSwitch.tabIndex = -1;
+const hapticLabel = el("label", { className: "haptic" }, hapticSwitch);
+hapticLabel.htmlFor = "haptic";
+document.body.append(hapticLabel);
+function haptic(pattern: number | number[] = 12) {
+  if (navigator.vibrate) navigator.vibrate(pattern);
+  else hapticLabel.click();
+}
 const spinner = el("div", { className: "ptr" }, el("div", { className: "ptr-dot" }));
 document.body.append(spinner);
 let pullStart: number | undefined;
@@ -767,7 +779,7 @@ document.addEventListener(
     // Rubber band: resistance grows as the page is pulled further.
     pullDist = PULL_MAX * (1 - Math.exp(-dy / (PULL_MAX * 1.6)));
     setPull(pullDist);
-    if (!armed && pullDist >= PULL_THRESHOLD) navigator.vibrate?.(12);
+    if (!armed && pullDist >= PULL_THRESHOLD) haptic();
     armed = pullDist >= PULL_THRESHOLD;
     spinner.classList.toggle("ready", armed);
   },
@@ -781,7 +793,7 @@ async function endPull() {
   glideTo(PULL_THRESHOLD * 0.8);
   lastLoad = Date.now();
   const [ok] = await Promise.all([refresh(), new Promise((r) => setTimeout(r, 600))]);
-  if (!ok) navigator.vibrate?.([30, 40, 30]);
+  if (!ok) haptic([30, 40, 30]);
   spinner.classList.remove("spin", "ready");
   glideTo(0);
   armed = false;
