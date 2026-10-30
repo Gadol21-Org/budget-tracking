@@ -1,5 +1,6 @@
 mod db;
 mod import;
+mod mirror;
 mod money;
 mod paamonim;
 mod nosql;
@@ -33,7 +34,17 @@ async fn create_transaction(
 ) -> Result<Json<i64>, (StatusCode, String)> {
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
-    db.create_transaction(&t).await.map(Json).map_err(internal)
+    let id = db.create_transaction(&t).await.map_err(internal)?;
+    if mirroring_enabled() {
+        // Best effort in the background; failed lines stay visible via sync_state.
+        let db = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_mirror(db.as_ref()).await {
+                tracing::warn!("paamonim mirror failed: {e}");
+            }
+        });
+    }
+    Ok(Json(id))
 }
 
 async fn delete_transaction(State(db): State<Db>, Path(id): Path<i64>) -> Result<StatusCode, (StatusCode, String)> {
@@ -65,6 +76,35 @@ async fn import_paamonim(
     let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
     let client = paamonim::Client::login(&base, &user, &pass).await.map_err(internal)?;
     import::run(&client, db.as_ref(), &req.from, &req.to).await.map(Json).map_err(internal)
+}
+
+fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, String)> {
+    let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
+    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_USERNAME not set".into()))?;
+    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| (StatusCode::PRECONDITION_FAILED, "PAAMONIM_PASSWORD not set".into()))?;
+    Ok((base, user, pass))
+}
+
+/// Writing to Paamonim is opt-in: set PAAMONIM_MIRROR=1.
+fn mirroring_enabled() -> bool {
+    matches!(std::env::var("PAAMONIM_MIRROR").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// Serialises mirror runs so overlapping triggers can't post the same line twice.
+static MIRROR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
+    let _guard = MIRROR_LOCK.lock().await;
+    let (base, user, pass) = paamonim_credentials().map_err(|e| anyhow::anyhow!(e.1))?;
+    let client = paamonim::Client::login(&base, &user, &pass).await?;
+    mirror::run(&client, db).await
+}
+
+async fn mirror_paamonim(State(db): State<Db>) -> Result<Json<mirror::MirrorSummary>, (StatusCode, String)> {
+    if !mirroring_enabled() {
+        return Err((StatusCode::PRECONDITION_FAILED, "PAAMONIM_MIRROR is not enabled".into()));
+    }
+    run_mirror(db.as_ref()).await.map(Json).map_err(internal)
 }
 
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
@@ -124,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/categories", get(list_categories))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
+        .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
         .with_state(db)
         .fallback_service(spa);
 

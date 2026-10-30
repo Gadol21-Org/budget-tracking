@@ -20,7 +20,7 @@ use oracle_nosql_rust_sdk::{
 
 use std::collections::{HashMap, HashSet};
 
-use crate::storage::{Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
+use crate::storage::{Category, ImportBatch, PendingMirror, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
@@ -93,6 +93,30 @@ impl NoSqlStorage {
         }
     }
 
+    async fn set_sync_state(&self, id: i64, state: &str, line_id: Option<&str>) -> Result<()> {
+        let got = GetRequest::new(TX).key(MapValue::new().i64("id", id)).execute(&self.handle).await?;
+        let Some(r) = got.row() else { return Ok(()) };
+        let t = tx_from_row(r)?;
+        let mut row = MapValue::new()
+            .i64("id", t.id)
+            .str("date", &t.date)
+            .i64("amount_agorot", t.amount_agorot)
+            .str("note", &t.note)
+            .str("sync_state", state);
+        if let Some(c) = t.category_id {
+            row = row.i64("category_id", c);
+        }
+        if let Some(p) = t.payment_method_id {
+            row = row.i64("payment_method_id", p);
+        }
+        match line_id.map(str::to_string).or_else(|| r.get_string("paamonim_line_id")) {
+            Some(l) => row = row.str("paamonim_line_id", &l),
+            None => {}
+        }
+        PutRequest::new(TX).value(row).execute(&self.handle).await?;
+        Ok(())
+    }
+
     /// Optimistic read-modify-write; retries when another writer got in between.
     async fn adjust_rollup(&self, date: &str, category_id: Option<i64>, delta: i64, dcount: i64) -> Result<()> {
         let month = date.get(..7).ok_or_else(|| anyhow!("bad date {date}"))?;
@@ -142,6 +166,49 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
 
 #[async_trait::async_trait]
 impl Storage for NoSqlStorage {
+    async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
+        let mut paamonim_of: HashMap<i64, String> = HashMap::new();
+        let mut category_ids = HashSet::new();
+        for r in self.query_all(&format!("select * from {LOOKUPS}")).await? {
+            if let (Some(id), Some(pid)) = (r.get_i64("id"), r.get_string("paamonim_id")) {
+                if r.get_string("kind").as_deref() == Some("category") {
+                    category_ids.insert(id);
+                }
+                paamonim_of.insert(id, pid);
+            }
+        }
+        let rows = self.query_all(&format!("select * from {TX} where sync_state = 'pending'")).await?;
+        let mut out = rows
+            .iter()
+            .map(|r| {
+                let t = tx_from_row(r)?;
+                Ok(PendingMirror {
+                    id: t.id,
+                    date: t.date,
+                    amount_agorot: t.amount_agorot,
+                    note: t.note,
+                    item_key: t.category_id.and_then(|c| paamonim_of.get(&c).cloned()),
+                    payment_key: t.payment_method_id.and_then(|p| paamonim_of.get(&p).cloned()),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        out.sort_by_key(|p| p.id);
+        Ok(out)
+    }
+
+    async fn mark_mirrored(&self, id: i64, line_id: &str) -> Result<()> {
+        self.set_sync_state(id, "synced", Some(line_id)).await
+    }
+
+    async fn mark_mirror_error(&self, id: i64) -> Result<()> {
+        self.set_sync_state(id, "error", None).await
+    }
+
+    async fn known_line_ids(&self) -> Result<Vec<String>> {
+        let rows = self.query_all(&format!("select paamonim_line_id from {TX}")).await?;
+        Ok(rows.iter().filter_map(|r| r.get_string("paamonim_line_id")).collect())
+    }
+
     async fn import_paamonim(&self, batch: &ImportBatch) -> Result<ImportSummary> {
         let mut sum = ImportSummary::default();
 

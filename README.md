@@ -20,6 +20,9 @@ Tables are created on startup (three, to stay within the Always Free limit). The
 ## Paamonim import
 `cargo run -p budget-backend -- probe probe-out` logs in (needs `PAAMONIM_USERNAME`/`PAAMONIM_PASSWORD`) and saves raw responses from the `/rishumit/*` endpoints to `probe-out/` (git-ignored, contains your financial data). The import parser is written from those samples.
 
+## Mirroring to Paamonim
+Off by default. With `PAAMONIM_MIRROR=1`, new transactions that use a Paamonim-imported category are written to Paamonim (rounded to whole shekels; the app keeps the exact amount). `POST /api/mirror/paamonim` retries pending ones. Deletes and edits are not mirrored yet. Not yet run against a real account.
+
 ## Layout
 - `backend/src/storage.rs` – `Storage` trait (SQLite and Oracle NoSQL) plus the `monthly_rollups` table maintained on every write, which dashboards read via `/api/monthly-totals`.
 - `backend/src/nosql.rs` – Oracle NoSQL implementation of `Storage`.

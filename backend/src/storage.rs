@@ -81,8 +81,25 @@ pub struct ImportSummary {
     pub transactions_skipped: usize,
 }
 
+/// A locally created transaction waiting to be mirrored to Paamonim.
+pub struct PendingMirror {
+    pub id: i64,
+    pub date: String,
+    pub amount_agorot: i64,
+    pub note: String,
+    /// `e:<id>` / `i:<id>` of the Paamonim budget item; None for categories made locally.
+    pub item_key: Option<String>,
+    pub payment_key: Option<String>,
+}
+
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
+    async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
+    /// Record that the transaction now exists in Paamonim as `line_id`.
+    async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()>;
+    async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()>;
+    /// Paamonim line ids already known locally.
+    async fn known_line_ids(&self) -> anyhow::Result<Vec<String>>;
     /// Idempotent: lookups are upserted by key, transactions skipped if their line id exists.
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary>;
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
@@ -114,6 +131,50 @@ fn adjust_rollup(conn: &Connection, date: &str, category_id: Option<i64>, delta:
 
 #[async_trait::async_trait]
 impl Storage for SqliteStorage {
+    async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.date, t.amount_agorot, t.note, c.paamonim_item_id, p.paamonim_id
+             FROM transactions t
+             LEFT JOIN categories c ON c.id = t.category_id
+             LEFT JOIN payment_methods p ON p.id = t.payment_method_id
+             WHERE t.sync_state = 'pending' ORDER BY t.id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(PendingMirror {
+                    id: r.get(0)?,
+                    date: r.get(1)?,
+                    amount_agorot: r.get(2)?,
+                    note: r.get(3)?,
+                    item_key: r.get(4)?,
+                    payment_key: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE transactions SET sync_state = 'synced', paamonim_line_id = ?2 WHERE id = ?1",
+            params![id, line_id],
+        )?;
+        Ok(())
+    }
+
+    async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute("UPDATE transactions SET sync_state = 'error' WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    async fn known_line_ids(&self) -> anyhow::Result<Vec<String>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL")?;
+        let ids = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+        Ok(ids)
+    }
+
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
