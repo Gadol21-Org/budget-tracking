@@ -43,6 +43,8 @@ export const api = {
   importPaamonim: (from: string, to: string) =>
     request<ImportSummary>("/api/import/paamonim", { method: "POST", body: JSON.stringify({ from, to }) }),
   exportSheets: () => request<{ transactions: number; monthly_rows: number }>("/api/export/sheets", { method: "POST" }),
+  updateTransaction: (id: number, t: Omit<Transaction, "id" | "sync_state">) =>
+    request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
 };
 

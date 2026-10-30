@@ -48,6 +48,17 @@ async fn create_transaction(
     Ok(Json(id))
 }
 
+async fn update_transaction(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(t): Json<NewTransaction>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
+        .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
+    db.update_transaction(id, &t).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn delete_transaction(State(db): State<Db>, Path(id): Path<i64>) -> Result<StatusCode, (StatusCode, String)> {
     db.delete_transaction(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
@@ -180,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/transactions", get(list_transactions).post(create_transaction))
-        .route("/api/transactions/:id", delete(delete_transaction))
+        .route("/api/transactions/:id", delete(delete_transaction).put(update_transaction))
         .route("/api/categories", get(list_categories))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))

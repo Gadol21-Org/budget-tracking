@@ -279,6 +279,30 @@ impl Storage for NoSqlStorage {
         Ok(id)
     }
 
+    async fn update_transaction(&self, id: i64, t: &NewTransaction) -> Result<()> {
+        let got = GetRequest::new(TX).key(MapValue::new().i64("id", id)).execute(&self.handle).await?;
+        let Some(r) = got.row() else { return Ok(()) };
+        let state = r.get_string("sync_state").unwrap_or_else(|| "pending".into());
+        let state = if state == "synced" { "modified".to_string() } else { state };
+        let mut row = MapValue::new()
+            .i64("id", id)
+            .str("date", &t.date)
+            .i64("amount_agorot", t.amount_agorot)
+            .str("note", &t.note)
+            .str("sync_state", &state);
+        if let Some(c) = t.category_id {
+            row = row.i64("category_id", c);
+        }
+        if let Some(p) = t.payment_method_id {
+            row = row.i64("payment_method_id", p);
+        }
+        if let Some(l) = r.get_string("paamonim_line_id") {
+            row = row.str("paamonim_line_id", &l);
+        }
+        PutRequest::new(TX).value(row).execute(&self.handle).await?;
+        Ok(())
+    }
+
     async fn delete_transaction(&self, id: i64) -> Result<()> {
         DeleteRequest::new(TX, MapValue::new().i64("id", id)).execute(&self.handle).await?;
         Ok(())

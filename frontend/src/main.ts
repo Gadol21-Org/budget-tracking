@@ -39,11 +39,12 @@ const dayTitle = (d: string) =>
 const inMonth = () => state.txs.filter((t) => t.date.startsWith(state.month));
 
 function monthBar(): HTMLElement {
-  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "›" });
-  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "‹" });
-  prev.onclick = () => ((state.month = shiftMonth(state.month, -1)), render());
+  // In the RTL layout the first element sits on the right: → goes forward, ← goes back.
+  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "→" });
+  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "←" });
   next.onclick = () => ((state.month = shiftMonth(state.month, 1)), render());
-  return el("div", { className: "monthbar" }, prev, el("div", { className: "title", textContent: monthTitle(state.month) }), next);
+  prev.onclick = () => ((state.month = shiftMonth(state.month, -1)), render());
+  return el("div", { className: "monthbar" }, next, el("div", { className: "title", textContent: monthTitle(state.month) }), prev);
 }
 
 function monthView(): HTMLElement {
@@ -103,11 +104,24 @@ function listView(): HTMLElement {
               await api.deleteTransaction(t.id);
               await load();
             };
+            const edit = el("button", { className: "del", title: "עריכה", textContent: "✎" });
+            edit.onclick = () => openTransactionDialog(t);
+            const badge: Record<string, string> = {
+              modified: "נערך – לא עודכן בפעמונים",
+              error: "לא נשלח לפעמונים",
+            };
             return el(
               "div",
               { className: "row" },
-              el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(t.category_id) }), t.note ? el("div", { className: "muted", textContent: t.note }) : null),
+              el(
+                "div",
+                { className: "grow" },
+                el("div", { className: "name", textContent: catName(t.category_id) }),
+                t.note ? el("div", { className: "muted", textContent: t.note }) : null,
+                badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
+              ),
               money(t.amount_agorot, t.amount_agorot < 0 ? "expense" : "income"),
+              edit,
               del,
             );
           }),
@@ -151,13 +165,20 @@ function settingsView(): HTMLElement {
   );
 }
 
-function openAddDialog() {
-  let isIncome = false;
+function openTransactionDialog(existing?: Transaction) {
+  let isIncome = existing ? existing.amount_agorot > 0 : false;
   const dlg = el("dialog");
-  const amount = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", required: true, autocomplete: "off" });
-  const date = el("input", { type: "date", required: true, value: new Date().toISOString().slice(0, 10) });
+  const amount = el("input", {
+    type: "text",
+    inputMode: "decimal",
+    placeholder: "0.00",
+    required: true,
+    autocomplete: "off",
+    value: existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
+  });
+  const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
   const category = el("select");
-  const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35 });
+  const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35, value: existing?.note ?? "" });
   const err = el("div", { className: "error" });
 
   const expBtn = el("button", { type: "button", textContent: "הוצאה" });
@@ -165,7 +186,9 @@ function openAddDialog() {
   const fillCats = () => {
     expBtn.setAttribute("aria-pressed", String(!isIncome));
     incBtn.setAttribute("aria-pressed", String(isIncome));
+    const keep = category.value || (existing?.category_id != null ? String(existing.category_id) : "");
     category.replaceChildren(el("option", { value: "", textContent: "ללא קטגוריה" }), ...state.cats.filter((c) => c.is_income === isIncome).map((c) => el("option", { value: String(c.id), textContent: c.name })));
+    category.value = keep;
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
@@ -173,7 +196,7 @@ function openAddDialog() {
 
   const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
   cancel.onclick = () => dlg.close();
-  const save = el("button", { type: "submit", className: "btn primary", textContent: "שמירה" });
+  const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
   const form = el(
     "form",
     { className: "add", method: "dialog" },
@@ -191,13 +214,15 @@ function openAddDialog() {
       const abs = Math.abs(parseAgorot(amount.value));
       if (abs === 0) throw new Error("יש להזין סכום");
       save.disabled = true;
-      await api.addTransaction({
+      const body = {
         date: date.value,
         amount_agorot: isIncome ? abs : -abs,
         category_id: category.value ? Number(category.value) : null,
-        payment_method_id: null,
+        payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
-      });
+      };
+      if (existing) await api.updateTransaction(existing.id, body);
+      else await api.addTransaction(body);
       state.month = date.value.slice(0, 7);
       dlg.close();
       await load();
@@ -226,7 +251,7 @@ function nav(): HTMLElement {
 function render() {
   const view = state.view === "month" ? monthView() : state.view === "list" ? listView() : settingsView();
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
-  fab.onclick = openAddDialog;
+  fab.onclick = () => openTransactionDialog();
   root.replaceChildren(el("div", { className: "shell" }, nav(), el("main", {}, view)), fab);
 }
 

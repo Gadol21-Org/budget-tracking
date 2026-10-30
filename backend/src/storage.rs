@@ -112,6 +112,8 @@ pub trait Storage: Send + Sync {
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
+    /// Local edit. A line already in Paamonim is flagged `modified`: edits are not pushed there.
+    async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()>;
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>>;
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
@@ -280,6 +282,16 @@ impl Storage for SqliteStorage {
         Ok(id)
     }
 
+    async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE transactions SET date = ?2, amount_agorot = ?3, category_id = ?4, payment_method_id = ?5, note = ?6,
+               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+             WHERE id = ?1",
+            params![id, t.date, t.amount_agorot, t.category_id, t.payment_method_id, t.note],
+        )?;
+        Ok(())
+    }
+
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
         Ok(())
@@ -303,6 +315,18 @@ mod tests {
 
     fn tx(date: &str, amount: i64, cat: Option<i64>) -> NewTransaction {
         NewTransaction { date: date.into(), amount_agorot: amount, category_id: cat, payment_method_id: None, note: String::new() }
+    }
+
+    #[tokio::test]
+    async fn editing_a_synced_line_flags_it_modified() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let id = s.create_transaction(&tx("2026-10-03", -1000, None)).await.unwrap();
+        s.update_transaction(id, &tx("2026-10-04", -2000, None)).await.unwrap();
+        let t = &s.list_transactions().await.unwrap()[0];
+        assert_eq!((t.date.as_str(), t.amount_agorot, t.sync_state.as_str()), ("2026-10-04", -2000, "pending"));
+        s.mark_mirrored(id, "77").await.unwrap();
+        s.update_transaction(id, &tx("2026-10-05", -2500, None)).await.unwrap();
+        assert_eq!(s.list_transactions().await.unwrap()[0].sync_state, "modified");
     }
 
     #[tokio::test]
