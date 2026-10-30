@@ -7,7 +7,7 @@ Every push to `main` runs [`.github/workflows/deploy.yml`](../.github/workflows/
 
 Pull requests build the image without pushing or deploying. Deploy by hand from **Actions > Deploy > Run workflow**. The deploy step is skipped until the `ORACLE_HOST` variable is set.
 
-The data lives in an Oracle **MySQL HeatWave** database (Always Free), not on the VM; the app reaches it over the VCN's private network with `MYSQL_URL` (section A). The older Oracle NoSQL backend is still in the code (`STORAGE=nosql`, see its notes at the end of section A). The app's settings come from the `BUDGET_ENV` secret, written to `~/budget-tracking/.env` on the VM before each deploy.
+The data lives in an Oracle **MySQL HeatWave** database (Always Free), not on the VM; the app reaches it over the VCN's private network with `MYSQL_URL` (section A). The app's settings come from the `BUDGET_ENV` secret, written to `~/budget-tracking/.env` on the VM before each deploy.
 
 The public https address comes from `cloudflared` on the VM, shared with other services. The app has **no login of its own**, so put **Cloudflare Access** in front of the hostname before exposing it (step 6).
 
@@ -31,9 +31,6 @@ The database has no public address. It lives in the same virtual network as the 
 5. **Connection string.** Use the admin user from step 2 in `MYSQL_URL` (below). On first start the app creates the `budget` database and its tables itself. Percent-encode special characters in the password (`#` is `%23`, `@` is `%40`). (If you prefer a restricted account, create the database and a user with rights on it by hand from the VM, `docker run --rm -it mysql:8 mysql -h <ip> -u <admin> -p`, and use that user instead.)
 
 Nothing about the database is opened to the internet, and no IAM policy is needed.
-
-#### Only if you use `STORAGE=nosql` instead
-Needs a compartment, a dynamic group for the VM and the policy `Allow dynamic-group <group> to manage nosql-family in compartment <name>`, plus `ORACLE_NOSQL_AUTH=instance`, `ORACLE_NOSQL_REGION` and `ORACLE_NOSQL_COMPARTMENT_ID` in `BUDGET_ENV`. Tables are created on startup with 25 read/write units each (the Always Free maximum). Reads scan whole tables, so it is slow.
 
 ### B. VM and tunnel
 

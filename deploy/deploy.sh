@@ -31,7 +31,7 @@ docker run -d --name "$name" \
   --env-file "$env_file" \
   "$image"
 
-# An app that can't start (bad NoSQL settings, say) exits at once and restarts
+# An app that can't start (a bad MYSQL_URL, say) exits at once and restarts
 # in a loop; catch that here.
 sleep 20
 if [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$name")" != "true 0" ]; then
