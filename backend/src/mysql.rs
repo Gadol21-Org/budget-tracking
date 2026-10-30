@@ -13,18 +13,23 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::ConnectOptions;
 use sqlx::Row;
 
+use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, PaymentMethod,
     PendingMirror, Storage, Transaction,
 };
 
-const SCHEMA: [&str; 3] = [
+const SCHEMA: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
          is_income BOOLEAN NOT NULL DEFAULT FALSE,
          paamonim_item_id VARCHAR(100) UNIQUE,
          parent_id BIGINT NULL,
+         -- Deleted locally. Kept (when it has a Paamonim id) so re-imports skip it;
+         -- its lines go to merged_into, if any.
+         deleted BOOLEAN NOT NULL DEFAULT FALSE,
+         merged_into BIGINT NULL,
          FOREIGN KEY (parent_id) REFERENCES categories(id)
      )",
     "CREATE TABLE IF NOT EXISTS payment_methods (
@@ -40,11 +45,31 @@ const SCHEMA: [&str; 3] = [
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
          paamonim_line_id VARCHAR(100) UNIQUE,   -- set once mirrored/imported
-         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error
+         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
+         recurring_series_id BIGINT NULL,        -- set on a settled repeating transaction
          INDEX idx_tx_date (date),
          INDEX idx_tx_category_date (category_id, date),
          FOREIGN KEY (category_id) REFERENCES categories(id),
          FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+     )",
+    "CREATE TABLE IF NOT EXISTS recurring (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         series_id BIGINT NOT NULL,              -- id of the series' first segment
+         start_month VARCHAR(7) NOT NULL,        -- YYYY-MM
+         end_month VARCHAR(7) NULL,              -- inclusive; NULL = forever
+         day INT NOT NULL,
+         amount_agorot BIGINT NOT NULL,
+         category_id BIGINT NULL,
+         payment_method_id BIGINT NULL,
+         note TEXT NOT NULL,
+         INDEX idx_recurring_series (series_id),
+         FOREIGN KEY (category_id) REFERENCES categories(id),
+         FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+     )",
+    "CREATE TABLE IF NOT EXISTS recurring_settled (
+         series_id BIGINT NOT NULL,
+         month VARCHAR(7) NOT NULL,
+         PRIMARY KEY (series_id, month)
      )",
 ];
 
@@ -79,8 +104,47 @@ impl MySqlStorage {
         for ddl in SCHEMA {
             sqlx::query(ddl).execute(&pool).await?;
         }
+        // Tables created before categories could be deleted.
+        let has_deleted: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = 'categories' AND column_name = 'deleted'",
+        )
+        .fetch_one(&pool)
+        .await?;
+        if has_deleted == 0 {
+            sqlx::query("ALTER TABLE categories ADD COLUMN deleted BOOLEAN NOT NULL DEFAULT FALSE")
+                .execute(&pool)
+                .await?;
+            sqlx::query("ALTER TABLE categories ADD COLUMN merged_into BIGINT NULL")
+                .execute(&pool)
+                .await?;
+        }
+        // Tables created before repeating transactions existed; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN recurring_series_id BIGINT NULL")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
+}
+
+/// Where lines of category `id` belong: itself, or what it was merged into when deleted
+/// (None if it was deleted without a replacement).
+async fn resolve_category(conn: &mut sqlx::MySqlConnection, mut id: i64) -> Result<Option<i64>> {
+    for _ in 0..16 {
+        let (deleted, into): (bool, Option<i64>) =
+            sqlx::query_as("SELECT deleted, merged_into FROM categories WHERE id = ?")
+                .bind(id)
+                .fetch_one(&mut *conn)
+                .await?;
+        if !deleted {
+            return Ok(Some(id));
+        }
+        match into {
+            Some(next) => id = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(None)
 }
 
 fn tx_from_row(r: &MySqlRow) -> Result<Transaction> {
@@ -92,6 +156,7 @@ fn tx_from_row(r: &MySqlRow) -> Result<Transaction> {
         payment_method_id: r.try_get("payment_method_id")?,
         note: r.try_get("note")?,
         sync_state: r.try_get("sync_state")?,
+        recurring_series_id: r.try_get("recurring_series_id")?,
     })
 }
 
@@ -170,16 +235,21 @@ impl Storage for MySqlStorage {
         let mut tx = self.pool.begin().await?;
         let mut sum = ImportSummary::default();
 
+        // `cats`: key -> row id, for linking parents. `live`: key -> where its lines go, which
+        // differs for categories deleted locally (their replacement, or none).
         let mut cats: HashMap<String, i64> = HashMap::new();
+        let mut live: HashMap<String, Option<i64>> = HashMap::new();
         for c in &batch.categories {
-            let existing: Option<i64> =
-                sqlx::query_scalar("SELECT id FROM categories WHERE paamonim_item_id = ?")
+            let existing: Option<(i64, bool)> =
+                sqlx::query_as("SELECT id, deleted FROM categories WHERE paamonim_item_id = ?")
                     .bind(&c.key)
                     .fetch_optional(&mut *tx)
                     .await?;
             let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
             let id = match existing {
-                Some(id) => {
+                // Deleted here: stays deleted, and its name/parent are not refreshed.
+                Some((id, true)) => id,
+                Some((id, false)) => {
                     sqlx::query("UPDATE categories SET name = ?, parent_id = ? WHERE id = ?")
                         .bind(&c.name)
                         .bind(parent)
@@ -190,19 +260,29 @@ impl Storage for MySqlStorage {
                 }
                 None => {
                     sum.categories_added += 1;
+                    // New under a parent that was deleted here: deleted too, same destination.
+                    let into = match parent {
+                        Some(p) => Some(resolve_category(&mut tx, p).await?),
+                        None => None,
+                    };
+                    let parent_gone = parent.is_some() && into != Some(parent);
+                    let into = into.flatten().filter(|_| parent_gone);
                     let res = sqlx::query(
-                        "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id)
-                         VALUES (?, ?, ?, ?)",
+                        "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id, deleted, merged_into)
+                         VALUES (?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&c.name)
                     .bind(c.is_income)
                     .bind(&c.key)
                     .bind(parent)
+                    .bind(parent_gone)
+                    .bind(into)
                     .execute(&mut *tx)
                     .await?;
                     res.last_insert_id() as i64
                 }
             };
+            live.insert(c.key.clone(), resolve_category(&mut tx, id).await?);
             cats.insert(c.key.clone(), id);
         }
 
@@ -245,7 +325,12 @@ impl Storage for MySqlStorage {
         .into_iter()
         .collect();
         for t in &batch.transactions {
-            let cat = t.category_key.as_ref().and_then(|k| cats.get(k)).copied();
+            let cat = t
+                .category_key
+                .as_ref()
+                .and_then(|k| live.get(k))
+                .copied()
+                .flatten();
             let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
             if known.contains(&t.line_id) {
                 // Only fill in links that were missing; never overwrite local edits.
@@ -283,7 +368,8 @@ impl Storage for MySqlStorage {
 
     async fn list_transactions(&self) -> Result<Vec<Transaction>> {
         let rows = sqlx::query(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
              FROM transactions ORDER BY date DESC, id DESC",
         )
         .fetch_all(&self.pool)
@@ -333,10 +419,11 @@ impl Storage for MySqlStorage {
     }
 
     async fn list_categories(&self) -> Result<Vec<Category>> {
-        let rows =
-            sqlx::query("SELECT id, name, is_income, parent_id FROM categories ORDER BY name")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows = sqlx::query(
+            "SELECT id, name, is_income, parent_id FROM categories WHERE NOT deleted ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
             .map(|r| {
                 Ok(Category {
@@ -347,6 +434,220 @@ impl Storage for MySqlStorage {
                 })
             })
             .collect()
+    }
+
+    async fn insert_category(
+        &self,
+        name: &str,
+        is_income: bool,
+        parent_id: Option<i64>,
+    ) -> Result<i64> {
+        let res =
+            sqlx::query("INSERT INTO categories (name, is_income, parent_id) VALUES (?, ?, ?)")
+                .bind(name)
+                .bind(is_income)
+                .bind(parent_id)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.last_insert_id() as i64)
+    }
+
+    async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            if let Some(to) = move_to {
+                // Like any local edit: a line already in Paamonim now differs from it.
+                sqlx::query(
+                    "UPDATE transactions SET category_id = ?,
+                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+                     WHERE category_id = ?",
+                )
+                .bind(to)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query("UPDATE recurring SET category_id = ? WHERE category_id = ?")
+                    .bind(to)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            let from_paamonim: bool = sqlx::query_scalar(
+                "SELECT paamonim_item_id IS NOT NULL FROM categories WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if from_paamonim {
+                sqlx::query("UPDATE categories SET deleted = TRUE, merged_into = ? WHERE id = ?")
+                    .bind(move_to)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("DELETE FROM categories WHERE id = ?")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn list_recurring(&self) -> Result<Vec<RecurringSegment>> {
+        let rows = sqlx::query(
+            "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
+                    payment_method_id, note
+             FROM recurring ORDER BY series_id, start_month",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(RecurringSegment {
+                    id: r.try_get("id")?,
+                    series_id: r.try_get("series_id")?,
+                    start_month: r.try_get("start_month")?,
+                    end_month: r.try_get("end_month")?,
+                    day: r.try_get::<i32, _>("day")? as u32,
+                    amount_agorot: r.try_get("amount_agorot")?,
+                    category_id: r.try_get("category_id")?,
+                    payment_method_id: r.try_get("payment_method_id")?,
+                    note: r.try_get("note")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_recurring(&self, series_id: Option<i64>, r: &NewRecurring) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
+                                    category_id, payment_method_id, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(series_id.unwrap_or(0))
+        .bind(&r.start_month)
+        .bind(&r.end_month)
+        .bind(r.day)
+        .bind(r.amount_agorot)
+        .bind(r.category_id)
+        .bind(r.payment_method_id)
+        .bind(&r.note)
+        .execute(&mut *tx)
+        .await?;
+        let id = res.last_insert_id() as i64;
+        if series_id.is_none() {
+            sqlx::query("UPDATE recurring SET series_id = id WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    async fn update_recurring(&self, id: i64, r: &NewRecurring) -> Result<()> {
+        sqlx::query(
+            "UPDATE recurring SET start_month = ?, end_month = ?, day = ?, amount_agorot = ?,
+               category_id = ?, payment_method_id = ?, note = ?
+             WHERE id = ?",
+        )
+        .bind(&r.start_month)
+        .bind(&r.end_month)
+        .bind(r.day)
+        .bind(r.amount_agorot)
+        .bind(r.category_id)
+        .bind(r.payment_method_id)
+        .bind(&r.note)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_recurring(&self, id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM recurring WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn settled_recurring(&self) -> Result<Vec<(i64, String)>> {
+        let rows = sqlx::query("SELECT series_id, month FROM recurring_settled")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("series_id")?, r.try_get("month")?)))
+            .collect()
+    }
+
+    async fn settle_recurring_month(
+        &self,
+        series_id: i64,
+        month: &str,
+        t: Option<&NewTransaction>,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let new =
+            sqlx::query("INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)")
+                .bind(series_id)
+                .bind(month)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        if let (1, Some(t)) = (new, t) {
+            sqlx::query(
+                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                           note, sync_state, recurring_series_id)
+                 VALUES (?, ?, ?, ?, ?, 'local', ?)",
+            )
+            .bind(&t.date)
+            .bind(t.amount_agorot)
+            .bind(t.category_id)
+            .bind(t.payment_method_id)
+            .bind(&t.note)
+            .bind(series_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(new == 1)
+    }
+
+    async fn settle_recurring(&self, due: &[Occurrence]) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        let mut added = 0;
+        for o in due {
+            let new = sqlx::query(
+                "INSERT IGNORE INTO recurring_settled (series_id, month) VALUES (?, ?)",
+            )
+            .bind(o.series_id)
+            .bind(&o.date[..7])
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if new == 1 {
+                sqlx::query(
+                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
+                                               note, sync_state, recurring_series_id)
+                     VALUES (?, ?, ?, ?, ?, 'local', ?)",
+                )
+                .bind(&o.date)
+                .bind(o.amount_agorot)
+                .bind(o.category_id)
+                .bind(o.payment_method_id)
+                .bind(&o.note)
+                .bind(o.series_id)
+                .execute(&mut *tx)
+                .await?;
+                added += 1;
+            }
+        }
+        tx.commit().await?;
+        Ok(added)
     }
 
     /// Aggregated in the database.

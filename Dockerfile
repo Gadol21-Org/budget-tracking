@@ -10,29 +10,29 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM rust:1-bookworm AS build
+# cargo-chef splits the Rust build in two: `cook` compiles only the dependencies, from a
+# recipe made of the manifests and Cargo.lock, so that layer is reused until they change.
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
+WORKDIR /src
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY backend backend
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libssl-dev pkg-config \
  && rm -rf /var/lib/apt/lists/*
-WORKDIR /src
 # build.rs would run npm; the frontend is built in the stage above.
 ENV SKIP_FRONTEND_BUILD=1
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json
 
-# Build the dependencies against stub sources first, so this layer is reused
-# until Cargo.toml or Cargo.lock change.
 COPY Cargo.toml Cargo.lock ./
-COPY backend/Cargo.toml backend/Cargo.toml
-RUN mkdir backend/src \
- && echo 'fn main() {}' > backend/src/main.rs \
- && echo 'fn main() {}' > backend/build.rs \
- && cargo build --release --locked -p budget-backend \
- && rm -rf backend/src backend/build.rs
-
 COPY backend backend
 COPY --from=frontend /src/frontend/dist frontend/dist
-# Cargo compares mtimes; make sure the real sources count as newer than the stubs.
-RUN touch backend/src/main.rs backend/build.rs \
- && cargo build --release --locked -p budget-backend
+RUN cargo build --release --locked -p budget-backend
 
 FROM debian:bookworm-slim
 RUN apt-get update \
