@@ -111,22 +111,9 @@ impl Client {
 
     /// Fetch raw activity-history HTML for a date range (YYYY-MM-DD).
     pub async fn activity_history_html(&self, from: &str, to: &str) -> Result<String> {
-        let resp = self
-            .http
-            .get(format!("{}/rishumit/activity_history", self.base))
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Accept", "application/json")
-            .query(&[("start_date", from), ("end_date", to)])
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        // The endpoint returns JSON wrapping an HTML fragment.
-        Ok(match serde_json::from_str::<HtmlEnvelope>(&resp) {
-            Ok(env) => env.html,
-            Err(_) => resp,
-        })
+        // Same request as the recorded probe, which Paamonim answered with 200. An extra
+        // `Accept: application/json` header made it respond with HTTP 500.
+        self.fragment("/rishumit/activity_history", &[("start_date", from), ("end_date", to)]).await
     }
 
     pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
