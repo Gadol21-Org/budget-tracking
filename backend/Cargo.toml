@@ -18,9 +18,11 @@ tower-http = { version = "0.5", features = ["fs", "cors"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 oracle-nosql-rust-sdk = "0.1.5"
-# Same crate the SDK uses; "vendored" (feature unification) builds OpenSSL from source
-# so no system OpenSSL is needed, e.g. on Windows.
-openssl = { version = "0.10", features = ["vendored"] }
 async-trait = "0.1"
 jsonwebtoken = "9"
 base64 = "0.22"
+
+# The SDK requires OpenSSL. Windows has none, so build it from source there (feature
+# unification applies "vendored" to the SDK's copy); other platforms use the system one.
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

@@ -11,7 +11,7 @@ cargo run -p budget-backend      # serves API + built PWA on :3000
 ```
 
 ## Storage
-OpenSSL is built from source (the `openssl` crate's `vendored` feature), because Oracle's Rust SDK requires it, so no system OpenSSL is needed. The first build is slower (about 2 minutes) and needs a C compiler plus Perl (and `make` on Linux/macOS); on Windows install the MSVC build tools and [Strawberry Perl](https://strawberryperl.com/).
+Oracle's Rust SDK requires OpenSSL. On Linux/macOS the system OpenSSL is used (`apt install libssl-dev pkg-config`). On Windows it is built from source automatically (the `openssl` crate's `vendored` feature, enabled only for Windows targets), which needs the MSVC build tools and [Strawberry Perl](https://strawberryperl.com/) and adds a couple of minutes to the first build.
 
 `STORAGE=sqlite` (default) needs nothing and is used for tests. `STORAGE=nosql` uses Oracle NoSQL; the SDK is configured from `ORACLE_NOSQL_*` variables (see `.env.example`), so the same code runs against:
 - **Local:** the [Oracle NoSQL Cloud Simulator](https://www.oracle.com/downloads/cloud/nosql-cloud-sdk-downloads.html) with `ORACLE_NOSQL_AUTH=cloudsim` and `ORACLE_NOSQL_ENDPOINT=http://localhost:8080`.
