@@ -725,11 +725,15 @@ window.addEventListener("online", refreshIfStale);
 for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
 
 // Pull to refresh (touch screens only): the page follows the finger from the top, the spinner rides
-// along, a short haptic tick marks the threshold (navigator.vibrate is unavailable on iOS Safari),
+// along, a short haptic tick marks the threshold (on iOS, the release; see haptic()),
 // and release glides back with an eased transition.
 const PULL_THRESHOLD = 72;
 const PULL_MAX = 120;
-/** Haptic tick: navigator.vibrate on Android; on iOS Safari (17.4+) toggling a hidden `switch` checkbox makes the system click. */
+/**
+ * Haptic tick: navigator.vibrate on Android. iOS Safari (17.4+) has no vibrate, but toggling a hidden
+ * `switch` checkbox makes the system click, apparently only from inside a real user-gesture handler
+ * (touchend), not mid-drag; so on iOS the tick fires on release rather than at the threshold.
+ */
 const hapticSwitch = el("input", { type: "checkbox", id: "haptic" });
 hapticSwitch.setAttribute("switch", "");
 hapticSwitch.setAttribute("aria-hidden", "true");
@@ -779,7 +783,7 @@ document.addEventListener(
     // Rubber band: resistance grows as the page is pulled further.
     pullDist = PULL_MAX * (1 - Math.exp(-dy / (PULL_MAX * 1.6)));
     setPull(pullDist);
-    if (!armed && pullDist >= PULL_THRESHOLD) haptic();
+    if (!armed && pullDist >= PULL_THRESHOLD) navigator.vibrate?.(12);
     armed = pullDist >= PULL_THRESHOLD;
     spinner.classList.toggle("ready", armed);
   },
@@ -789,11 +793,12 @@ async function endPull() {
   if (pullStart === undefined) return;
   pullStart = undefined;
   if (!armed) return glideTo(0);
+  if (!navigator.vibrate) haptic(); // iOS: must run synchronously inside this touchend handler
   spinner.classList.add("spin");
   glideTo(PULL_THRESHOLD * 0.8);
   lastLoad = Date.now();
   const [ok] = await Promise.all([refresh(), new Promise((r) => setTimeout(r, 600))]);
-  if (!ok) haptic([30, 40, 30]);
+  if (!ok) navigator.vibrate?.([30, 40, 30]);
   spinner.classList.remove("spin", "ready");
   glideTo(0);
   armed = false;
