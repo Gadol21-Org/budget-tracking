@@ -68,10 +68,43 @@ async fn import_paamonim(
     Ok(Json(lines.into_iter().map(|l| format!("{}: {}", l.line_id, l.text)).collect()))
 }
 
+/// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
+/// importer's parsing can be written against real data. Output contains personal
+/// financial data: keep it out of git (`probe-out/` is ignored).
+async fn probe(out_dir: &str) -> anyhow::Result<()> {
+    let base = std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
+    let user = std::env::var("PAAMONIM_USERNAME")?;
+    let pass = std::env::var("PAAMONIM_PASSWORD")?;
+    let client = paamonim::Client::login(&base, &user, &pass).await?;
+    std::fs::create_dir_all(out_dir)?;
+    let month = chrono::Local::now().format("%Y-%m-01").to_string();
+    let targets: Vec<(&str, &str, Vec<(&str, &str)>)> = vec![
+        ("landing", "/", vec![]),
+        ("data_collection", "/rishumit/data_collection", vec![("month", &month)]),
+        ("month_expense", "/rishumit/month_details_by_type", vec![("data_type", "expense"), ("month", &month)]),
+        ("month_income", "/rishumit/month_details_by_type", vec![("data_type", "income"), ("month", &month)]),
+        ("income_items", "/rishumit/get_income_items", vec![]),
+        ("expense_items", "/rishumit/get_expense_items", vec![]),
+        ("payment_methods", "/rishumit/get_payment_methods", vec![]),
+        ("activity_history", "/rishumit/activity_history", vec![("start_date", "2020-01-01"), ("end_date", "2030-01-01")]),
+    ];
+    for (name, path, query) in targets {
+        let (status, body) = client.get_raw(path, &query).await?;
+        std::fs::write(format!("{out_dir}/{name}.txt"), format!("HTTP {status}\n{body}"))?;
+        println!("{name}: HTTP {status}, {} bytes", body.len());
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("probe") {
+        return probe(args.get(2).map(String::as_str).unwrap_or("probe-out")).await;
+    }
 
     // STORAGE=sqlite (default, local/tests) | nosql (Oracle NoSQL Cloud or the local Cloud Simulator)
     let db: Db = match std::env::var("STORAGE").as_deref().unwrap_or("sqlite") {

@@ -59,6 +59,19 @@ impl Client {
         Ok(Self { http, base })
     }
 
+    /// Raw GET returning (status, body); used by the `probe` command to record real responses.
+    pub async fn get_raw(&self, path: &str, query: &[(&str, &str)]) -> Result<(u16, String)> {
+        let resp = self
+            .http
+            .get(format!("{}{}", self.base, path))
+            .header("X-Requested-With", "XMLHttpRequest")
+            .query(query)
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        Ok((status, resp.text().await?))
+    }
+
     /// Fetch raw activity-history HTML for a date range (YYYY-MM-DD).
     pub async fn activity_history_html(&self, from: &str, to: &str) -> Result<String> {
         let resp = self
