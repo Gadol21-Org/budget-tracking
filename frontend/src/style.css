@@ -147,4 +147,3 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .ptr.ready .ptr-dot { border-top-color: var(--brand); border-right-color: var(--brand); }
 .ptr.spin .ptr-dot { animation: ptr-spin .8s linear infinite; }
 @keyframes ptr-spin { to { rotate: 360deg; } }
-.haptic { position: fixed; top: 0; inset-inline-start: 0; width: 1px; height: 1px; opacity: 0.01; overflow: hidden; pointer-events: none; }

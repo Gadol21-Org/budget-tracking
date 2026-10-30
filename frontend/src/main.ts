@@ -725,26 +725,10 @@ window.addEventListener("online", refreshIfStale);
 for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
 
 // Pull to refresh (touch screens only): the page follows the finger from the top, the spinner rides
-// along, a short haptic tick marks the threshold (on iOS, the release; see haptic()),
+// along, a short haptic tick marks the threshold (navigator.vibrate; unavailable on iOS Safari),
 // and release glides back with an eased transition.
 const PULL_THRESHOLD = 72;
 const PULL_MAX = 120;
-/**
- * Haptic tick: navigator.vibrate on Android. iOS Safari (17.4+) has no vibrate, but toggling a hidden
- * `switch` checkbox makes the system click, apparently only from inside a real user-gesture handler
- * (touchend), not mid-drag; so on iOS the tick fires on release rather than at the threshold.
- */
-const hapticSwitch = el("input", { type: "checkbox", id: "haptic" });
-hapticSwitch.setAttribute("switch", "");
-hapticSwitch.setAttribute("aria-hidden", "true");
-hapticSwitch.tabIndex = -1;
-const hapticLabel = el("label", { className: "haptic" }, hapticSwitch);
-hapticLabel.htmlFor = "haptic";
-document.body.append(hapticLabel);
-function haptic(pattern: number | number[] = 12) {
-  if (navigator.vibrate) navigator.vibrate(pattern);
-  else hapticLabel.click();
-}
 const spinner = el("div", { className: "ptr" }, el("div", { className: "ptr-dot" }));
 document.body.append(spinner);
 let pullStart: number | undefined;
@@ -793,7 +777,6 @@ async function endPull() {
   if (pullStart === undefined) return;
   pullStart = undefined;
   if (!armed) return glideTo(0);
-  if (!navigator.vibrate) haptic(); // iOS: must run synchronously inside this touchend handler
   spinner.classList.add("spin");
   glideTo(PULL_THRESHOLD * 0.8);
   lastLoad = Date.now();
