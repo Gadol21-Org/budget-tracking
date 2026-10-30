@@ -21,6 +21,13 @@ export interface MonthlyTotal {
   count: number;
 }
 
+export interface ImportSummary {
+  categories_added: number;
+  payment_methods_added: number;
+  transactions_added: number;
+  transactions_skipped: number;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init });
   if (!res.ok) throw new Error(await res.text());
@@ -33,6 +40,9 @@ export const api = {
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),
   addTransaction: (t: Omit<Transaction, "id" | "sync_state">) =>
     request<number>("/api/transactions", { method: "POST", body: JSON.stringify(t) }),
+  importPaamonim: (from: string, to: string) =>
+    request<ImportSummary>("/api/import/paamonim", { method: "POST", body: JSON.stringify({ from, to }) }),
+  exportSheets: () => request<{ transactions: number; monthly_rows: number }>("/api/export/sheets", { method: "POST" }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
 };
 
@@ -44,5 +54,5 @@ export function parseAgorot(input: string): number {
 }
 
 export function formatShekels(agorot: number): string {
-  return (agorot / 100).toLocaleString(undefined, { style: "currency", currency: "ILS" });
+  return (agorot / 100).toLocaleString("he-IL", { style: "currency", currency: "ILS" });
 }

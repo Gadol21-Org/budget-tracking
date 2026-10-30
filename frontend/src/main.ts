@@ -1,55 +1,242 @@
+import "./style.css";
 import { api, formatShekels, parseAgorot, type Category, type Transaction } from "./api";
 
-const app = document.getElementById("app")!;
-let categories: Category[] = [];
+type View = "month" | "list" | "settings";
+
+const root = document.getElementById("app")!;
+const state = {
+  view: "month" as View,
+  month: new Date().toISOString().slice(0, 7), // YYYY-MM
+  txs: [] as Transaction[],
+  cats: [] as Category[],
+};
+
+type Child = Node | string | null | false;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   props: Record<string, unknown> = {},
-  ...kids: (Node | string)[]
+  ...kids: Child[]
 ): HTMLElementTagNameMap[K] {
   const node = Object.assign(document.createElement(tag), props);
-  node.append(...kids);
+  node.append(...kids.filter((k): k is Node | string => !!k));
   return node;
 }
 
-function renderRow(t: Transaction): HTMLElement {
-  const cat = categories.find((c) => c.id === t.category_id)?.name ?? "—";
-  const del = el("button", { textContent: "✕", title: "Delete" });
-  del.onclick = async () => {
-    await api.deleteTransaction(t.id);
-    await refresh();
-  };
-  return el("li", {}, `${t.date} · ${cat} · ${t.note} · `, el("strong", {}, formatShekels(t.amount_agorot)), " ", del);
+const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
+const catName = (id: number | null) => state.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
+
+function shiftMonth(m: string, delta: number): string {
+  const [y, mo] = m.split("-").map(Number);
+  const d = new Date(Date.UTC(y, mo - 1 + delta, 1));
+  return d.toISOString().slice(0, 7);
+}
+const monthTitle = (m: string) =>
+  new Date(`${m}-01T00:00:00`).toLocaleDateString("he-IL", { month: "long", year: "numeric" });
+const dayTitle = (d: string) =>
+  new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
+
+const inMonth = () => state.txs.filter((t) => t.date.startsWith(state.month));
+
+function monthBar(): HTMLElement {
+  const prev = el("button", { className: "iconbtn", title: "החודש הקודם", textContent: "›" });
+  const next = el("button", { className: "iconbtn", title: "החודש הבא", textContent: "‹" });
+  prev.onclick = () => ((state.month = shiftMonth(state.month, -1)), render());
+  next.onclick = () => ((state.month = shiftMonth(state.month, 1)), render());
+  return el("div", { className: "monthbar" }, prev, el("div", { className: "title", textContent: monthTitle(state.month) }), next);
 }
 
-function renderForm(): HTMLFormElement {
-  const date = el("input", { type: "date", required: true, valueAsDate: new Date() });
-  const amount = el("input", { type: "text", inputMode: "decimal", placeholder: "Amount (e.g. 12.50)", required: true });
-  const category = el("select", {}, el("option", { value: "", textContent: "No category" }));
-  for (const c of categories) category.append(el("option", { value: String(c.id), textContent: c.name }));
-  const note = el("input", { type: "text", placeholder: "Note" });
-  const form = el("form", {}, date, amount, category, note, el("button", { type: "submit", textContent: "Add" }));
+function monthView(): HTMLElement {
+  const txs = inMonth();
+  const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
+  const expense = txs.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
+  const stat = (label: string, value: HTMLElement) =>
+    el("div", { className: "card" }, el("div", { className: "label", textContent: label }), el("div", { className: "value" }, value));
+
+  const byCat = new Map<number | null, number>();
+  for (const t of txs.filter((t) => t.amount_agorot < 0)) {
+    byCat.set(t.category_id, (byCat.get(t.category_id) ?? 0) + -t.amount_agorot);
+  }
+  const rows = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
+  const max = rows[0]?.[1] ?? 1;
+
+  return el(
+    "div",
+    {},
+    monthBar(),
+    el("div", { className: "stats" }, stat("הכנסות", money(income, "income")), stat("הוצאות", money(-expense, "expense")), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
+    el("h2", { textContent: "הוצאות לפי קטגוריה" }),
+    rows.length === 0
+      ? el("div", { className: "empty", textContent: "אין הוצאות בחודש זה" })
+      : el(
+          "div",
+          { className: "card rows" },
+          ...rows.map(([id, total]) =>
+            el(
+              "div",
+              { className: "row" },
+              el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (total / max) * 100)}%` }))),
+              money(total),
+            ),
+          ),
+        ),
+  );
+}
+
+function listView(): HTMLElement {
+  const txs = inMonth();
+  const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
+  const body: Child[] = days.map((d) =>
+    el(
+      "div",
+      {},
+      el("div", { className: "daylabel", textContent: dayTitle(d) }),
+      el(
+        "div",
+        { className: "card rows" },
+        ...txs
+          .filter((t) => t.date === d)
+          .map((t) => {
+            const del = el("button", { className: "del", title: "מחיקה", textContent: "✕" });
+            del.onclick = async () => {
+              if (!confirm("למחוק את התנועה?")) return;
+              await api.deleteTransaction(t.id);
+              await load();
+            };
+            return el(
+              "div",
+              { className: "row" },
+              el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(t.category_id) }), t.note ? el("div", { className: "muted", textContent: t.note }) : null),
+              money(t.amount_agorot, t.amount_agorot < 0 ? "expense" : "income"),
+              del,
+            );
+          }),
+      ),
+    ),
+  );
+  return el("div", {}, monthBar(), ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בחודש זה" })]));
+}
+
+function settingsView(): HTMLElement {
+  const out = el("div", { className: "note muted" });
+  const run = (btn: HTMLButtonElement, work: () => Promise<string>) => async () => {
+    btn.disabled = true;
+    out.className = "note muted";
+    out.textContent = "מבצע…";
+    try {
+      out.textContent = await work();
+      await load();
+    } catch (e) {
+      out.className = "note error";
+      out.textContent = `שגיאה: ${e instanceof Error ? e.message : e}`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  const imp = el("button", { className: "btn", textContent: "ייבוא מפעמונים" });
+  imp.onclick = run(imp, async () => {
+    const s = await api.importPaamonim("2000-01-01", new Date().toISOString().slice(0, 10));
+    return `יובאו ${s.transactions_added} תנועות חדשות (${s.transactions_skipped} כבר קיימות), ${s.categories_added} קטגוריות חדשות.`;
+  });
+  const exp = el("button", { className: "btn", textContent: "ייצוא ל-Google Sheets" });
+  exp.onclick = run(exp, async () => {
+    const s = await api.exportSheets();
+    return `יוצאו ${s.transactions} תנועות.`;
+  });
+  return el(
+    "div",
+    {},
+    el("h1", { textContent: "הגדרות" }),
+    el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
+  );
+}
+
+function openAddDialog() {
+  let isIncome = false;
+  const dlg = el("dialog");
+  const amount = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", required: true, autocomplete: "off" });
+  const date = el("input", { type: "date", required: true, value: new Date().toISOString().slice(0, 10) });
+  const category = el("select");
+  const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35 });
+  const err = el("div", { className: "error" });
+
+  const expBtn = el("button", { type: "button", textContent: "הוצאה" });
+  const incBtn = el("button", { type: "button", textContent: "הכנסה" });
+  const fillCats = () => {
+    expBtn.setAttribute("aria-pressed", String(!isIncome));
+    incBtn.setAttribute("aria-pressed", String(isIncome));
+    category.replaceChildren(el("option", { value: "", textContent: "ללא קטגוריה" }), ...state.cats.filter((c) => c.is_income === isIncome).map((c) => el("option", { value: String(c.id), textContent: c.name })));
+  };
+  expBtn.onclick = () => ((isIncome = false), fillCats());
+  incBtn.onclick = () => ((isIncome = true), fillCats());
+  fillCats();
+
+  const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+  cancel.onclick = () => dlg.close();
+  const save = el("button", { type: "submit", className: "btn primary", textContent: "שמירה" });
+  const form = el(
+    "form",
+    { className: "add", method: "dialog" },
+    el("div", { className: "seg" }, expBtn, incBtn),
+    el("label", {}, "סכום (₪)", amount),
+    el("label", {}, "קטגוריה", category),
+    el("label", {}, "תאריך", date),
+    el("label", {}, "הערה", note),
+    err,
+    el("div", { className: "actions" }, cancel, save),
+  );
   form.onsubmit = async (e) => {
     e.preventDefault();
-    await api.addTransaction({
-      date: date.value,
-      amount_agorot: parseAgorot(amount.value),
-      category_id: category.value ? Number(category.value) : null,
-      payment_method_id: null,
-      note: note.value,
-    });
-    await refresh();
+    try {
+      const abs = Math.abs(parseAgorot(amount.value));
+      if (abs === 0) throw new Error("יש להזין סכום");
+      save.disabled = true;
+      await api.addTransaction({
+        date: date.value,
+        amount_agorot: isIncome ? abs : -abs,
+        category_id: category.value ? Number(category.value) : null,
+        payment_method_id: null,
+        note: note.value,
+      });
+      state.month = date.value.slice(0, 7);
+      dlg.close();
+      await load();
+    } catch (e2) {
+      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+      save.disabled = false;
+    }
   };
-  return form;
+  dlg.append(form);
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+  amount.focus();
 }
 
-async function refresh() {
-  categories = await api.categories();
-  const txs = await api.transactions();
-  app.replaceChildren(el("h1", {}, "Budget Tracker"), renderForm(), el("ul", {}, ...txs.map(renderRow)));
+function nav(): HTMLElement {
+  const item = (view: View, ico: string, label: string) => {
+    const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
+    if (state.view === view) b.setAttribute("aria-current", "page");
+    b.onclick = () => ((state.view = view), render());
+    return b;
+  };
+  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
 }
 
-refresh().catch((e) => app.replaceChildren(el("p", {}, `Failed to load: ${e}`)));
+function render() {
+  const view = state.view === "month" ? monthView() : state.view === "list" ? listView() : settingsView();
+  const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
+  fab.onclick = openAddDialog;
+  root.replaceChildren(el("div", { className: "shell" }, nav(), el("main", {}, view)), fab);
+}
+
+async function load() {
+  [state.cats, state.txs] = await Promise.all([api.categories(), api.transactions()]);
+  render();
+}
+
+load().catch((e) => {
+  root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));
+});
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

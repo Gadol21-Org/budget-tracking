@@ -1,6 +1,8 @@
 {
-  "name": "Budget Tracker",
-  "short_name": "Budget",
+  "name": "מעקב תקציב",
+  "lang": "he",
+  "dir": "rtl",
+  "short_name": "תקציב",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

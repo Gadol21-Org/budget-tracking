@@ -5,10 +5,9 @@ PWA (TypeScript, Vite) with a Rust (axum) backend. Amounts are stored as exact i
 ## Run locally
 ```
 cp .env.example .env   # quote values containing '#', e.g. PAAMONIM_PASSWORD='pass#'
-(cd frontend && npm install && npm run build)
-cargo run -p budget-backend      # serves API + built PWA at http://127.0.0.1:3000
-# or, for hot reload: (cd frontend && npm run dev) and open http://localhost:5173 (proxies /api to :3000)
+cargo run                        # builds the frontend too, then serves http://127.0.0.1:3000
 ```
+`cargo run` runs `npm install` / `npm run build` in `frontend/` via `backend/build.rs` (needs Node.js; set `SKIP_FRONTEND_BUILD=1` to skip). For hot reload while editing the UI: `cd frontend && npm run dev` and open http://localhost:5173 (it proxies `/api` to :3000).
 
 ## Storage
 Oracle's Rust SDK requires OpenSSL. On Linux/macOS the system OpenSSL is used (`apt install libssl-dev pkg-config`). On Windows it is built from source automatically (the `openssl` crate's `vendored` feature, enabled only for Windows targets), which needs the MSVC build tools and [Strawberry Perl](https://strawberryperl.com/) and adds a couple of minutes to the first build.
