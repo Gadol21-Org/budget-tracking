@@ -20,7 +20,7 @@ use oracle_nosql_rust_sdk::{
 
 use std::collections::{HashMap, HashSet};
 
-use crate::storage::{Category, ImportBatch, PendingMirror, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
+use crate::storage::{Category, ImportBatch, PaymentMethod, PendingMirror, ImportSummary, MonthlyTotal, NewTransaction, Storage, Transaction};
 
 const TX: &str = "transactions";
 const LOOKUPS: &str = "lookups";
@@ -166,6 +166,16 @@ fn tx_from_row(r: &MapValue) -> Result<Transaction> {
 
 #[async_trait::async_trait]
 impl Storage for NoSqlStorage {
+    async fn list_payment_methods(&self) -> Result<Vec<PaymentMethod>> {
+        let rows = self.query_all(&format!("select * from {LOOKUPS} where kind = 'payment_method'")).await?;
+        let mut out: Vec<PaymentMethod> = rows
+            .iter()
+            .filter_map(|r| Some(PaymentMethod { id: r.get_i64("id")?, name: r.get_string("name")? }))
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
         let mut paamonim_of: HashMap<i64, String> = HashMap::new();
         let mut category_ids = HashSet::new();

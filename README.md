@@ -23,6 +23,9 @@ Tables are created on startup (three, to stay within the Always Free limit). The
 ## Mirroring to Paamonim
 Off by default. With `PAAMONIM_MIRROR=1`, new transactions that use a Paamonim-imported category are written to Paamonim (rounded to whole shekels; the app keeps the exact amount). `POST /api/mirror/paamonim` retries pending ones. Deletes and edits are not mirrored yet. Not yet run against a real account.
 
+## Google Sheets export
+Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet with the service account as Editor). The `Transactions` and `Monthly` tabs are rewritten by `POST /api/export/sheets` and nightly (`SHEETS_EXPORT_INTERVAL_HOURS`). Not yet run against Google.
+
 ## Layout
 - `backend/src/storage.rs` – `Storage` trait (SQLite and Oracle NoSQL) plus the `monthly_rollups` table maintained on every write, which dashboards read via `/api/monthly-totals`.
 - `backend/src/nosql.rs` – Oracle NoSQL implementation of `Storage`.

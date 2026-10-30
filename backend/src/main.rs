@@ -3,6 +3,7 @@ mod import;
 mod mirror;
 mod money;
 mod paamonim;
+mod sheets;
 mod nosql;
 mod storage;
 
@@ -107,6 +108,10 @@ async fn mirror_paamonim(State(db): State<Db>) -> Result<Json<mirror::MirrorSumm
     run_mirror(db.as_ref()).await.map(Json).map_err(internal)
 }
 
+async fn export_sheets(State(db): State<Db>) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
+    sheets::export(db.as_ref()).await.map(Json).map_err(internal)
+}
+
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
 /// importer's parsing can be written against real data. Output contains personal
 /// financial data: keep it out of git (`probe-out/` is ignored).
@@ -155,6 +160,21 @@ async fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or nosql)"),
     };
 
+    // Nightly (configurable) snapshot to Google Sheets, only when configured.
+    if std::env::var("GOOGLE_SHEET_ID").is_ok() {
+        let hours: u64 = std::env::var("SHEETS_EXPORT_INTERVAL_HOURS").ok().and_then(|h| h.parse().ok()).unwrap_or(24);
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(hours * 3600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = sheets::export(db.as_ref()).await {
+                    tracing::warn!("sheets export failed: {e}");
+                }
+            }
+        });
+    }
+
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "frontend/dist".into());
     let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
 
@@ -164,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/categories", get(list_categories))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
+        .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
         .with_state(db)
         .fallback_service(spa);

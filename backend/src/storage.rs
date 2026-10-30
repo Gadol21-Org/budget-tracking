@@ -28,6 +28,12 @@ pub struct NewTransaction {
 }
 
 #[derive(Serialize)]
+pub struct PaymentMethod {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Serialize)]
 pub struct Category {
     pub id: i64,
     pub name: String,
@@ -94,6 +100,7 @@ pub struct PendingMirror {
 
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
+    async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
     /// Record that the transaction now exists in Paamonim as `line_id`.
     async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()>;
@@ -131,6 +138,15 @@ fn adjust_rollup(conn: &Connection, date: &str, category_id: Option<i64>, delta:
 
 #[async_trait::async_trait]
 impl Storage for SqliteStorage {
+    async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, name FROM payment_methods ORDER BY name")?;
+        let rows = stmt
+            .query_map([], |r| Ok(PaymentMethod { id: r.get(0)?, name: r.get(1)? }))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
