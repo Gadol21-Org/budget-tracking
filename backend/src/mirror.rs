@@ -15,7 +15,7 @@
 //! - `PAAMONIM_MIRROR_DRY_RUN=1` lists what would be sent and changes nothing.
 //!
 //! NOTE: field names come from the site's JS and forms; no write has been run against
-//! a real account yet. Deleting needs `PAAMONIM_DELETE_PATH` (see [`Options::from_env`]).
+//! a real account yet beyond one manual test line (saved and deleted by hand).
 
 use std::collections::{HashMap, HashSet};
 
@@ -36,16 +36,15 @@ pub struct Options {
     pub dry_run: bool,
     /// Most requests that change Paamonim in one run.
     pub max_ops: usize,
-    /// `(path, id parameter)` of the endpoint that deletes a history line. Not known from
-    /// the site's JS: copy it from the browser's network tab. Without it edits and deletes
-    /// are left waiting.
+    /// `(path, id parameter)` of the endpoint that deletes a history line (a POST). `None`
+    /// leaves edits and deletes waiting.
     pub delete: Option<(String, String)>,
 }
 
 impl Options {
-    /// `PAAMONIM_MIRROR_DRY_RUN`, `PAAMONIM_MIRROR_MAX_OPS` (default 50),
-    /// `PAAMONIM_DELETE_PATH` (e.g. `/rishumit/delete_item_line`) and `PAAMONIM_DELETE_PARAM`
-    /// (default `id`).
+    /// `PAAMONIM_MIRROR_DRY_RUN`, `PAAMONIM_MIRROR_MAX_OPS` (default 50), and
+    /// `PAAMONIM_DELETE_PATH` / `PAAMONIM_DELETE_PARAM` to override the delete endpoint
+    /// (default: POST `/rishumit/delete_history_line` with `line_id`, as the site's own JS does).
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Self {
@@ -59,7 +58,7 @@ impl Options {
             delete: var("PAAMONIM_DELETE_PATH").map(|p| {
                 (
                     p,
-                    var("PAAMONIM_DELETE_PARAM").unwrap_or_else(|| "id".into()),
+                    var("PAAMONIM_DELETE_PARAM").unwrap_or_else(|| "line_id".into()),
                 )
             }),
         }
@@ -543,11 +542,11 @@ mod tests {
         }
         async fn delete(
             State(m): State<M>,
-            Query(q): Query<HashMap<String, String>>,
+            axum::extract::Form(q): axum::extract::Form<HashMap<String, String>>,
         ) -> StatusCode {
             let mut m = m.lock().unwrap();
             m.deletes += 1;
-            let id: i64 = q["id"].parse().unwrap();
+            let id: i64 = q["line_id"].parse().unwrap();
             m.lines.retain(|l| l.id != id);
             StatusCode::OK
         }
@@ -588,7 +587,7 @@ mod tests {
         let app = Router::new()
             .route("/rishumit/edit_item_line", get(form))
             .route("/rishumit/save_item_line", get(save))
-            .route("/rishumit/delete_item_line", get(delete))
+            .route("/rishumit/delete_history_line", axum::routing::post(delete))
             .route("/rishumit/activity_history", get(hist))
             .with_state(mock);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -601,7 +600,7 @@ mod tests {
         Options {
             dry_run: false,
             max_ops: 50,
-            delete: Some(("/rishumit/delete_item_line".into(), "id".into())),
+            delete: Some(("/rishumit/delete_history_line".into(), "line_id".into())),
         }
     }
 

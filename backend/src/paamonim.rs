@@ -143,13 +143,13 @@ impl Client {
         parse_item_categories(&body)
     }
 
-    /// Delete a history line. The endpoint is not known from the site's public JS, so the
-    /// caller supplies the path and id parameter name (see `PAAMONIM_DELETE_PATH`).
+    /// Delete a history line: the site POSTs `line_id` to `path` (`/rishumit/delete_history_line`,
+    /// answered with the text `deleted`).
     pub async fn delete_item_line(&self, path: &str, param: &str, line_id: &str) -> Result<()> {
         self.http
-            .get(format!("{}{}", self.base, path))
+            .post(format!("{}{}", self.base, path))
             .header("X-Requested-With", "XMLHttpRequest")
-            .query(&[(param, line_id)])
+            .form(&[(param, line_id)])
             .send()
             .await?
             .error_for_status()?;
