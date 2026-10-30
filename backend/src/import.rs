@@ -61,7 +61,7 @@ pub fn year_chunks(from: NaiveDate, to: NaiveDate) -> Vec<(NaiveDate, NaiveDate)
 }
 
 /// Years with no lines in a row, after data was seen, that end the backwards walk.
-const EMPTY_YEARS_TO_STOP: usize = 2;
+const EMPTY_YEARS_TO_STOP: usize = 5;
 
 async fn fetch_history(client: &Client, from: &str, to: &str) -> Result<Vec<HistoryEntry>> {
     let (from, to) = (NaiveDate::parse_from_str(from, "%Y-%m-%d")?, NaiveDate::parse_from_str(to, "%Y-%m-%d")?);
