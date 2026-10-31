@@ -340,3 +340,6 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .selbar { position: sticky; bottom: calc(var(--nav-h) + 8px); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--biz); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; z-index: 5; }
 .selbox { width: 22px; height: 22px; accent-color: var(--biz); flex: none; }
 .small { font-size: .82rem; }
+.linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
+.bizchip.big { font-size: .9rem; padding: 3px 12px; }
+.bizpick [hidden] { display: none !important; }

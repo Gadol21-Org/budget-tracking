@@ -1047,8 +1047,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const err = el("div", { className: "error" });
   // The business the line counts in: its own tag, or the one its category gives (then there is nothing to choose).
   const ownTag = existing && existing.id > 0 ? (state.biz.tx.get(existing.id) ?? null) : null;
-  const bizPick = businessChips(state.biz, ownTag);
-  const bizRow = el("label", {}, "עסק (אופציונלי)", bizPick.root);
+  const bizPick = businessChips(state.biz, ownTag, true);
+  const bizRow = el("div", {}, bizPick.root);
   const lastKey = (cat: number) => `biz-last-${cat}`;
   const syncBiz = () => {
     let cat: number | null = null;
@@ -1059,7 +1059,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
       cat = top ? Number(top) : null;
     }
     const given = cat != null ? categoryBusiness(state.biz, state.cats, cat) : undefined;
-    bizPick.lock(given != null && ownTag == null ? `נספרת בעסק "${bizName(state.biz, given)}" לפי הקטגוריה` : null);
+    bizPick.lock(given != null && ownTag == null ? bizName(state.biz, given) : null);
     bizRow.style.display = state.biz.businesses.length === 0 || repeat.checked ? "none" : "";
   };
   /** A new line starts with the business last used in the same category. */

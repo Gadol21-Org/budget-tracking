@@ -317,16 +317,31 @@ export function summaryFigures(ctx: Pick<BizCtx, "txs" | "cats" | "biz" | "perio
 
 // ---- Choosing a business ------------------------------------------------------------------------------
 
-/** One-tap buttons for choosing a business (or none); can be locked to show the one a category gives. */
-export function businessChips(biz: BizData, initial: number | null) {
+/**
+ * One-tap buttons for choosing a business (or none). Most lines are not business lines, so with
+ * `collapsed` the buttons stay behind a small link until asked for (or a choice is already made).
+ * It can also show the business a category already gives, with nothing to choose.
+ */
+export function businessChips(biz: BizData, initial: number | null, collapsed = false) {
   let value = initial;
+  let expanded = !collapsed;
+  let given: string | null = null;
   const root = el("div", { className: "bizpick" });
-  const note = el("div", { className: "muted small" });
+  const head = el("div", { className: "muted small", textContent: "עסק" });
+  const toggle = el("button", { type: "button", className: "linkbtn", textContent: "+ סימון לעסק" });
   const row = el("div", { className: "qchips" });
-  root.append(row, note);
+  const givenChip = el("div", {});
+  toggle.onclick = () => ((expanded = true), draw());
+  root.append(toggle, head, row, givenChip);
   const draw = () => {
+    const showRow = given == null && (expanded || value != null);
+    toggle.hidden = given != null || showRow;
+    head.hidden = !(showRow || given != null);
+    row.hidden = !showRow;
+    givenChip.hidden = given == null;
+    givenChip.replaceChildren(...(given != null ? [el("span", { className: "bizchip big", textContent: given }), el("span", { className: "muted small", textContent: " לפי הקטגוריה" })] : []));
     row.replaceChildren(
-      ...[{ id: null as number | null, name: "ללא" }, ...biz.businesses.map((b) => ({ id: b.id as number | null, name: b.is_general ? `${b.name}` : b.name }))].map((o) => {
+      ...[{ id: null as number | null, name: "ללא" }, ...biz.businesses.map((b) => ({ id: b.id as number | null, name: b.name }))].map((o) => {
         const b = el("button", { type: "button", className: "qchip", textContent: o.name });
         b.setAttribute("aria-pressed", String(o.id === value));
         b.onclick = () => ((value = o.id), draw());
@@ -344,10 +359,10 @@ export function businessChips(biz: BizData, initial: number | null) {
       value = v;
       draw();
     },
-    /** Show the business the category already gives (no choice), or null to show the buttons again. */
-    lock(text: string | null) {
-      row.hidden = text != null;
-      note.textContent = text ?? "";
+    /** Show the business the category already gives (no choice), or null to go back to the choice. */
+    lock(name: string | null) {
+      given = name;
+      draw();
     },
   };
 }
