@@ -727,7 +727,11 @@ function combo(placeholder: string) {
   const close = () => {
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
+    input.value = labelOf(value);
+    document.removeEventListener("pointerdown", outside, true);
   };
+  /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not. */
+  const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("pointerdown", outside, true));
   const pick = (v: string) => {
     value = v;
     input.value = labelOf(v);
@@ -750,15 +754,13 @@ function combo(placeholder: string) {
     );
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
+    document.addEventListener("pointerdown", outside, true);
   };
   input.onfocus = () => (input.select(), show(""));
   input.onclick = () => list.hidden && show("");
   input.oninput = () => show(input.value);
-  input.onblur = () => {
-    close();
-    input.value = labelOf(value);
-  };
   input.onkeydown = (e) => {
+    if (e.key === "Tab" && !list.hidden) close();
     if (e.key === "Escape" && !list.hidden) (e.stopPropagation(), e.preventDefault(), close());
     if (e.key === "Enter" && !list.hidden) {
       // Enter takes the first match instead of submitting the form.
