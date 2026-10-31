@@ -224,6 +224,36 @@ impl Storage for Logged {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
         self.0.list_payment_methods().await
     }
+    // Businesses are a local view over the data, not logged.
+    async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {
+        self.0.list_businesses().await
+    }
+    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64> {
+        self.0.insert_business(name, is_general).await
+    }
+    async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()> {
+        self.0.rename_business(id, name).await
+    }
+    async fn remove_business(&self, id: i64) -> anyhow::Result<()> {
+        self.0.remove_business(id).await
+    }
+    async fn business_links(&self) -> anyhow::Result<crate::storage::BusinessLinks> {
+        self.0.business_links().await
+    }
+    async fn set_category_business(
+        &self,
+        category: i64,
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.0.set_category_business(category, business).await
+    }
+    async fn set_transactions_business(
+        &self,
+        ids: &[i64],
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.0.set_transactions_business(ids, business).await
+    }
     // Mirroring only changes sync bookkeeping, not the user's data: forwarded, not logged.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         self.0.pending_mirrors().await

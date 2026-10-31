@@ -3,9 +3,10 @@ import { clickable, dateField, el, fmtDate, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
+import { businessChips, businessDashboard, businessesView, businessOf, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, openTagDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
 import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
-type View = "month" | "list" | "insights" | "settings" | "log" | "categories";
+type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
 
 const root = document.getElementById("app")!;
 const state = {
@@ -32,6 +33,15 @@ const state = {
   syncSeen: new Map<number, string>(),
   /** Lines just saved in Paamonim, shown with ✅ until this time (ms). */
   justSynced: new Map<number, number>(),
+  /** The businesses, and which transactions and categories count in them. */
+  biz: emptyBiz() as BizData,
+  /** The business dashboards: open tab and which business they show. */
+  bizView: { tab: "overview", scope: "all" } as BizView,
+  /** The transaction list: all, only business lines or only the rest. */
+  bizFilter: "all" as "all" | "biz" | "none",
+  /** Choosing several lines to tag them as a business's. */
+  selecting: false,
+  selected: new Set<number>(),
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };
@@ -236,6 +246,27 @@ function openPeriodDialog() {
   dlg.showModal();
 }
 
+/** "Of which the businesses": profit of the businesses in the period; they stay in the figures above. */
+function businessCard(): HTMLElement | null {
+  if (!state.biz.businesses.length) return null;
+  const { total, per } = summaryFigures({ txs: state.txs, cats: state.cats, biz: state.biz, period: state.period });
+  if (!state.txs.some((t) => businessOf(state.biz, state.cats, t) != null)) return null;
+  const open = (scope: "all" | number) => {
+    state.bizView = { tab: "overview", scope };
+    go("business");
+  };
+  const card = el(
+    "div",
+    { className: "card bizcard", style: "margin-top:10px" },
+    el("div", { className: "head" }, el("div", { className: "grow" }, el("div", { className: "bizname", textContent: "מתוכם העסקים" }), el("div", { className: "muted small", textContent: "כלול בסכומים למעלה" })), el("b", {}, el("span", { textContent: "רווח " }), money(total.profit, total.profit < 0 ? "expense" : "income")), el("span", { className: "muted", textContent: "›" })),
+    ...per.map(({ b, f }) => {
+      const row = el("div", { className: "row sub" }, el("div", { className: "grow", textContent: b.is_general ? `${b.name} (משותף)` : b.name }), money(f.profit, f.profit < 0 ? "expense" : "income"));
+      return b.is_general ? row : clickable(row, () => open(b.id));
+    }),
+  );
+  return clickable(card, () => open("all"));
+}
+
 function monthView(): HTMLElement {
   const txs = inPeriod();
   const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
@@ -267,6 +298,7 @@ function monthView(): HTMLElement {
     {},
     monthBar(),
     el("div", { className: "stats" }, stat("הכנסות", money(income, "income"), "income"), stat("הוצאות", money(-expense, "expense"), "expense"), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
+    businessCard(),
     el("h2", { textContent: isIncome ? "הכנסות לפי קטגוריה" : "הוצאות לפי קטגוריה" }),
     rows.length === 0
       ? el("div", { className: "empty", textContent: isIncome ? "אין הכנסות בתקופה זו" : "אין הוצאות בתקופה זו" })
@@ -301,7 +333,9 @@ function monthView(): HTMLElement {
 }
 
 function listView(): HTMLElement {
-  const txs = inPeriod().filter(inFilter);
+  const txs = inPeriod()
+    .filter(inFilter)
+    .filter((t) => state.bizFilter === "all" || (businessOf(state.biz, state.cats, t) != null) === (state.bizFilter === "biz"));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
   const body: Child[] = days.map((d) =>
     el(
@@ -325,9 +359,18 @@ function listView(): HTMLElement {
               };
             const edit = t.sync_state === "queued" ? null : el("button", { className: "del", title: "עריכה", textContent: "✎" });
             if (edit) edit.onclick = () => openTransactionDialog(t);
+            const biz = businessOf(state.biz, state.cats, t);
+            const pickBox = state.selecting && !t.upcoming && t.sync_state !== "queued" ? el("input", { type: "checkbox", className: "selbox", checked: state.selected.has(t.id), ariaLabel: "בחירה" }) : null;
+            if (pickBox)
+              pickBox.onchange = () => {
+                if (pickBox.checked) state.selected.add(t.id);
+                else state.selected.delete(t.id);
+                render();
+              };
             return el(
               "div",
               { className: t.upcoming ? "row upcoming" : "row" },
+              pickBox,
               el(
                 "div",
                 { className: "grow" },
@@ -337,6 +380,7 @@ function listView(): HTMLElement {
                   t.upcoming ? el("span", { className: "upcoming-mark", title: "טרם בוצע: ניתן לשנות מכאן והלאה", textContent: "⏳ " }) : t.recurring_series_id != null ? el("span", { title: "הוצאה חוזרת", textContent: "🔁 " }) : null,
                   catPath(t.category_id),
                 ),
+                biz != null ? el("span", { className: t.id > 0 && state.biz.tx.has(t.id) ? "bizchip" : "bizchip auto", title: t.id > 0 && state.biz.tx.has(t.id) ? "סומנה בעסק" : "בעסק לפי הקטגוריה", textContent: bizName(state.biz, biz) }) : null,
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
               ),
               syncMark(t),
@@ -363,7 +407,43 @@ function listView(): HTMLElement {
       money(total, total < 0 ? "expense" : "income"),
     );
   }
-  return el("div", {}, header, monthBar(), ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
+  const hasBiz = state.biz.businesses.length > 0;
+  const bizSeg = hasBiz
+    ? el(
+        "div",
+        { className: "seg3b" },
+        ...(
+          [
+            ["all", "הכול"],
+            ["biz", "רק עסק"],
+            ["none", "ללא עסק"],
+          ] as const
+        ).map(([k, label]) => {
+          const b = el("button", { type: "button", textContent: label });
+          b.setAttribute("aria-pressed", String(state.bizFilter === k));
+          b.onclick = () => ((state.bizFilter = k), render());
+          return b;
+        }),
+      )
+    : null;
+  const selectBtn = hasBiz ? el("button", { className: "btn", type: "button", textContent: state.selecting ? "ביטול בחירה" : "בחירה וסימון לעסק" }) : null;
+  if (selectBtn)
+    selectBtn.onclick = () => {
+      state.selecting = !state.selecting;
+      state.selected.clear();
+      render();
+    };
+  const tag = el("button", { className: "btn primary", type: "button", textContent: `סימון לעסק (${state.selected.size})` });
+  tag.disabled = state.selected.size === 0;
+  tag.onclick = () => openTagDialog(manageCtx(), [...state.selected], () => ((state.selecting = false), state.selected.clear()));
+  const selBar = state.selecting
+    ? el("div", { className: "selbar" }, el("div", { className: "grow muted", textContent: "בחרו תנועות, גם ישנות" }), tag)
+    : null;
+  return el("div", {}, header, monthBar(), bizSeg, selectBtn ? el("div", { className: "actions", style: "justify-content:flex-start;margin-bottom:8px" }, selectBtn) : null, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]), selBar);
+}
+
+function manageCtx() {
+  return { biz: state.biz, cats: state.cats, txs: state.txs, openDialog, reload: load, back: () => goBack("settings") };
 }
 
 /** Open a modal built by `build`, which gets a way to close it. */
@@ -608,6 +688,12 @@ function categoriesLinkCard(): HTMLElement {
   return el("div", { className: "card" }, el("h2", { textContent: "קטגוריות" }), el("p", { className: "muted", textContent: "הוספה ומחיקה של קטגוריות ותתי-קטגוריות." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
 }
 
+function businessesLinkCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "ניהול עסקים" });
+  open.onclick = () => go("businesses");
+  return el("div", { className: "card" }, el("h2", { textContent: "עסקים" }), el("p", { className: "muted", textContent: "עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
+}
+
 function categoriesCard(): HTMLElement {
   const kinds = [
     [false, "הוצאות"],
@@ -636,7 +722,9 @@ function categoriesCard(): HTMLElement {
         el("div", { className: "name", textContent: c.name }),
         !sub && c.linked_to != null && el("div", { className: "muted", textContent: `בפעמונים: ${linkedName(c) ?? ""}` }),
         !sub && !c.from_paamonim && c.linked_to == null && el("div", { className: "muted", textContent: "לא מקושרת לפעמונים" }),
+        state.biz.cat.has(c.id) ? el("div", {}, el("span", { className: "bizchip", textContent: `עסק: ${bizName(state.biz, state.biz.cat.get(c.id))}` })) : null,
       ),
+      state.biz.businesses.length > 0 && iconBtn("💼", "עסק של הקטגוריה", () => openCategoryBusinessDialog(manageCtx(), c)),
       !sub && !c.from_paamonim && iconBtn("🔗", "קטגוריה בפעמונים", () => openLinkCategoryDialog(c)),
       !sub && iconBtn("+", "הוספת תת-קטגוריה", () => openAddCategoryDialog(c.is_income, c.id)),
       sub && iconBtn("⇄", "העברה לקטגוריה אחרת", () => openMoveCategoryDialog(c)),
@@ -686,6 +774,7 @@ function settingsView(): HTMLElement {
     el("h1", { textContent: "הגדרות" }),
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
     categoriesLinkCard(),
+    businessesLinkCard(),
     historyCard(),
   );
 }
@@ -956,6 +1045,34 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const subPick = combo("תת-קטגוריה");
   const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35, value: existing?.note ?? "" });
   const err = el("div", { className: "error" });
+  // The business the line counts in: its own tag, or the one its category gives (then there is nothing to choose).
+  const ownTag = existing && existing.id > 0 ? (state.biz.tx.get(existing.id) ?? null) : null;
+  const bizPick = businessChips(state.biz, ownTag, true);
+  const bizRow = el("div", {}, bizPick.root);
+  const lastKey = (cat: number) => `biz-last-${cat}`;
+  const syncBiz = () => {
+    let cat: number | null = null;
+    try {
+      cat = categoryId();
+    } catch {
+      const top = topPick.value;
+      cat = top ? Number(top) : null;
+    }
+    const given = cat != null ? categoryBusiness(state.biz, state.cats, cat) : undefined;
+    bizPick.lock(given != null && ownTag == null ? bizName(state.biz, given) : null);
+    bizRow.style.display = state.biz.businesses.length === 0 || repeat.checked ? "none" : "";
+  };
+  /** A new line starts with the business last used in the same category. */
+  const rememberedBiz = () => {
+    if (existing) return;
+    try {
+      const sub = subPick.value || topPick.value;
+      const v = sub ? localStorage.getItem(lastKey(Number(sub))) : null;
+      bizPick.set(v && state.biz.businesses.some((b) => String(b.id) === v) ? Number(v) : null);
+    } catch {
+      /* storage unavailable */
+    }
+  };
 
   // Repeating monthly: for a new transaction it is opt-in; for an occurrence it is always on.
   const repeat = el("input", { type: "checkbox", checked: seriesId !== undefined, disabled: seriesId !== undefined });
@@ -1058,6 +1175,9 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
   fillCats(false);
+  for (const c of [topPick.input, subPick.input]) c.addEventListener("change", () => (rememberedBiz(), syncBiz()));
+  repeat.addEventListener("change", syncBiz);
+  syncBiz();
 
   const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
@@ -1112,6 +1232,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     el("label", {}, "תת-קטגוריה", subPick.root),
     el("label", {}, "תאריך", dateField(date)),
     el("label", {}, "הערה", note),
+    bizRow,
     !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
     repeatBox,
     err,
@@ -1158,16 +1279,25 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
         };
         if (seriesId !== undefined) await api.changeRecurring(seriesId, rule);
         else await api.addRecurring(rule);
-      } else if (existing) await api.updateTransaction(existing.id, body);
-      else {
+      } else if (existing) {
+        await api.updateTransaction(existing.id, body);
+        if (bizPick.value !== ownTag) await api.tagTransactions([existing.id], bizPick.value);
+      } else {
+        const chosen = bizPick.value;
         try {
-          await api.addTransaction(body);
+          const id = await api.addTransaction(body);
+          if (chosen != null) await api.tagTransactions([id], chosen);
         } catch (e3) {
           // No connection: keep the line on this device and send it when the connection is back.
           if (!isNetworkError(e3)) throw e3;
-          await enqueue(body);
+          await enqueue(body, chosen);
           requestPersistence();
         }
+      }
+      try {
+        localStorage.setItem(lastKey(body.category_id), bizPick.value == null ? "" : String(bizPick.value));
+      } catch {
+        /* storage unavailable */
       }
       showPeriodFor(date.value);
       dlg.close();
@@ -1187,7 +1317,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
 function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories"))) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       if (view === "insights") {
         if (state.view === "insights") {
@@ -1218,9 +1348,23 @@ function insightsScreen(): HTMLElement {
   });
 }
 
+function businessScreen(): HTMLElement {
+  return businessDashboard({
+    txs: state.txs,
+    cats: state.cats,
+    biz: state.biz,
+    period: state.period,
+    view: state.bizView,
+    monthBar,
+    setView: (patch) => ((state.bizView = { ...state.bizView, ...patch }), render()),
+    openDialog,
+    back: () => goBack("month"),
+  });
+}
+
 let renderedView: View | undefined;
 function render() {
-  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView }[state.view]();
+  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()) }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   if (renderedView !== state.view) window.scrollTo(0, 0);
   renderedView = state.view;
@@ -1236,7 +1380,8 @@ function render() {
 async function flushQueue() {
   for (const q of await queuedList()) {
     try {
-      await api.addTransaction(q.tx);
+      const id = await api.addTransaction(q.tx);
+      if (q.business != null) await api.tagTransactions([id], q.business).catch(() => {});
     } catch (e) {
       if (isNetworkError(e)) return;
       // The server refused this line (it would be refused again): drop it rather than block the rest.
@@ -1274,6 +1419,12 @@ async function load() {
     state.offline = true;
   }
   const { cats, recurring, occurrences, log } = data;
+  // Businesses are optional: a failure (or being offline) leaves the last ones in place.
+  try {
+    state.biz = toBizData(await api.businesses());
+  } catch {
+    /* keep what we had */
+  }
   const queued = await queuedList();
   const txs: Transaction[] = [...data.txs, ...queued.map((q: Queued) => ({ id: -q.qid, ...q.tx, sync_state: "queued" }))];
   state.mirror = data.mirror;

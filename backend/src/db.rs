@@ -67,6 +67,21 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              old_value TEXT,
              new_value TEXT
          );
+         -- Businesses (sub-businesses of one whole business) and which transactions and
+         -- categories count in them. Local only: nothing here is mirrored to Paamonim.
+         CREATE TABLE IF NOT EXISTS businesses (
+             id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL,
+             is_general INTEGER NOT NULL DEFAULT 0   -- shared costs not tied to one business
+         );
+         CREATE TABLE IF NOT EXISTS transaction_business (
+             transaction_id INTEGER PRIMARY KEY,
+             business_id INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS category_business (
+             category_id INTEGER PRIMARY KEY,
+             business_id INTEGER NOT NULL
+         );
          CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",

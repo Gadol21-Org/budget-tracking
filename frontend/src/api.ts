@@ -49,6 +49,19 @@ export interface Category {
   linked_to: number | null;
 }
 
+/** One business of the whole business; the general one holds costs shared by the others. */
+export interface Business {
+  id: number;
+  name: string;
+  is_general: boolean;
+}
+
+/** Which transactions (tags) and categories count in which business, as [id, business id] pairs. */
+export interface BusinessData {
+  businesses: Business[];
+  links: { transactions: [number, number][]; categories: [number, number][] };
+}
+
 export interface MonthlyTotal {
   month: string;
   category_id: number | null;
@@ -117,6 +130,18 @@ export const api = {
   /** Also deletes sub-categories; their transactions move to `moveTo` (required if there are any). */
   deleteCategory: (id: number, moveTo?: number) =>
     request<number>(`/api/categories/${id}${moveTo != null ? `?move_to=${moveTo}` : ""}`, { method: "DELETE" }),
+  businesses: () => request<BusinessData>("/api/businesses"),
+  addBusiness: (name: string, isGeneral: boolean) =>
+    request<number>("/api/businesses", { method: "POST", body: JSON.stringify({ name, is_general: isGeneral }) }),
+  renameBusiness: (id: number, name: string) =>
+    request<void>(`/api/businesses/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
+  deleteBusiness: (id: number) => request<void>(`/api/businesses/${id}`, { method: "DELETE" }),
+  /** Make a category's transactions count in a business (null removes the link). */
+  linkCategoryBusiness: (category: number, business: number | null) =>
+    request<void>(`/api/categories/${category}/business`, { method: "PUT", body: JSON.stringify({ business_id: business }) }),
+  /** Tag transactions as a business's (null removes their tags). */
+  tagTransactions: (ids: number[], business: number | null) =>
+    request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: business }) }),
   exportSheets: () => request<{ transactions: number; tabs: number }>("/api/export/sheets", { method: "POST" }),
   updateTransaction: (id: number, t: Omit<Transaction, "id" | "sync_state">) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
