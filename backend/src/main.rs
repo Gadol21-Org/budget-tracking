@@ -347,7 +347,61 @@ async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
         SessionError::NoCredentials(e) => anyhow::anyhow!(e.1),
         SessionError::Login(e) => e,
     })?;
-    mirror::run(client, db, &mirror::Options::from_env()).await
+    let result = mirror::run(client, db, &mirror::Options::from_env()).await;
+    *LAST_MIRROR.lock().unwrap() = Some(format!(
+        "{} UTC: {}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"),
+        match &result {
+            Ok(s) => serde_json::to_string(s).unwrap_or_default(),
+            Err(e) => format!("failed: {e:#}"),
+        }
+    ));
+    result
+}
+
+/// The outcome of the latest mirror run, for `/api/mirror/debug`.
+static LAST_MIRROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[derive(serde::Serialize)]
+struct MirrorDebug {
+    /// Time and summary of the latest run since the server started (`stopped` says why a
+    /// run ended early).
+    last_run: Option<String>,
+    /// Transactions that are neither synced nor kept local, with their category: no amounts
+    /// or notes.
+    unsynced: Vec<String>,
+}
+
+/// Why lines are not syncing: the latest run's outcome and the unsynced rows.
+async fn mirror_debug(State(db): State<Db>) -> Result<Json<MirrorDebug>, (StatusCode, String)> {
+    let cats = db.list_categories().await.map_err(internal)?;
+    let name = |id: Option<i64>| {
+        let c = cats.iter().find(|c| Some(c.id) == id);
+        match c.and_then(|c| cats.iter().find(|p| Some(p.id) == c.parent_id)) {
+            Some(p) => format!("{} > {}", p.name, c.map_or("", |c| c.name.as_str())),
+            None => c.map_or("(none)".into(), |c| c.name.clone()),
+        }
+    };
+    let unsynced = db
+        .list_transactions()
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .filter(|t| !matches!(t.sync_state.as_str(), "synced" | "local"))
+        .map(|t| {
+            format!(
+                "#{} {} {} [{}]",
+                t.id,
+                t.date,
+                name(t.category_id),
+                t.sync_state
+            )
+        })
+        .collect();
+    Ok(Json(MirrorDebug {
+        last_run: LAST_MIRROR.lock().unwrap().clone(),
+        unsynced,
+    }))
 }
 
 /// After a local change: mirror it, in the background. Failures stay visible via `sync_state`
@@ -497,6 +551,7 @@ fn router(db: Db) -> Router {
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
         .route("/api/mirror/status", get(mirror_status))
+        .route("/api/mirror/debug", get(mirror_debug))
         .route(
             "/api/mirror/paamonim/retry/:id",
             axum::routing::post(retry_mirror),
