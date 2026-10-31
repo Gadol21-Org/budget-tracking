@@ -49,6 +49,16 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              payment_method_id INTEGER REFERENCES payment_methods(id),
              note TEXT NOT NULL DEFAULT ''
          );
+         -- What changed, with values before and after as JSON; pruned after a year.
+         CREATE TABLE IF NOT EXISTS change_log (
+             id INTEGER PRIMARY KEY,
+             at TEXT NOT NULL,                   -- UTC, YYYY-MM-DDTHH:MM:SSZ
+             kind TEXT NOT NULL,
+             entity_id INTEGER,
+             old_value TEXT,
+             new_value TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
     )?;

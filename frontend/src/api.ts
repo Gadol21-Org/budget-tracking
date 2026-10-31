@@ -59,6 +59,17 @@ export interface ImportSummary {
   transactions_skipped: number;
 }
 
+/** One recorded change. `old`/`new` are snapshots (names, not ids) and depend on `kind`. */
+export interface LogEntry {
+  id: number;
+  /** UTC, ISO 8601. */
+  at: string;
+  kind: string;
+  entity_id: number | null;
+  old: Record<string, unknown> | null;
+  new: Record<string, unknown> | null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { cache: "no-store", headers: { "Content-Type": "application/json" }, ...init });
   if (!res.ok) throw new Error(await res.text());
@@ -66,6 +77,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
+  log: (beforeId?: number, limit = 100) =>
+    request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),
   transactions: () => request<Transaction[]>("/api/transactions"),
   categories: () => request<Category[]>("/api/categories"),
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),

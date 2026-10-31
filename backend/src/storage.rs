@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 
 #[derive(Serialize, Clone)]
@@ -309,6 +310,22 @@ pub trait Storage: Send + Sync {
         _t: Option<&NewTransaction>,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("repeating transactions are not supported by this storage backend")
+    }
+    /// Operation log (see `oplog.rs`). Backends without support keep none.
+    async fn log_append(&self, _e: &NewLogEntry) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Newest first; with `before_id`, only entries older than that one.
+    async fn list_log(
+        &self,
+        _limit: usize,
+        _before_id: Option<i64>,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        Ok(Vec::new())
+    }
+    /// Delete entries stamped before `before` (UTC, `YYYY-MM-DDTHH:MM:SSZ`); returns how many.
+    async fn prune_log(&self, _before: &str) -> anyhow::Result<usize> {
+        Ok(0)
     }
     /// Computed on demand from transactions. Fast enough at this data size; add
     /// pre-aggregation (or a date index) if a backend gets slow with a lot of history.
@@ -816,6 +833,54 @@ impl Storage for SqliteStorage {
         }
         tx.commit()?;
         Ok(added)
+    }
+
+    async fn log_append(&self, e: &NewLogEntry) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                e.at,
+                e.kind,
+                e.entity_id,
+                e.old.as_ref().map(|v| v.to_string()),
+                e.new.as_ref().map(|v| v.to_string())
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn list_log(
+        &self,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, at, kind, entity_id, old_value, new_value FROM change_log
+             WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![before_id.unwrap_or(i64::MAX), limit as i64], |r| {
+                Ok(LogEntry {
+                    id: r.get(0)?,
+                    at: r.get(1)?,
+                    kind: r.get(2)?,
+                    entity_id: r.get(3)?,
+                    old: r.get::<_, Option<String>>(4)?.and_then(|s| s.parse().ok()),
+                    new: r.get::<_, Option<String>>(5)?.and_then(|s| s.parse().ok()),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM change_log WHERE at < ?1", params![before])?)
     }
 }
 

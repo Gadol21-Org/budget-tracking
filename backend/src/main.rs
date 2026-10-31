@@ -4,6 +4,7 @@ mod import;
 mod mirror;
 mod money;
 mod mysql;
+mod oplog;
 mod paamonim;
 mod recurring;
 mod sheets;
@@ -84,6 +85,24 @@ async fn delete_transaction(
 ) -> Result<StatusCode, (StatusCode, String)> {
     db.delete_transaction(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct LogQuery {
+    /// Entries per page, newest first (default 100, at most 500).
+    limit: Option<usize>,
+    /// Only entries older than this one: pass the last id of the previous page.
+    before_id: Option<i64>,
+}
+
+async fn change_log(
+    State(db): State<Db>,
+    Query(q): Query<LogQuery>,
+) -> Result<Json<Vec<oplog::LogEntry>>, (StatusCode, String)> {
+    db.list_log(q.limit.unwrap_or(100).clamp(1, 500), q.before_id)
+        .await
+        .map(Json)
+        .map_err(internal)
 }
 
 async fn list_categories(
@@ -421,6 +440,7 @@ fn router(db: Db) -> Router {
             axum::routing::put(change_recurring).delete(cancel_recurring),
         )
         .route("/api/monthly-totals", get(monthly_totals))
+        .route("/api/log", get(change_log))
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
@@ -448,6 +468,9 @@ async fn main() -> anyhow::Result<()> {
         other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or mysql)"),
     };
 
+    // Every change made through the app is recorded in the change log.
+    let db: Db = Arc::new(oplog::Logged(db));
+
     // Nightly (configurable) snapshot to Google Sheets, only when configured.
     if std::env::var("GOOGLE_SHEET_ID").is_ok() {
         let hours: u64 = std::env::var("SHEETS_EXPORT_INTERVAL_HOURS")
@@ -464,6 +487,22 @@ async fn main() -> anyhow::Result<()> {
                 }
                 if let Err(e) = sheets::export(db.as_ref()).await {
                     tracing::warn!("sheets export failed: {e}");
+                }
+            }
+        });
+    }
+
+    // Keep the last year of the change log: prune now and then daily.
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+            loop {
+                tick.tick().await;
+                match oplog::prune(db.as_ref()).await {
+                    Ok(n) if n > 0 => tracing::info!("pruned {n} old change log entries"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("pruning the change log failed: {e}"),
                 }
             }
         });

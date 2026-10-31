@@ -13,13 +13,14 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::ConnectOptions;
 use sqlx::Row;
 
+use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, PaymentMethod,
     PendingMirror, Storage, Transaction,
 };
 
-const SCHEMA: [&str; 5] = [
+const SCHEMA: [&str; 6] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -70,6 +71,16 @@ const SCHEMA: [&str; 5] = [
          series_id BIGINT NOT NULL,
          month VARCHAR(7) NOT NULL,
          PRIMARY KEY (series_id, month)
+     )",
+    // What changed, with values before and after as JSON; pruned after a year.
+    "CREATE TABLE IF NOT EXISTS change_log (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         at VARCHAR(20) NOT NULL,                -- UTC, YYYY-MM-DDTHH:MM:SSZ
+         kind VARCHAR(40) NOT NULL,
+         entity_id BIGINT NULL,
+         old_value TEXT NULL,
+         new_value TEXT NULL,
+         INDEX idx_change_log_at (at)
      )",
 ];
 
@@ -648,6 +659,56 @@ impl Storage for MySqlStorage {
         }
         tx.commit().await?;
         Ok(added)
+    }
+
+    async fn log_append(&self, e: &NewLogEntry) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&e.at)
+        .bind(&e.kind)
+        .bind(e.entity_id)
+        .bind(e.old.as_ref().map(|v| v.to_string()))
+        .bind(e.new.as_ref().map(|v| v.to_string()))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_log(&self, limit: usize, before_id: Option<i64>) -> Result<Vec<LogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, at, kind, entity_id, old_value, new_value FROM change_log
+             WHERE id < ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(before_id.unwrap_or(i64::MAX))
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let json = |col: &str| -> Result<Option<serde_json::Value>> {
+                    let s: Option<String> = r.try_get(col)?;
+                    Ok(s.and_then(|s| s.parse().ok()))
+                };
+                Ok(LogEntry {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    kind: r.try_get("kind")?,
+                    entity_id: r.try_get("entity_id")?,
+                    old: json("old_value")?,
+                    new: json("new_value")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn prune_log(&self, before: &str) -> Result<usize> {
+        let res = sqlx::query("DELETE FROM change_log WHERE at < ?")
+            .bind(before)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() as usize)
     }
 
     /// Aggregated in the database.
