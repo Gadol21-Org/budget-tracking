@@ -188,7 +188,7 @@ interface BarOpts {
   height?: number;
 }
 
-/** Bar chart as inline SVG; every slot is tappable (data-i). Always drawn left to right in time. */
+/** Bar chart as inline SVG; every slot is tappable (data-i). Drawn right to left in time (RTL): the first slot is on the right, so the previous/next arrows match. */
 function barChart(o: BarOpts): string {
   const W = 360, padX = 6, H = o.height ?? 120, top = 16;
   const n = o.labels.length, slot = (W - 2 * padX) / n;
@@ -198,7 +198,7 @@ function barChart(o: BarOpts): string {
   const y = (v: number) => (v / max) * H;
   let out = `<svg viewBox="0 0 ${W} ${H + top + 18}" width="100%" role="img" style="direction:ltr">`;
   o.labels.forEach((label, i) => {
-    const x0 = padX + i * slot;
+    const x0 = padX + (n - 1 - i) * slot;
     const hot = o.highlight.size === 0 || o.highlight.has(i);
     const op = hot ? 1 : 0.45;
     if (mode === "grouped") {
@@ -228,7 +228,8 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   const all = [...values, ...(ghost ?? [])];
   const max = Math.max(0, ...all), min = Math.min(0, ...all), span = max - min || 1;
   const n = Math.max(values.length, ghost?.length ?? 0, labels.length);
-  const x = (i: number) => padX + (i * (W - 2 * padX)) / Math.max(1, n - 1);
+  // RTL: index 0 (earliest) is on the right.
+  const x = (i: number) => padX + ((n - 1 - i) * (W - 2 * padX)) / Math.max(1, n - 1);
   const y = (v: number) => top + ((max - v) / span) * H;
   const poly = (vs: number[]) => vs.map((v, i) => `${x(i)},${y(v)}`).join(" ");
   const last = values.length - 1;
