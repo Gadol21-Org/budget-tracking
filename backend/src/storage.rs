@@ -88,6 +88,34 @@ impl std::fmt::Display for CategoryError {
 
 impl std::error::Error for CategoryError {}
 
+/// Everything the plain lists leave out, for a full backup: deleted/merged categories, the
+/// Paamonim ids, which Paamonim line each transaction is linked to, and the mirror metadata.
+#[derive(Default)]
+pub struct RawBackup {
+    pub categories: Vec<RawCategory>,
+    pub payment_methods: Vec<RawPaymentMethod>,
+    /// (transaction id, Paamonim line id, mirror date)
+    pub tx_links: Vec<(i64, Option<String>, Option<String>)>,
+    /// `mirror_meta` key/value pairs.
+    pub meta: Vec<(String, String)>,
+}
+
+pub struct RawCategory {
+    pub id: i64,
+    pub name: String,
+    pub is_income: bool,
+    pub paamonim_item_id: Option<String>,
+    pub parent_id: Option<i64>,
+    pub deleted: bool,
+    pub merged_into: Option<i64>,
+}
+
+pub struct RawPaymentMethod {
+    pub id: i64,
+    pub name: String,
+    pub paamonim_id: Option<String>,
+}
+
 /// Per-month, per-category totals, computed from transactions on demand.
 #[derive(Serialize)]
 pub struct MonthlyTotal {
@@ -184,6 +212,8 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
+    /// Raw rows for the full Google Sheets backup.
+    async fn raw_backup(&self) -> anyhow::Result<RawBackup>;
     /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
     /// Set `sync_state` (e.g. `verifying` before a request, `error`, `local`).
@@ -582,6 +612,51 @@ impl Storage for SqliteStorage {
                  AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
             [],
         )?)
+    }
+
+    async fn raw_backup(&self) -> anyhow::Result<RawBackup> {
+        let conn = self.0.lock().unwrap();
+        let categories = conn
+            .prepare(
+                "SELECT id, name, is_income, paamonim_item_id, parent_id, deleted, merged_into
+                 FROM categories ORDER BY id",
+            )?
+            .query_map([], |r| {
+                Ok(RawCategory {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    is_income: r.get::<_, i64>(2)? != 0,
+                    paamonim_item_id: r.get(3)?,
+                    parent_id: r.get(4)?,
+                    deleted: r.get::<_, i64>(5)? != 0,
+                    merged_into: r.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let payment_methods = conn
+            .prepare("SELECT id, name, paamonim_id FROM payment_methods ORDER BY id")?
+            .query_map([], |r| {
+                Ok(RawPaymentMethod {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    paamonim_id: r.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let tx_links = conn
+            .prepare("SELECT id, paamonim_line_id, mirror_date FROM transactions ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let meta = conn
+            .prepare("SELECT k, v FROM mirror_meta ORDER BY k")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RawBackup {
+            categories,
+            payment_methods,
+            tx_links,
+            meta,
+        })
     }
 
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {

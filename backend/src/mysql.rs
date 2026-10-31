@@ -17,7 +17,7 @@ use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     rounds_to, Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
-    PaymentMethod, PendingMirror, Storage, Transaction,
+    PaymentMethod, PendingMirror, RawBackup, RawCategory, RawPaymentMethod, Storage, Transaction,
 };
 
 const SCHEMA: [&str; 8] = [
@@ -339,6 +339,67 @@ impl Storage for MySqlStorage {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() as usize)
+    }
+
+    async fn raw_backup(&self) -> Result<RawBackup> {
+        let categories = sqlx::query(
+            "SELECT id, name, CAST(is_income AS SIGNED) AS is_income, paamonim_item_id, parent_id,
+                    CAST(deleted AS SIGNED) AS deleted, merged_into
+             FROM categories ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .iter()
+        .map(|r| {
+            Ok(RawCategory {
+                id: r.try_get("id")?,
+                name: r.try_get("name")?,
+                is_income: r.try_get::<i64, _>("is_income")? != 0,
+                paamonim_item_id: r.try_get("paamonim_item_id")?,
+                parent_id: r.try_get("parent_id")?,
+                deleted: r.try_get::<i64, _>("deleted")? != 0,
+                merged_into: r.try_get("merged_into")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+        let payment_methods =
+            sqlx::query("SELECT id, name, paamonim_id FROM payment_methods ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?
+                .iter()
+                .map(|r| {
+                    Ok(RawPaymentMethod {
+                        id: r.try_get("id")?,
+                        name: r.try_get("name")?,
+                        paamonim_id: r.try_get("paamonim_id")?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+        let tx_links =
+            sqlx::query("SELECT id, paamonim_line_id, mirror_date FROM transactions ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?
+                .iter()
+                .map(|r| {
+                    Ok((
+                        r.try_get("id")?,
+                        r.try_get("paamonim_line_id")?,
+                        r.try_get("mirror_date")?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+        let meta = sqlx::query("SELECT k, v FROM mirror_meta ORDER BY k")
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|r| Ok((r.try_get("k")?, r.try_get("v")?)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(RawBackup {
+            categories,
+            payment_methods,
+            tx_links,
+            meta,
+        })
     }
 
     async fn pending_line_deletes(&self) -> Result<Vec<LineDelete>> {
