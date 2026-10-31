@@ -393,7 +393,9 @@ const overview: Body = (ctx, baseLabel, partial) => {
 const catColor = (ctx: Ctx, id: number | null): string => {
   const tops = ctx.cats.filter((c) => c.parent_id == null && !c.is_income).map((c) => c.id).sort((a, b) => a - b);
   const i = tops.indexOf(id as number);
-  return i < 0 ? OTHER_COLOR : PALETTE[i % PALETTE.length];
+  if (i < 0) return OTHER_COLOR;
+  // Every category gets its own colour: the fixed palette first, then evenly spread hues.
+  return i < PALETTE.length ? PALETTE[i] : `hsl(${Math.round((i * 137.5) % 360)} 55% 45%)`;
 };
 
 const cats: Body = (ctx, baseLabel, partial) => {
@@ -403,13 +405,11 @@ const cats: Body = (ctx, baseLabel, partial) => {
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
   const rows = [...cur.groups.entries()].sort((a, b) => b[1].total - a[1].total);
   const max = rows[0]?.[1].total ?? 1;
-  const top = rows.slice(0, 6), rest = rows.slice(6).reduce((s, [, g]) => s + g.total, 0);
-  const parts = [...top.map(([id, g]) => ({ value: g.total, color: catColor(ctx, id) })), { value: rest, color: OTHER_COLOR }];
+  const parts = rows.map(([id, g]) => ({ value: g.total, color: catColor(ctx, id) }));
   const legend = el(
     "div",
     { className: "donutlegend" },
-    ...top.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
-    rest > 0 && el("div", {}, el("i", { style: `background:${OTHER_COLOR}` }), "אחר ", el("span", { className: "muted num", textContent: `${Math.round((rest / cur.expense) * 100)}%` })),
+    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
   );
   return el(
     "div",
