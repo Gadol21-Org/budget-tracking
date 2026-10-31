@@ -263,6 +263,7 @@ export function insightsView(ctx: Ctx): HTMLElement {
   cmpBtn.onclick = () => openCompareDialog(ctx);
   const partial = isPartial(ctx.period);
   const body = { overview, cats, trends, changes, fixed, rhythm }[ctx.ins.dash](ctx, base.label);
+  body.classList.add("dash", `dash-${ctx.ins.dash}`);
   const hasCompare = ctx.ins.dash !== "trends" && ctx.ins.dash !== "fixed";
   return el(
     "div",
@@ -426,7 +427,7 @@ const cats: Body = (ctx, baseLabel) => {
       ? el("div", { className: "empty", textContent: "אין הוצאות בתקופה זו" })
       : el(
           "div",
-          {},
+          { className: "catsgrid" },
           el("div", { className: "card donutcard" }, svgBox(donut(parts, shekels(cur.expense))), legend),
           el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
           el(
