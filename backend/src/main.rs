@@ -320,12 +320,15 @@ fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, Strin
     Ok((base, user, pass))
 }
 
-/// Writing to Paamonim is opt-in: set PAAMONIM_MIRROR=1.
+/// Writing to Paamonim is on whenever Paamonim credentials are set; `PAAMONIM_MIRROR=0` turns
+/// it off. Without credentials it is off, so nothing waits for a sync that can't happen.
 fn mirroring_enabled() -> bool {
-    matches!(
+    let off = matches!(
         std::env::var("PAAMONIM_MIRROR").as_deref(),
-        Ok("1") | Ok("true")
-    )
+        Ok("0") | Ok("false")
+    );
+    let has = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
+    !off && has("PAAMONIM_USERNAME") && has("PAAMONIM_PASSWORD")
 }
 
 /// Serialises mirror runs so overlapping triggers can't post the same line twice.

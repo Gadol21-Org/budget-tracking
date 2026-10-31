@@ -63,7 +63,7 @@ STORAGE=mysql
 MYSQL_URL=mysql://<admin user>:<password>@10.0.1.20:3306/budget
 ```
 
-Add `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` for the nightly Sheets export if you want it. Leave `PAAMONIM_MIRROR` unset (off).
+Add `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` for the nightly Sheets export if you want it. With Paamonim credentials set, mirroring to Paamonim is on; add `PAAMONIM_MIRROR=0` to keep it off, or `PAAMONIM_MIRROR_DRY_RUN=1` to only see what it would send.
 
 Then merge to `main`, or run the workflow by hand.
 
