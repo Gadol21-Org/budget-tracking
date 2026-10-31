@@ -190,3 +190,36 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
 .combo-list button[aria-selected="true"] { font-weight: 700; }
 .combo-empty { padding: 10px 12px; color: var(--muted); }
+
+/* Insights (dashboards) */
+.chips { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 10px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 14px; font-size: .92rem; white-space: nowrap; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); border-color: var(--brand); font-weight: 700; }
+.cmpbar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: .9rem; }
+.cmpbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: .88rem; }
+.partialnote { background: color-mix(in srgb, #f59e0b 12%, transparent); border-radius: 10px; padding: 8px 12px; font-size: .85rem; margin-bottom: 10px; }
+.kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
+.kpi .l { font-size: .8rem; color: var(--muted); }
+.kpi .v { font-weight: 700; font-size: 1.1rem; }
+.delta { font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.delta.bad { color: var(--expense); } .delta.good { color: var(--income); } .delta.flat { color: var(--muted); }
+.insight { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.insight:last-child { border-bottom: 0; }
+.insight .ico { font-size: 1.2rem; }
+.chart svg { display: block; }
+.legend { display: flex; gap: 12px; font-size: .78rem; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
+.legend i, .donutlegend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; }
+.donutcard { display: flex; align-items: center; gap: 14px; }
+.donutlegend { flex: 1; font-size: .85rem; min-width: 0; }
+.row .amt { text-align: end; }
+.row .chev { font-size: 1.1rem; }
+.crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .92rem; margin-bottom: 10px; }
+.crumb { border: 0; background: none; color: var(--brand); font-weight: 600; cursor: pointer; padding: 4px 0; }
+.small { font-size: .82rem; }
+.pad { padding: 0 4px; }
+
+.chart + .small { margin-top: 8px; }
+form.add label[hidden] { display: none; }
+.card + .btn, .rows + .btn { margin-top: 10px; width: 100%; }
