@@ -32,6 +32,26 @@ pub struct NewTransaction {
     pub note: String,
 }
 
+/// One business of the whole business. The `is_general` one holds shared costs.
+#[derive(Serialize, Clone)]
+pub struct Business {
+    pub id: i64,
+    pub name: String,
+    pub is_general: bool,
+}
+
+/// What counts in which business: explicit tags on transactions, and categories whose
+/// transactions count in a business unless tagged otherwise.
+#[derive(Serialize, Default, Clone)]
+pub struct BusinessLinks {
+    /// (transaction id, business id)
+    pub transactions: Vec<(i64, i64)>,
+    /// (category id, business id)
+    pub categories: Vec<(i64, i64)>,
+    /// Categories whose transactions must say which business they belong to.
+    pub required: Vec<i64>,
+}
+
 #[derive(Serialize, Clone)]
 pub struct PaymentMethod {
     pub id: i64,
@@ -236,6 +256,31 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
+    async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
+    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
+    async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
+    /// Also drops every tag and category link that pointed at it.
+    async fn remove_business(&self, id: i64) -> anyhow::Result<()>;
+    /// Tags of transactions that still exist, and the category links.
+    async fn business_links(&self) -> anyhow::Result<BusinessLinks>;
+    /// Make transactions of `category` count in `business` (None removes the link).
+    async fn set_category_business(
+        &self,
+        category: i64,
+        business: Option<i64>,
+    ) -> anyhow::Result<()>;
+    /// Tag transactions as `business`'s (None removes their tags).
+    async fn set_transactions_business(
+        &self,
+        ids: &[i64],
+        business: Option<i64>,
+    ) -> anyhow::Result<()>;
+    /// Make new transactions in `category` say which business they belong to (or none).
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()>;
     /// Raw rows for the full Google Sheets backup.
     async fn raw_backup(&self) -> anyhow::Result<RawBackup>;
     /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
@@ -687,6 +732,139 @@ impl Storage for SqliteStorage {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    async fn list_businesses(&self) -> anyhow::Result<Vec<Business>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, name, is_general FROM businesses ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Business {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    is_general: r.get::<_, i64>(2)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64> {
+        let conn = self.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO businesses (name, is_general) VALUES (?1, ?2)",
+            params![name, is_general],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "UPDATE businesses SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        Ok(())
+    }
+
+    async fn remove_business(&self, id: i64) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM transaction_business WHERE business_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM category_business WHERE business_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM businesses WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    async fn business_links(&self) -> anyhow::Result<BusinessLinks> {
+        let conn = self.0.lock().unwrap();
+        let mut out = BusinessLinks::default();
+        let mut stmt = conn.prepare(
+            "SELECT b.transaction_id, b.business_id FROM transaction_business b
+             JOIN transactions t ON t.id = b.transaction_id",
+        )?;
+        out.transactions = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare("SELECT category_id, business_id FROM category_business")?;
+        out.categories = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare("SELECT category_id FROM category_business_required")?;
+        out.required = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(out)
+    }
+
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()> {
+        let conn = self.0.lock().unwrap();
+        if required {
+            conn.execute(
+                "INSERT OR IGNORE INTO category_business_required (category_id) VALUES (?1)",
+                params![category],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM category_business_required WHERE category_id = ?1",
+                params![category],
+            )?;
+        }
+        Ok(())
+    }
+
+    async fn set_category_business(
+        &self,
+        category: i64,
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        let conn = self.0.lock().unwrap();
+        match business {
+            Some(b) => conn.execute(
+                "INSERT INTO category_business (category_id, business_id) VALUES (?1, ?2)
+                 ON CONFLICT(category_id) DO UPDATE SET business_id = excluded.business_id",
+                params![category, b],
+            )?,
+            None => conn.execute(
+                "DELETE FROM category_business WHERE category_id = ?1",
+                params![category],
+            )?,
+        };
+        Ok(())
+    }
+
+    async fn set_transactions_business(
+        &self,
+        ids: &[i64],
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        for id in ids {
+            match business {
+                Some(b) => tx.execute(
+                    "INSERT INTO transaction_business (transaction_id, business_id) VALUES (?1, ?2)
+                     ON CONFLICT(transaction_id) DO UPDATE SET business_id = excluded.business_id",
+                    params![id, b],
+                )?,
+                None => tx.execute(
+                    "DELETE FROM transaction_business WHERE transaction_id = ?1",
+                    params![id],
+                )?,
+            };
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
@@ -1496,6 +1674,43 @@ mod tests {
             payment_method_id: None,
             note: String::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn business_tags_and_links_follow_their_rows() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let a = s.insert_business("A", false).await.unwrap();
+        let g = s.insert_business("General", true).await.unwrap();
+        let t1 = s
+            .create_transaction(&tx("2026-10-03", -100, None))
+            .await
+            .unwrap();
+        let t2 = s
+            .create_transaction(&tx("2026-10-04", -200, None))
+            .await
+            .unwrap();
+        s.set_transactions_business(&[t1, t2], Some(a))
+            .await
+            .unwrap();
+        s.set_category_business(7, Some(g)).await.unwrap();
+        let l = s.business_links().await.unwrap();
+        assert_eq!(l.transactions.len(), 2);
+        assert_eq!(l.categories, vec![(7, g)]);
+        // A deleted transaction drops out of the tags.
+        s.delete_transaction(t1).await.unwrap();
+        assert_eq!(
+            s.business_links().await.unwrap().transactions,
+            vec![(t2, a)]
+        );
+        s.set_transactions_business(&[t2], None).await.unwrap();
+        assert!(s.business_links().await.unwrap().transactions.is_empty());
+        // Removing a business drops what pointed at it.
+        s.set_transactions_business(&[t2], Some(a)).await.unwrap();
+        s.remove_business(a).await.unwrap();
+        s.remove_business(g).await.unwrap();
+        let l = s.business_links().await.unwrap();
+        assert!(l.transactions.is_empty() && l.categories.is_empty());
+        assert!(s.list_businesses().await.unwrap().is_empty());
     }
 
     #[tokio::test]

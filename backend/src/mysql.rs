@@ -16,12 +16,12 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
-    PaymentMethod, PendingMirror, RawBackup, RawCategory, RawPaymentMethod, Storage, Transaction,
-    REQUEUE_SKIPPED_SQL,
+    rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
+    MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
+    RawPaymentMethod, Storage, Transaction, REQUEUE_SKIPPED_SQL,
 };
 
-const SCHEMA: [&str; 8] = [
+const SCHEMA: [&str; 12] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -92,6 +92,22 @@ const SCHEMA: [&str; 8] = [
          old_value TEXT NULL,
          new_value TEXT NULL,
          INDEX idx_change_log_at (at)
+     )",
+    "CREATE TABLE IF NOT EXISTS businesses (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         name VARCHAR(400) NOT NULL,
+         is_general BOOLEAN NOT NULL DEFAULT FALSE
+     )",
+    "CREATE TABLE IF NOT EXISTS transaction_business (
+         transaction_id BIGINT PRIMARY KEY,
+         business_id BIGINT NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS category_business (
+         category_id BIGINT PRIMARY KEY,
+         business_id BIGINT NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS category_business_required (
+         category_id BIGINT PRIMARY KEY
      )",
 ];
 
@@ -203,6 +219,142 @@ impl Storage for MySqlStorage {
                 })
             })
             .collect()
+    }
+
+    async fn list_businesses(&self) -> Result<Vec<Business>> {
+        let rows = sqlx::query("SELECT id, name, is_general FROM businesses ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(Business {
+                    id: r.try_get("id")?,
+                    name: r.try_get("name")?,
+                    is_general: r.try_get("is_general")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_business(&self, name: &str, is_general: bool) -> Result<i64> {
+        let r = sqlx::query("INSERT INTO businesses (name, is_general) VALUES (?, ?)")
+            .bind(name)
+            .bind(is_general)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.last_insert_id() as i64)
+    }
+
+    async fn rename_business(&self, id: i64, name: &str) -> Result<()> {
+        sqlx::query("UPDATE businesses SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn remove_business(&self, id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for q in [
+            "DELETE FROM transaction_business WHERE business_id = ?",
+            "DELETE FROM category_business WHERE business_id = ?",
+            "DELETE FROM businesses WHERE id = ?",
+        ] {
+            sqlx::query(q).bind(id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn business_links(&self) -> Result<BusinessLinks> {
+        let t = sqlx::query(
+            "SELECT b.transaction_id, b.business_id FROM transaction_business b
+             JOIN transactions t ON t.id = b.transaction_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let c = sqlx::query("SELECT category_id, business_id FROM category_business")
+            .fetch_all(&self.pool)
+            .await?;
+        let q = sqlx::query("SELECT category_id FROM category_business_required")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(BusinessLinks {
+            required: q.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
+            transactions: t
+                .iter()
+                .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+                .collect::<Result<_>>()?,
+            categories: c
+                .iter()
+                .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+                .collect::<Result<_>>()?,
+        })
+    }
+
+    async fn set_category_business(&self, category: i64, business: Option<i64>) -> Result<()> {
+        match business {
+            Some(b) => {
+                sqlx::query(
+                    "INSERT INTO category_business (category_id, business_id) VALUES (?, ?)
+                     ON DUPLICATE KEY UPDATE business_id = VALUES(business_id)",
+                )
+                .bind(category)
+                .bind(b)
+                .execute(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query("DELETE FROM category_business WHERE category_id = ?")
+                    .bind(category)
+                    .execute(&self.pool)
+                    .await?
+            }
+        };
+        Ok(())
+    }
+
+    async fn set_category_business_required(&self, category: i64, required: bool) -> Result<()> {
+        if required {
+            sqlx::query("INSERT IGNORE INTO category_business_required (category_id) VALUES (?)")
+                .bind(category)
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM category_business_required WHERE category_id = ?")
+                .bind(category)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn set_transactions_business(&self, ids: &[i64], business: Option<i64>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            match business {
+                Some(b) => {
+                    sqlx::query(
+                        "INSERT INTO transaction_business (transaction_id, business_id)
+                         VALUES (?, ?)
+                         ON DUPLICATE KEY UPDATE business_id = VALUES(business_id)",
+                    )
+                    .bind(id)
+                    .bind(b)
+                    .execute(&mut *tx)
+                    .await?
+                }
+                None => {
+                    sqlx::query("DELETE FROM transaction_business WHERE transaction_id = ?")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?
+                }
+            };
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
