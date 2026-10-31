@@ -93,11 +93,6 @@ function navigateInsights(patch: Partial<InsightsNav>, mode: "push" | "replace")
   window.scrollTo(0, 0);
   render();
 }
-/** The insights tab opens on the last complete month, because a month in progress compares badly. */
-function lastCompleteMonth(): Period {
-  const now = new Date();
-  return { kind: "month", month: new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1)).toISOString().slice(0, 7) };
-}
 
 /** States of a line whose change is on its way to Paamonim. */
 const IN_FLIGHT = new Set(["pending", "modified", "verifying"]);
@@ -996,8 +991,6 @@ function nav(): HTMLElement {
           if (state.insights.cat !== undefined) navigateInsights({}, "push");
           return;
         }
-        const p = state.period;
-        if (p.kind === "month" && p.month === new Date().toISOString().slice(0, 7)) state.period = lastCompleteMonth();
         Object.assign(state.insights, { cat: undefined, sub: undefined });
       }
       go(view);
