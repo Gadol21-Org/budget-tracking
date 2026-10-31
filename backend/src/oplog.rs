@@ -479,10 +479,9 @@ impl Storage for Logged {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::SqliteStorage;
 
-    fn db() -> Logged {
-        Logged(Arc::new(SqliteStorage::open(":memory:").unwrap()))
+    async fn db() -> Logged {
+        Logged(Arc::new(crate::testdb::fresh().await))
     }
 
     fn tx(date: &str, amount: i64, cat: Option<i64>, note: &str) -> NewTransaction {
@@ -505,7 +504,7 @@ mod tests {
 
     #[tokio::test]
     async fn transaction_create_edit_delete_are_logged_with_values() {
-        let db = db();
+        let db = db().await;
         let food = db.create_category(&cat("Food", None)).await.unwrap();
         let id = db
             .create_transaction(&tx("2026-10-03", -1000, Some(food), "lunch"))
@@ -545,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_a_category_records_where_its_lines_went() {
-        let db = db();
+        let db = db().await;
         let a = db.create_category(&cat("A", None)).await.unwrap();
         let a1 = db.create_category(&cat("A1", Some(a))).await.unwrap();
         let b = db.create_category(&cat("B", None)).await.unwrap();
@@ -569,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn settling_overriding_and_skipping_are_logged() {
         use crate::recurring;
-        let db = db();
+        let db = db().await;
         let rule = |month: &str| NewRecurring {
             start_month: month.into(),
             end_month: None,
@@ -612,7 +611,7 @@ mod tests {
     #[tokio::test]
     async fn series_changes_and_cancellations_are_logged() {
         use crate::recurring;
-        let db = db();
+        let db = db().await;
         let rule = |month: &str, amount: i64| NewRecurring {
             start_month: month.into(),
             end_month: None,
@@ -643,7 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn import_is_logged_only_when_it_adds_something() {
-        let db = db();
+        let db = db().await;
         let batch = ImportBatch {
             categories: vec![crate::storage::ImportCategory {
                 key: "e:1".into(),
@@ -662,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn pruning_drops_only_entries_older_than_a_year() {
-        let db = db();
+        let db = db().await;
         let at = |s: &str| NewLogEntry {
             at: s.into(),
             kind: "transaction_create".into(),
@@ -690,7 +689,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_log_pages_newest_first() {
-        let db = db();
+        let db = db().await;
         for i in 0..5 {
             db.create_transaction(&tx("2026-10-03", i, None, ""))
                 .await

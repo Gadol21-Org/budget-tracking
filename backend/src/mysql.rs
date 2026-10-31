@@ -99,6 +99,10 @@ pub struct MySqlStorage {
 impl MySqlStorage {
     pub async fn connect() -> Result<Self> {
         let url = std::env::var("MYSQL_URL").context("MYSQL_URL is not set")?;
+        Self::connect_url(&url).await
+    }
+
+    pub async fn connect_url(url: &str) -> Result<Self> {
         let opts: MySqlConnectOptions = url.parse().context("parsing MYSQL_URL")?;
         // Create the database on first use (the account needs the CREATE privilege;
         // if it lacks it and the database already exists, this is skipped).
@@ -969,11 +973,9 @@ mod tests {
     use super::*;
     use crate::storage::{ImportCategory, ImportPaymentMethod, ImportTransaction};
 
-    /// Needs a MySQL 8 server with an empty database: `MYSQL_URL=... cargo test -- --ignored`.
     #[tokio::test]
-    #[ignore]
     async fn import_is_idempotent_and_links_parents() {
-        let s = MySqlStorage::connect().await.unwrap();
+        let s = crate::testdb::fresh().await;
         let batch = ImportBatch {
             categories: vec![
                 ImportCategory {

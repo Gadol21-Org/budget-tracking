@@ -59,7 +59,6 @@ In this repo, **Settings > Secrets and variables > Actions**:
 `BUDGET_ENV` holds one `NAME=value` per line, no quotes:
 
 ```
-STORAGE=mysql
 MYSQL_URL=mysql://<admin user>:<password>@10.0.1.20:3306/budget
 ```
 

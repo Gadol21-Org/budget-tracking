@@ -234,7 +234,7 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{NewTransaction, SqliteStorage};
+    use crate::storage::NewTransaction;
 
     #[test]
     fn accepts_raw_json_and_base64() {
@@ -252,7 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn tabs_keep_non_round_amounts() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         s.create_transaction(&NewTransaction {
             date: "2026-10-03".into(),
             amount_agorot: -1050,

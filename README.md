@@ -5,6 +5,7 @@ PWA (TypeScript, Vite) with a Rust (axum) backend. Amounts are stored as exact i
 ## Run locally
 ```
 cp .env.example .env   # quote values containing '#', e.g. PAAMONIM_PASSWORD='pass#'
+docker compose up -d             # MySQL 8 on localhost:3306 (see Storage)
 cargo run                        # builds the frontend too, then serves http://127.0.0.1:3000
 ```
 `cargo run` runs `npm install` / `npm run build` in `frontend/` via `backend/build.rs` (needs Node.js; set `SKIP_FRONTEND_BUILD=1` to skip). For hot reload while editing the UI: `cd frontend && npm run dev` and open http://localhost:5173 (it proxies `/api` to :3000).
@@ -17,7 +18,9 @@ To run on an Oracle Cloud VM with MySQL HeatWave, with automatic deploys from `m
 ## Storage
 The MySQL connection uses the system TLS library (`native-tls`): on Linux install OpenSSL's headers (`apt install libssl-dev pkg-config`); Windows and macOS use the built-in one, so nothing extra is needed.
 
-`STORAGE=sqlite` (default) needs nothing and is used for tests. `STORAGE=mysql` uses MySQL 8 (Oracle MySQL HeatWave Always Free, or any server) through `MYSQL_URL=mysql://user:password@host:3306/budget`; the database and tables are created on startup, and the monthly totals are aggregated in the database. Tested against MariaDB only; the integration test runs with `MYSQL_URL=... cargo test -- --ignored`.
+The app stores everything in MySQL 8 (Oracle MySQL HeatWave Always Free, or any server) through `MYSQL_URL=mysql://user:password@host:3306/budget`; the database and tables are created on startup, and the monthly totals are aggregated in the database. Locally, `docker compose up -d` starts a MySQL 8 container that matches the `MYSQL_URL` in `.env.example`; data lives in a Docker volume (`docker compose down -v` wipes it).
+
+Tests need a MySQL-compatible server but not Docker. Each test creates its own empty database. `cargo test` uses the server `MYSQL_URL` points at (for example the compose one; it needs the `CREATE`/`DROP` privilege, use `root`), or, when `MYSQL_URL` is unset, starts a throwaway `mariadbd`/`mysqld` from the `PATH` in a temp directory and removes it afterwards (`apt install mariadb-server` is enough; the system service doesn't need to run). With neither, the tests fail with a message saying so. CI runs them against a MySQL 8 service container.
 
 ## Paamonim import
 `cargo run -p budget-backend -- probe probe-out` logs in (needs `PAAMONIM_USERNAME`/`PAAMONIM_PASSWORD`) and saves raw responses from the `/rishumit/*` endpoints to `probe-out/` (git-ignored, contains your financial data). The import parser is written from those samples.
@@ -40,14 +43,15 @@ Safeguards:
 Rounding means Paamonim totals can differ slightly from the app's (each line rounds on its own, and sub-shekel entries count as ₪1 there). Changes made in Paamonim itself are not pulled into existing local transactions.
 
 ## Repeating monthly transactions
-Tick "חוזר מדי חודש" when adding an expense or income, for a set number of months or without end. A series is stored as rules (`recurring` table, `backend/src/recurring.rs`). Occurrences still ahead are generated when read and shown with an orange ⏳ (`GET /api/recurring/occurrences`; also counted in `/api/monthly-totals`). When an occurrence's date passes it is *settled*: written as an ordinary transaction (🔁, sync state `pending`, so it is mirrored to Paamonim like any other) that appears in the totals and the Google Sheets export like any other. A series can only be changed in months that haven't settled: editing an upcoming line changes the series from that month on (`PUT /api/recurring/:series_id`, the body's `start_month` is the first affected month), and "cancel from here" stops it (`DELETE /api/recurring/:series_id?from=YYYY-MM`). The edit dialog has "update" and "cancel charge" drop-downs, each with "this month only" and "from here on". "Update this month only" (`POST /api/recurring/:series_id/months/:month`) settles that one month early with the values and date you give (a salary that came early or differed) and leaves the rest of the series alone; `DELETE` on the same path skips just that month; deleting a settled transaction also skips it. Settled transactions are never rewritten by series changes; edit or delete them individually. Each (series, month) settles once, even if its transaction is deleted. Settling runs when data is read and in the nightly export. Supported by SQLite and MySQL (an existing database needs the new `recurring*` tables/column, created on start; MySQL adds the column with `ALTER`).
+Tick "חוזר מדי חודש" when adding an expense or income, for a set number of months or without end. A series is stored as rules (`recurring` table, `backend/src/recurring.rs`). Occurrences still ahead are generated when read and shown with an orange ⏳ (`GET /api/recurring/occurrences`; also counted in `/api/monthly-totals`). When an occurrence's date passes it is *settled*: written as an ordinary transaction (🔁, sync state `pending`, so it is mirrored to Paamonim like any other) that appears in the totals and the Google Sheets export like any other. A series can only be changed in months that haven't settled: editing an upcoming line changes the series from that month on (`PUT /api/recurring/:series_id`, the body's `start_month` is the first affected month), and "cancel from here" stops it (`DELETE /api/recurring/:series_id?from=YYYY-MM`). The edit dialog has "update" and "cancel charge" drop-downs, each with "this month only" and "from here on". "Update this month only" (`POST /api/recurring/:series_id/months/:month`) settles that one month early with the values and date you give (a salary that came early or differed) and leaves the rest of the series alone; `DELETE` on the same path skips just that month; deleting a settled transaction also skips it. Settled transactions are never rewritten by series changes; edit or delete them individually. Each (series, month) settles once, even if its transaction is deleted. Settling runs when data is read and in the nightly export. The `recurring*` tables and column are created on start (an existing database gets the column with `ALTER`).
 
 ## Google Sheets export
 Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet with the service account as Editor). The `Transactions` and `Monthly` tabs are rewritten by `POST /api/export/sheets` and nightly (`SHEETS_EXPORT_INTERVAL_HOURS`). Verified live against Google Sheets.
 
 ## Layout
-- `backend/src/storage.rs` – `Storage` trait (SQLite and MySQL). Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
-- `backend/src/mysql.rs` – MySQL implementation of `Storage`.
+- `backend/src/storage.rs` – `Storage` trait and the shared types. Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
+- `backend/src/mysql.rs` – the MySQL implementation of `Storage`.
+- `backend/src/testdb.rs` – per-test databases (test builds only).
 - `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). The server logs in once and keeps the session; when Paamonim redirects a request to the login page (session expired), the client logs in again and resends it once.
 - `backend/src/money.rs` – agorot to shekel rounding for export.
 
