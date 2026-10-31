@@ -74,7 +74,7 @@ pub struct MirrorSummary {
     pub unchanged: usize,
     /// Lines deleted in Paamonim.
     pub deleted: usize,
-    /// Not mirrored by design: no Paamonim budget item, rounds to zero, or wrong sign.
+    /// Not mirrored by design: no Paamonim budget item, a zero amount, or the wrong sign.
     pub skipped: usize,
     /// Edits/deletes waiting because no delete endpoint is configured.
     pub unsupported: usize,
@@ -989,10 +989,13 @@ mod tests {
         let (s, food, pay) = setup().await;
         let tiny = s.create_transaction(&tx(D, -30, food)).await.unwrap();
         let refund = s.create_transaction(&tx(D, 5000, food)).await.unwrap();
+        let zero = s.create_transaction(&tx(D, 0, food)).await.unwrap();
         let sum = run(&serve(M::default()).await, &s, &opts()).await.unwrap();
-        assert_eq!(sum.skipped, 2);
-        assert_eq!(state_of(&s, tiny).await, "local");
+        assert_eq!((sum.skipped, sum.mirrored), (2, 1));
+        // Under a shekel is sent as ₪1.
+        assert_eq!(state_of(&s, tiny).await, "synced");
         assert_eq!(state_of(&s, refund).await, "local");
+        assert_eq!(state_of(&s, zero).await, "local");
         let _ = pay;
     }
 
@@ -1166,8 +1169,10 @@ mod tests {
     }
 
     #[test]
-    fn amounts_rounding_to_zero_are_not_sent() {
-        assert!(save_fields(&pending(30, ""), "5", "F", "U", &HashSet::new()).is_none());
+    fn amounts_under_a_shekel_are_sent_as_one() {
+        let f = save_fields(&pending(-30, ""), "5", "F", "U", &HashSet::new()).unwrap();
+        assert_eq!(f[1], ("balance_history[amount]", "1".to_string()));
+        assert!(save_fields(&pending(0, ""), "5", "F", "U", &HashSet::new()).is_none());
     }
 
     #[test]
