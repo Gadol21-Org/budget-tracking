@@ -2,12 +2,16 @@ import { bounds, contains, shift, title as periodTitle, type Period } from "./pe
 import { type Category, type Transaction } from "./api";
 import { clickable, el, type Child } from "./ui";
 
+/** The two directions money moves. */
+export type Side = "expense" | "income";
 export type Dash = "overview" | "cats" | "trends" | "changes" | "fixed" | "rhythm";
 /** What the selected period is compared with. */
 export type Cmp = { kind: "prev" } | { kind: "avg"; n: number } | { kind: "yoy" } | { kind: "custom"; period: Period };
 /** Which insights screen is open: a dashboard, and inside "cats" optionally a category and a sub-category. */
 export interface InsightsNav {
   dash: Dash;
+  /** Which direction of money the categories dashboard shows; expenses unless chosen. */
+  side?: Side;
   /** Top-level category being inspected (null = uncategorized); undefined = the category list. */
   cat?: number | null;
   sub?: number;
@@ -94,23 +98,35 @@ interface Group {
   direct: number;
   kids: Map<number, number>;
 }
-/** Expenses (as positive agorot) and income in a period; expenses grouped by top-level category. */
+/**
+ * What the categories dashboard knows about a side. To narrow a side further (say, income by who earned it),
+ * extend `pick`: every category figure goes through it.
+ */
+const SIDES: Record<Side, { title: string; total: string; empty: string; cls: "expense" | "income"; higherIsBad: boolean; pick: (t: Transaction) => boolean }> = {
+  expense: { title: "הוצאות", total: "מההוצאות בתקופה", empty: "אין הוצאות בתקופה זו", cls: "expense", higherIsBad: true, pick: (t) => t.amount_agorot < 0 },
+  income: { title: "הכנסות", total: "מההכנסות בתקופה", empty: "אין הכנסות בתקופה זו", cls: "income", higherIsBad: false, pick: (t) => t.amount_agorot > 0 },
+};
+const sideOf = (ctx: Pick<Ctx, "ins">): Side => ctx.ins.side ?? "expense";
+
+/** Totals of a period, and one side's money (as positive agorot) grouped by top-level category. */
 interface Agg {
   income: number;
   expense: number;
+  /** Sum of the chosen side after `pick`. */
+  sideTotal: number;
   groups: Map<number | null, Group>;
 }
 
-function aggregate(ctx: Pick<Ctx, "txs" | "cats">, p: Period): Agg {
-  const agg: Agg = { income: 0, expense: 0, groups: new Map() };
+function aggregate(ctx: Pick<Ctx, "txs" | "cats">, p: Period, side: Side = "expense"): Agg {
+  const agg: Agg = { income: 0, expense: 0, sideTotal: 0, groups: new Map() };
+  const pick = SIDES[side].pick;
   for (const t of ctx.txs) {
     if (!contains(p, t.date)) continue;
-    if (t.amount_agorot > 0) {
-      agg.income += t.amount_agorot;
-      continue;
-    }
-    const v = -t.amount_agorot;
-    agg.expense += v;
+    const v = Math.abs(t.amount_agorot);
+    if (t.amount_agorot > 0) agg.income += v;
+    else agg.expense += v;
+    if (!pick(t)) continue;
+    agg.sideTotal += v;
     const own = ctx.cats.find((c) => c.id === t.category_id);
     const top = own?.parent_id ?? t.category_id;
     const g = agg.groups.get(top) ?? { total: 0, direct: 0, kids: new Map() };
@@ -227,7 +243,7 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-function donut(parts: { value: number; color: string }[], center: string): string {
+function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות"): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
   const R = 56, r = 36, c = 70;
   let a0 = -Math.PI / 2;
@@ -240,7 +256,7 @@ function donut(parts: { value: number; color: string }[], center: string): strin
     paths += `<path d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${p.color}"/>`;
     a0 = a1;
   }
-  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">הוצאות</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
+  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(label)}</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
@@ -399,36 +415,45 @@ const overview: Body = (ctx, baseLabel) => {
 
 // ---- Dashboard: categories and drill-down -----------------------------------------------------
 
+/** Every item gets its own colour: the fixed palette first, then evenly spread hues. */
+const colorAt = (i: number) => (i < PALETTE.length ? PALETTE[i] : `hsl(${Math.round((i * 137.5) % 360)} 55% 45%)`);
 const catColor = (ctx: Ctx, id: number | null): string => {
-  const tops = ctx.cats.filter((c) => c.parent_id == null && !c.is_income).map((c) => c.id).sort((a, b) => a - b);
+  const own = ctx.cats.find((c) => c.id === id);
+  const tops = ctx.cats.filter((c) => c.parent_id == null && c.is_income === (own?.is_income ?? false)).map((c) => c.id).sort((a, b) => a - b);
   const i = tops.indexOf(id as number);
-  if (i < 0) return OTHER_COLOR;
-  // Every category gets its own colour: the fixed palette first, then evenly spread hues.
-  return i < PALETTE.length ? PALETTE[i] : `hsl(${Math.round((i * 137.5) % 360)} 55% 45%)`;
+  return i < 0 ? OTHER_COLOR : colorAt(i);
 };
 
 const cats: Body = (ctx, baseLabel) => {
   if (ctx.ins.cat !== undefined && ctx.ins.sub !== undefined) return subDetail(ctx);
   if (ctx.ins.cat !== undefined) return catDetail(ctx, baseLabel);
-  const cur = aggregate(ctx, ctx.period);
-  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
+  const side = sideOf(ctx), S = SIDES[side];
+  const cur = aggregate(ctx, ctx.period, side);
+  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p, side));
   const rows = [...cur.groups.entries()].sort((a, b) => b[1].total - a[1].total);
   const max = rows[0]?.[1].total ?? 1;
   const parts = rows.map(([id, g]) => ({ value: g.total, color: catColor(ctx, id) }));
   const legend = el(
     "div",
     { className: "donutlegend" },
-    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
+    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
   );
+  const switcher = el("div", { className: "seg sidesw", role: "group" }, ...(Object.keys(SIDES) as Side[]).map((k) => {
+    const b = el("button", { type: "button", textContent: SIDES[k].title });
+    b.setAttribute("aria-pressed", String(k === side));
+    b.onclick = () => k !== side && ctx.navigate({ dash: "cats", side: k }, "replace");
+    return b;
+  }));
   return el(
     "div",
     {},
+    switcher,
     rows.length === 0
-      ? el("div", { className: "empty", textContent: "אין הוצאות בתקופה זו" })
+      ? el("div", { className: "empty", textContent: S.empty })
       : el(
           "div",
           { className: "catsgrid" },
-          el("div", { className: "card donutcard" }, svgBox(donut(parts, shekels(cur.expense))), legend),
+          el("div", { className: "card donutcard" }, svgBox(donut(parts, shekels(cur.sideTotal), S.title)), legend),
           el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
           el(
             "div",
@@ -440,7 +465,7 @@ const cats: Body = (ctx, baseLabel) => {
                   "div",
                   { className: "row" },
                   el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(ctx, id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%;background:${catColor(ctx, id)}` }))),
-                  el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, true), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
+                  el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, S.higherIsBad), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
                   el("span", { className: "chev muted", textContent: "‹" }),
                 ),
                 () => ctx.navigate({ dash: "cats", cat: id, sub: undefined }, "push"),
@@ -467,7 +492,7 @@ function crumbs(ctx: Ctx, ...parts: { text: string; to?: Partial<InsightsNav> }[
 /** The monthly chart of one category or sub-category. */
 function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: HTMLElement; avg: number } {
   const months = monthsEnding(ctx.period);
-  const series = months.map((m) => value(aggregate(ctx, { kind: "month", month: m })));
+  const series = months.map((m) => value(aggregate(ctx, { kind: "month", month: m }, sideOf(ctx))));
   const full = series.filter((_, i) => months[i] < todayIso().slice(0, 7));
   const avg = full.length ? full.reduce((a, b) => a + b, 0) / full.length : series.reduce((a, b) => a + b, 0) / series.length;
   return {
@@ -486,8 +511,9 @@ function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: 
 
 function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   const id = ctx.ins.cat!;
-  const cur = aggregate(ctx, ctx.period);
-  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
+  const side = sideOf(ctx), S = SIDES[side];
+  const cur = aggregate(ctx, ctx.period, side);
+  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p, side));
   const g = cur.groups.get(id) ?? { total: 0, direct: 0, kids: new Map<number, number>() };
   const was = bases.reduce((s, b) => s + (b.groups.get(id)?.total ?? 0), 0) / bases.length;
   const trend = trendCard(ctx, (a) => a.groups.get(id)?.total ?? 0, catColor(ctx, id));
@@ -498,7 +524,7 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
       "div",
       { className: "row" },
       el("div", { className: "grow" }, el("div", { className: "name", textContent: name }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (v / kidMax) * 100)}%;background:${catColor(ctx, id)}` }))),
-      el("div", { className: "amt" }, money(v), el("div", {}, delta(v, was, true))),
+      el("div", { className: "amt" }, money(v), el("div", {}, delta(v, was, S.higherIsBad))),
       onTap ? el("span", { className: "chev muted", textContent: "‹" }) : null,
     );
     return onTap ? clickable(r, onTap) : r;
@@ -507,6 +533,23 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   const wasDirect = bases.reduce((s, b) => s + (b.groups.get(id)?.direct ?? 0), 0) / bases.length;
   const listBtn = el("button", { type: "button", className: "btn", textContent: `הצגת התנועות של ${catName(ctx, id)} ‹` });
   listBtn.onclick = () => id != null && ctx.openList(id);
+  // Pie of the sub-categories (what is booked on the category itself shows as a grey slice).
+  const slices = [...kids.map(([k, v], i) => ({ name: catName(ctx, k), value: v, color: colorAt(i), open: () => ctx.navigate({ dash: "cats", cat: id, sub: k }, "push") })), ...(g.direct > 0 && kids.length > 0 ? [{ name: "ללא תת-קטגוריה", value: g.direct, color: OTHER_COLOR, open: undefined as (() => void) | undefined }] : [])];
+  const pie = kids.length
+    ? el(
+        "div",
+        { className: "card donutcard" },
+        svgBox(donut(slices.map((x) => ({ value: x.value, color: x.color })), shekels(g.total), S.title)),
+        el(
+          "div",
+          { className: "donutlegend" },
+          ...slices.map((x) => {
+            const item = el("div", {}, el("i", { style: `background:${x.color}` }), `${x.name} `, el("span", { className: "muted num", textContent: `${Math.round((x.value / g.total) * 100)}%` }));
+            return x.open ? clickable(item, x.open) : item;
+          }),
+        ),
+      )
+    : null;
   return el(
     "div",
     {},
@@ -514,27 +557,30 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
     el(
       "div",
       { className: "kpis" },
-      kpi(periodTitle(ctx.period), money(g.total, "expense"), el("span", {}, delta(g.total, was, true), ` ${baseLabel}`)),
-      kpi("ממוצע חודשי", money(Math.round(trend.avg)), el("span", { className: "delta flat", textContent: cur.expense ? `${Math.round((g.total / cur.expense) * 100)}% מההוצאות בתקופה` : "" })),
+      kpi(periodTitle(ctx.period), money(g.total, S.cls), el("span", {}, delta(g.total, was, S.higherIsBad), ` ${baseLabel}`)),
+      kpi("ממוצע חודשי", money(Math.round(trend.avg)), el("span", { className: "delta flat", textContent: cur.sideTotal ? `${Math.round((g.total / cur.sideTotal) * 100)}% ${S.total}` : "" })),
     ),
+    pie && el("h2", { textContent: `${catName(ctx, id)} לפי תת-קטגוריה` }),
+    pie,
     el("h2", { textContent: `${catName(ctx, id)} לאורך זמן` }),
     trend.node,
     el("h2", { textContent: kids.length ? "תתי-קטגוריות" : "" }),
     kids.length || g.direct
       ? el("div", { className: "card rows" }, ...kids.map(([k, v]) => kidRow(catName(ctx, k), v, wasKid(k), () => ctx.navigate({ dash: "cats", cat: id, sub: k }, "push"))), g.direct > 0 && kids.length > 0 && kidRow("ללא תת-קטגוריה", g.direct, wasDirect))
-      : el("div", { className: "empty", textContent: "אין הוצאות בקטגוריה זו בתקופה" }),
+      : el("div", { className: "empty", textContent: `אין ${S.title} בקטגוריה זו בתקופה` }),
     id != null && listBtn,
   );
 }
 
 function subDetail(ctx: Ctx): HTMLElement {
   const id = ctx.ins.cat!, sub = ctx.ins.sub!;
+  const side = sideOf(ctx), S = SIDES[side];
   const value = (a: Agg) => a.groups.get(id)?.kids.get(sub) ?? 0;
-  const cur = value(aggregate(ctx, ctx.period));
-  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => value(aggregate(ctx, p)));
+  const cur = value(aggregate(ctx, ctx.period, side));
+  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => value(aggregate(ctx, p, side)));
   const was = bases.reduce((a, b) => a + b, 0) / bases.length;
   const trend = trendCard(ctx, value, catColor(ctx, id));
-  const txs = ctx.txs.filter((t) => t.category_id === sub && t.amount_agorot < 0 && contains(ctx.period, t.date)).sort((a, b) => a.amount_agorot - b.amount_agorot).slice(0, 8);
+  const txs = ctx.txs.filter((t) => t.category_id === sub && S.pick(t) && contains(ctx.period, t.date)).sort((a, b) => Math.abs(b.amount_agorot) - Math.abs(a.amount_agorot)).slice(0, 8);
   const listBtn = el("button", { type: "button", className: "btn", textContent: `הצגת כל התנועות של ${catName(ctx, sub)} ‹` });
   listBtn.onclick = () => ctx.openList(sub);
   return el(
@@ -544,7 +590,7 @@ function subDetail(ctx: Ctx): HTMLElement {
     el(
       "div",
       { className: "kpis" },
-      kpi(periodTitle(ctx.period), money(cur, "expense"), delta(cur, was, true)),
+      kpi(periodTitle(ctx.period), money(cur, S.cls), delta(cur, was, S.higherIsBad)),
       kpi("ממוצע חודשי", money(Math.round(trend.avg)), el("span", { className: "delta flat", textContent: trend.avg ? `${cur >= trend.avg ? "+" : ""}${Math.round(((cur - trend.avg) / trend.avg) * 100)}% מהממוצע` : "" })),
     ),
     el("h2", { textContent: `${catName(ctx, sub)} לאורך זמן` }),
@@ -559,7 +605,7 @@ function subDetail(ctx: Ctx): HTMLElement {
               "div",
               { className: "row" },
               el("div", { className: "grow" }, el("div", { className: "name", textContent: t.note || catName(ctx, sub) }), el("div", { className: "muted small", textContent: `${t.upcoming ? "⏳ " : ""}${new Date(`${t.date}T00:00:00`).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}` })),
-              money(-t.amount_agorot, "expense"),
+              money(Math.abs(t.amount_agorot), S.cls),
             ),
           ),
         )

@@ -39,7 +39,7 @@ const state = {
 /** Browser history: every screen is a history entry, so the phone's back button/gesture goes to the previous screen (and closes a dialog first) instead of leaving the app. */
 type Screen = { view: View; filter?: { id: number | null }; ins?: InsightsNav; dlg?: boolean; n: number };
 function screenState(extra: Partial<Screen> = {}): Screen {
-  return { view: state.view, filter: state.filter, ins: { dash: state.insights.dash, cat: state.insights.cat, sub: state.insights.sub }, n: history.state?.n ?? 0, ...extra };
+  return { view: state.view, filter: state.filter, ins: { dash: state.insights.dash, side: state.insights.side, cat: state.insights.cat, sub: state.insights.sub }, n: history.state?.n ?? 0, ...extra };
 }
 history.replaceState(screenState({ n: 0 }), "");
 /** Go to a screen as a new history entry. */
@@ -84,6 +84,7 @@ window.addEventListener("popstate", (e) => {
 
 function restoreInsights(ins?: InsightsNav) {
   state.insights.dash = ins?.dash ?? "overview";
+  state.insights.side = ins?.side;
   state.insights.cat = ins?.cat;
   state.insights.sub = ins?.sub;
 }
