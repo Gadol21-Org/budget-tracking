@@ -591,10 +591,9 @@ async fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mysql::MySqlStorage;
     use crate::paamonim::HEBREW_MONTHS;
-    use crate::storage::{
-        ImportBatch, ImportCategory, ImportTransaction, NewTransaction, SqliteStorage,
-    };
+    use crate::storage::{ImportBatch, ImportCategory, ImportTransaction, NewTransaction};
     use axum::{
         extract::{Query, State},
         http::StatusCode,
@@ -813,8 +812,8 @@ mod tests {
     }
 
     /// Storage with Paamonim items "סופר" (expense) and "משכורת" (income) imported.
-    async fn setup() -> (SqliteStorage, i64, i64) {
-        let s = SqliteStorage::open(":memory:").unwrap();
+    async fn setup() -> (MySqlStorage, i64, i64) {
+        let s = crate::testdb::fresh().await;
         let cat = |key: &str, name: &str, income| ImportCategory {
             key: key.into(),
             name: name.into(),
@@ -844,7 +843,7 @@ mod tests {
         }
     }
 
-    async fn state_of(s: &SqliteStorage, id: i64) -> String {
+    async fn state_of(s: &MySqlStorage, id: i64) -> String {
         s.list_transactions()
             .await
             .unwrap()
@@ -877,7 +876,7 @@ mod tests {
 
     #[tokio::test]
     async fn turning_mirroring_on_does_not_replay_earlier_entries() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         s.import_paamonim(&ImportBatch {
             categories: vec![ImportCategory {
                 key: "e:5".into(),
@@ -1110,7 +1109,7 @@ mod tests {
         assert!(s.list_transactions().await.unwrap().is_empty());
     }
 
-    async fn mark_synced(s: &SqliteStorage, id: i64, line: &str) {
+    async fn mark_synced(s: &MySqlStorage, id: i64, line: &str) {
         let p = s
             .pending_mirrors()
             .await
@@ -1165,7 +1164,7 @@ mod tests {
     }
 
     /// An imported line 900 on day `D` in "סופר", also present in the mock.
-    async fn imported(s: &SqliteStorage, mock: &M, group: Option<&str>) -> i64 {
+    async fn imported(s: &MySqlStorage, mock: &M, group: Option<&str>) -> i64 {
         mock.lock().unwrap().lines.push(Line {
             id: 900,
             date: D.into(),
@@ -1276,8 +1275,8 @@ mod tests {
     }
 
     /// Storage whose "סופר" item sits under Paamonim category 3 (`ce:3`).
-    async fn with_parent() -> SqliteStorage {
-        let s = SqliteStorage::open(":memory:").unwrap();
+    async fn with_parent() -> MySqlStorage {
+        let s = crate::testdb::fresh().await;
         let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
             key: key.into(),
             name: name.into(),

@@ -424,18 +424,18 @@ pub async fn cancel_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::SqliteStorage;
+    use crate::mysql::MySqlStorage;
 
     fn day(d: &str) -> NaiveDate {
         d.parse().unwrap()
     }
 
     /// The tests run on 2026-01-01 unless they say otherwise.
-    async fn change(s: &SqliteStorage, id: i64, r: &NewRecurring) -> Result<(), RecurringError> {
+    async fn change(s: &MySqlStorage, id: i64, r: &NewRecurring) -> Result<(), RecurringError> {
         change_from(s, id, r, day("2026-01-01")).await
     }
 
-    async fn cancel(s: &SqliteStorage, id: i64, month: &str) -> Result<(), RecurringError> {
+    async fn cancel(s: &MySqlStorage, id: i64, month: &str) -> Result<(), RecurringError> {
         cancel_from(s, id, month, day("2026-01-01")).await
     }
 
@@ -452,7 +452,7 @@ mod tests {
     }
 
     /// (date, amount) of all occurrences through `through`.
-    async fn all(s: &SqliteStorage, through: &str) -> Vec<(String, i64)> {
+    async fn all(s: &MySqlStorage, through: &str) -> Vec<(String, i64)> {
         occurrences(&s.list_recurring().await.unwrap(), through)
             .into_iter()
             .map(|o| (o.date, o.amount_agorot))
@@ -461,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn fixed_length_and_open_ended_series() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         create(&s, &new("2026-01", Some("2026-03"), -1000))
             .await
             .unwrap();
@@ -474,14 +474,14 @@ mod tests {
                 ("2026-03-31".to_string(), -1000)
             ]
         );
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         create(&s, &new("2026-11", None, -500)).await.unwrap();
         assert_eq!(all(&s, "2027-02").await.len(), 4);
     }
 
     #[tokio::test]
     async fn price_change_keeps_the_past() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
         change(&s, id, &new("2026-03", None, -1500)).await.unwrap();
         let got: Vec<i64> = all(&s, "2026-04").await.iter().map(|o| o.1).collect();
@@ -499,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_from_a_month_and_entirely() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
         change(&s, id, &new("2026-04", None, -1200)).await.unwrap();
         cancel(&s, id, "2026-06").await.unwrap();
@@ -512,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_bad_requests() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         assert!(matches!(
             create(&s, &new("2026-13", None, -1)).await,
             Err(RecurringError::Invalid(_))
@@ -531,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn due_occurrences_settle_once_and_stay_settled() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
         // 2026-03-31 is not reached yet: January and February (28th) are due.
         assert_eq!(settle_due(&s, day("2026-03-15")).await.unwrap(), 3 - 1);
@@ -560,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_month_can_be_edited_alone() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = create(&s, &new("2026-01", None, 1_200_000)).await.unwrap();
         let early = NewTransaction {
             date: "2026-03-03".into(),
@@ -609,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn settled_months_cannot_be_changed() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = create(&s, &new("2026-01", None, -1000)).await.unwrap();
         let on = day("2026-03-10"); // January and February have settled
         assert!(matches!(

@@ -1,9 +1,6 @@
-//! Storage boundary. The app talks only to [`Storage`], so SQLite (local/tests)
-//! can be swapped for Postgres on Oracle Cloud without touching the API.
+//! Storage boundary. The app talks only to [`Storage`]; the one implementation is
+//! [`crate::mysql::MySqlStorage`].
 
-use std::sync::Mutex;
-
-use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::oplog::{LogEntry, NewLogEntry};
@@ -415,738 +412,13 @@ pub trait Storage: Send + Sync {
     }
 }
 
-pub struct SqliteStorage(Mutex<Connection>);
-
-/// Where lines of category `id` belong: itself, or what it was merged into when deleted
-/// (None if it was deleted without a replacement).
-fn resolve_category(conn: &Connection, mut id: i64) -> anyhow::Result<Option<i64>> {
-    for _ in 0..16 {
-        let (deleted, into): (i64, Option<i64>) = conn.query_row(
-            "SELECT deleted, merged_into FROM categories WHERE id = ?1",
-            params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if deleted == 0 {
-            return Ok(Some(id));
-        }
-        match into {
-            Some(next) => id = next,
-            None => return Ok(None),
-        }
-    }
-    Ok(None)
-}
-
-impl SqliteStorage {
-    pub fn open(path: &str) -> anyhow::Result<Self> {
-        Ok(Self(Mutex::new(crate::db::open(path)?)))
-    }
-}
-
-#[async_trait::async_trait]
-impl Storage for SqliteStorage {
-    async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, name FROM payment_methods ORDER BY name")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(PaymentMethod {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note, c.paamonim_item_id,
-                    c.name, p.paamonim_id, t.paamonim_line_id, t.category_id, pc.paamonim_item_id,
-                    COALESCE(c.is_income, 0)
-             FROM transactions t
-             LEFT JOIN categories c ON c.id = t.category_id
-             LEFT JOIN categories pc ON pc.id = c.parent_id AND pc.deleted = 0
-             LEFT JOIN payment_methods p ON p.id = t.payment_method_id
-             WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(PendingMirror {
-                    id: r.get(0)?,
-                    state: r.get(1)?,
-                    date: r.get(2)?,
-                    amount_agorot: r.get(3)?,
-                    note: r.get(4)?,
-                    item_key: r.get(5)?,
-                    item_name: r.get(6)?,
-                    payment_key: r.get(7)?,
-                    line_id: r.get(8)?,
-                    category_id: r.get(9)?,
-                    parent_key: r.get(10)?,
-                    is_income: r.get::<_, i64>(11)? != 0,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "UPDATE transactions SET sync_state = ?2 WHERE id = ?1",
-            params![id, state],
-        )?;
-        Ok(())
-    }
-
-    async fn mark_mirrored(&self, p: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
-             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
-             WHERE id = ?1 AND paamonim_line_id IS NOT NULL AND paamonim_line_id <> ?2",
-            params![p.id, line_id],
-        )?;
-        let n = tx.execute(
-            "UPDATE transactions SET paamonim_line_id = ?2, mirror_date = ?3,
-               sync_state = CASE WHEN date = ?3 AND amount_agorot = ?4 AND note = ?5
-                            THEN 'synced' ELSE 'modified' END
-             WHERE id = ?1",
-            params![p.id, line_id, p.date, p.amount_agorot, p.note],
-        )?;
-        tx.commit()?;
-        Ok(n == 1)
-    }
-
-    async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let n = tx.execute(
-            "UPDATE categories SET paamonim_item_id = ?2 WHERE id = ?1 AND paamonim_item_id IS NULL",
-            params![id, key],
-        )?;
-        if n == 1 {
-            tx.execute(
-                "UPDATE transactions SET sync_state = 'pending'
-                 WHERE category_id = ?1 AND sync_state = 'skipped'",
-                params![id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(n == 1)
-    }
-
-    async fn detach_mirror(&self, id: i64) -> anyhow::Result<()> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
-             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
-             WHERE id = ?1 AND paamonim_line_id IS NOT NULL",
-            params![id],
-        )?;
-        tx.execute(
-            "UPDATE transactions SET paamonim_line_id = NULL, mirror_date = NULL,
-               sync_state = 'skipped' WHERE id = ?1",
-            params![id],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool> {
-        let n = self.0.lock().unwrap().execute(
-            "UPDATE transactions SET sync_state =
-               CASE WHEN paamonim_line_id IS NULL THEN 'pending' ELSE 'modified' END
-             WHERE id = ?1 AND sync_state = 'error'",
-            params![id],
-        )?;
-        Ok(n == 1)
-    }
-
-    async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT line_id, date FROM mirror_deletes ORDER BY rowid")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(LineDelete {
-                    line_id: r.get(0)?,
-                    date: r.get(1)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "INSERT OR IGNORE INTO mirror_deletes (line_id, date) VALUES (?1, ?2)",
-            params![line_id, date],
-        )?;
-        Ok(())
-    }
-
-    async fn finish_line_delete(&self, line_id: &str) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "DELETE FROM mirror_deletes WHERE line_id = ?1",
-            params![line_id],
-        )?;
-        Ok(())
-    }
-
-    async fn known_line_ids(&self) -> anyhow::Result<Vec<String>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL
-             UNION SELECT line_id FROM mirror_deletes",
-        )?;
-        let ids = stmt
-            .query_map([], |r| r.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
-        Ok(ids)
-    }
-
-    async fn baseline_mirror(&self) -> anyhow::Result<usize> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let done = tx
-            .prepare("SELECT 1 FROM mirror_meta WHERE k = 'baseline'")?
-            .exists([])?;
-        let mut n = 0;
-        if !done {
-            // Imported lines keep their Paamonim day from here on.
-            tx.execute(
-                "UPDATE transactions SET mirror_date = date
-                 WHERE paamonim_line_id IS NOT NULL AND mirror_date IS NULL AND sync_state = 'synced'",
-                [],
-            )?;
-            // Edited lines count as in step (their divergence is accepted); unsent ones are
-            // set aside as `local` and never sent.
-            tx.execute(
-                "UPDATE transactions SET sync_state = 'synced'
-                 WHERE sync_state = 'modified' AND paamonim_line_id IS NOT NULL",
-                [],
-            )?;
-            n = tx.execute(
-                "UPDATE transactions SET sync_state = 'local'
-                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error', 'skipped')",
-                [],
-            )?;
-            tx.execute("DELETE FROM mirror_deletes", [])?;
-            tx.execute(
-                "INSERT INTO mirror_meta (k, v) VALUES ('baseline', '1')",
-                [],
-            )?;
-        }
-        tx.commit()?;
-        Ok(n)
-    }
-
-    async fn clear_mirror_baseline(&self) -> anyhow::Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM mirror_meta WHERE k = 'baseline'", [])?;
-        Ok(())
-    }
-
-    async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let mut sum = ImportSummary::default();
-        // `cats`: key -> row id, for linking parents. `live`: key -> where its lines go, which
-        // differs for categories deleted locally (their replacement, or none).
-        let mut cats = std::collections::HashMap::new();
-        let mut live: std::collections::HashMap<String, Option<i64>> = Default::default();
-        for c in &batch.categories {
-            let existing: Option<(i64, bool)> = tx
-                .query_row(
-                    "SELECT id, deleted FROM categories WHERE paamonim_item_id = ?1",
-                    params![c.key],
-                    |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
-                )
-                .ok();
-            let parent = c.parent_key.as_ref().and_then(|k| cats.get(k)).copied();
-            let id = match existing {
-                // Deleted here: stays deleted, and its name/parent are not refreshed.
-                Some((id, true)) => id,
-                Some((id, false)) => {
-                    tx.execute(
-                        "UPDATE categories SET name = ?2, parent_id = ?3 WHERE id = ?1",
-                        params![id, c.name, parent],
-                    )?;
-                    id
-                }
-                None => {
-                    // New under a parent that was deleted here: deleted too, same destination.
-                    let into = parent.map(|p| resolve_category(&tx, p)).transpose()?;
-                    let parent_gone = parent.is_some() && into != Some(parent);
-                    let into = into.flatten().filter(|_| parent_gone);
-                    tx.execute(
-                        "INSERT INTO categories (name, is_income, paamonim_item_id, parent_id, deleted, merged_into)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![c.name, c.is_income, c.key, parent, parent_gone, into],
-                    )?;
-                    sum.categories_added += 1;
-                    tx.last_insert_rowid()
-                }
-            };
-            live.insert(c.key.clone(), resolve_category(&tx, id)?);
-            cats.insert(c.key.clone(), id);
-        }
-        let mut pms = std::collections::HashMap::new();
-        for p in &batch.payment_methods {
-            let existed: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM payment_methods WHERE paamonim_id = ?1",
-                    params![p.key],
-                    |r| r.get(0),
-                )
-                .ok();
-            tx.execute(
-                "INSERT INTO payment_methods (name, paamonim_id) VALUES (?1, ?2)
-                 ON CONFLICT(paamonim_id) DO UPDATE SET name = excluded.name",
-                params![p.name, p.key],
-            )?;
-            let id: i64 = tx.query_row(
-                "SELECT id FROM payment_methods WHERE paamonim_id = ?1",
-                params![p.key],
-                |r| r.get(0),
-            )?;
-            sum.payment_methods_added += existed.is_none() as usize;
-            pms.insert(p.key.clone(), id);
-        }
-        for t in &batch.transactions {
-            let cat = t
-                .category_key
-                .as_ref()
-                .and_then(|k| live.get(k))
-                .copied()
-                .flatten();
-            let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
-            // Deleted here and waiting to be deleted there: don't bring it back.
-            let queued = tx
-                .prepare("SELECT 1 FROM mirror_deletes WHERE line_id = ?1")?
-                .exists(params![t.line_id])?;
-            if queued {
-                sum.transactions_skipped += 1;
-                continue;
-            }
-            let linked = tx
-                .prepare("SELECT 1 FROM transactions WHERE paamonim_line_id = ?1")?
-                .exists(params![t.line_id])?;
-            if !linked {
-                // A line we posted whose id we never recorded: link it, keeping the exact
-                // local amount, rather than adding it a second time.
-                let candidates: Vec<(i64, i64)> = {
-                    let mut stmt = tx.prepare(
-                        "SELECT id, amount_agorot FROM transactions
-                         WHERE paamonim_line_id IS NULL AND sync_state IN ('verifying', 'error')
-                           AND date = ?1 AND category_id IS ?2 ORDER BY id",
-                    )?;
-                    let rows = stmt
-                        .query_map(params![t.date, cat], |r| Ok((r.get(0)?, r.get(1)?)))?
-                        .collect::<Result<Vec<_>, _>>()?;
-                    rows
-                };
-                if let Some((id, _)) = candidates
-                    .into_iter()
-                    .find(|(_, a)| rounds_to(*a, t.amount_agorot))
-                {
-                    tx.execute(
-                        "UPDATE transactions SET paamonim_line_id = ?2, mirror_date = date,
-                           sync_state = 'synced', payment_method_id = COALESCE(payment_method_id, ?3)
-                         WHERE id = ?1",
-                        params![id, t.line_id, pm],
-                    )?;
-                    sum.transactions_adopted += 1;
-                    continue;
-                }
-            }
-            let inserted = tx.execute(
-                "INSERT OR IGNORE INTO transactions
-                   (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id,
-                    mirror_date, sync_state)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?1, 'synced')",
-                params![t.date, t.amount_agorot, cat, pm, t.note, t.line_id],
-            )?;
-            if inserted == 1 {
-                sum.transactions_added += 1;
-            } else {
-                // Already imported: only fill in links that were missing (e.g. before custom
-                // items or sub-categories were understood); never overwrite local edits.
-                tx.execute(
-                    "UPDATE transactions SET category_id = COALESCE(category_id, ?2),
-                       payment_method_id = COALESCE(payment_method_id, ?3)
-                     WHERE paamonim_line_id = ?1",
-                    params![t.line_id, cat, pm],
-                )?;
-                sum.transactions_skipped += 1;
-            }
-        }
-        tx.commit()?;
-        Ok(sum)
-    }
-
-    async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
-                    recurring_series_id
-             FROM transactions ORDER BY date DESC, id DESC",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(Transaction {
-                    id: r.get(0)?,
-                    date: r.get(1)?,
-                    amount_agorot: r.get(2)?,
-                    category_id: r.get(3)?,
-                    payment_method_id: r.get(4)?,
-                    note: r.get(5)?,
-                    sync_state: r.get(6)?,
-                    recurring_series_id: r.get(7)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id, note)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                t.date,
-                t.amount_agorot,
-                t.category_id,
-                t.payment_method_id,
-                t.note
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.commit()?;
-        Ok(id)
-    }
-
-    async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            // mirror_date keeps the day the line has in Paamonim (SET reads the old `date`).
-            "UPDATE transactions SET mirror_date = CASE WHEN paamonim_line_id IS NULL THEN NULL
-                                                   ELSE COALESCE(mirror_date, date) END,
-               date = ?2, amount_agorot = ?3, category_id = ?4, payment_method_id = ?5, note = ?6,
-               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
-                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
-             WHERE id = ?1",
-            params![
-                id,
-                t.date,
-                t.amount_agorot,
-                t.category_id,
-                t.payment_method_id,
-                t.note
-            ],
-        )?;
-        Ok(())
-    }
-
-    async fn delete_transaction(&self, id: i64) -> anyhow::Result<()> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        // Queue its Paamonim line (if any) for deletion there.
-        tx.execute(
-            "INSERT OR IGNORE INTO mirror_deletes (line_id, date)
-             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
-             WHERE id = ?1 AND paamonim_line_id IS NOT NULL",
-            params![id],
-        )?;
-        tx.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, name, is_income, parent_id FROM categories WHERE deleted = 0 ORDER BY name",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(Category {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    is_income: r.get::<_, i64>(2)? != 0,
-                    parent_id: r.get(3)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn insert_category(
-        &self,
-        name: &str,
-        is_income: bool,
-        parent_id: Option<i64>,
-    ) -> anyhow::Result<i64> {
-        let conn = self.0.lock().unwrap();
-        conn.execute(
-            "INSERT INTO categories (name, is_income, parent_id) VALUES (?1, ?2, ?3)",
-            params![name, is_income, parent_id],
-        )?;
-        Ok(conn.last_insert_rowid())
-    }
-
-    async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        for id in ids {
-            if let Some(to) = move_to {
-                // Like any local edit: a line already in Paamonim now differs from it.
-                tx.execute(
-                    "UPDATE transactions SET category_id = ?2,
-                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
-                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
-                     WHERE category_id = ?1",
-                    params![id, to],
-                )?;
-                tx.execute(
-                    "UPDATE recurring SET category_id = ?2 WHERE category_id = ?1",
-                    params![id, to],
-                )?;
-            }
-            let from_paamonim: bool = tx.query_row(
-                "SELECT paamonim_item_id IS NOT NULL FROM categories WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )?;
-            if from_paamonim {
-                tx.execute(
-                    "UPDATE categories SET deleted = 1, merged_into = ?2 WHERE id = ?1",
-                    params![id, move_to],
-                )?;
-            } else {
-                tx.execute("DELETE FROM categories WHERE id = ?1", params![id])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    async fn list_recurring(&self) -> anyhow::Result<Vec<RecurringSegment>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
-                    payment_method_id, note
-             FROM recurring ORDER BY series_id, start_month",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(RecurringSegment {
-                    id: r.get(0)?,
-                    series_id: r.get(1)?,
-                    start_month: r.get(2)?,
-                    end_month: r.get(3)?,
-                    day: r.get(4)?,
-                    amount_agorot: r.get(5)?,
-                    category_id: r.get(6)?,
-                    payment_method_id: r.get(7)?,
-                    note: r.get(8)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn insert_recurring(
-        &self,
-        series_id: Option<i64>,
-        r: &NewRecurring,
-    ) -> anyhow::Result<i64> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
-                                    category_id, payment_method_id, note)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                series_id.unwrap_or(0),
-                r.start_month,
-                r.end_month,
-                r.day,
-                r.amount_agorot,
-                r.category_id,
-                r.payment_method_id,
-                r.note
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
-        if series_id.is_none() {
-            tx.execute(
-                "UPDATE recurring SET series_id = ?1 WHERE id = ?1",
-                params![id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(id)
-    }
-
-    async fn update_recurring(&self, id: i64, r: &NewRecurring) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "UPDATE recurring SET start_month = ?2, end_month = ?3, day = ?4, amount_agorot = ?5,
-               category_id = ?6, payment_method_id = ?7, note = ?8
-             WHERE id = ?1",
-            params![
-                id,
-                r.start_month,
-                r.end_month,
-                r.day,
-                r.amount_agorot,
-                r.category_id,
-                r.payment_method_id,
-                r.note
-            ],
-        )?;
-        Ok(())
-    }
-
-    async fn delete_recurring(&self, id: i64) -> anyhow::Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM recurring WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
-    async fn settled_recurring(&self) -> anyhow::Result<Vec<(i64, String)>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT series_id, month FROM recurring_settled")?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn settle_recurring_month(
-        &self,
-        series_id: i64,
-        month: &str,
-        t: Option<&NewTransaction>,
-    ) -> anyhow::Result<bool> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let new = tx.execute(
-            "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
-            params![series_id, month],
-        )?;
-        if let (1, Some(t)) = (new, t) {
-            tx.execute(
-                "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
-                                           note, sync_state, recurring_series_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
-                params![
-                    t.date,
-                    t.amount_agorot,
-                    t.category_id,
-                    t.payment_method_id,
-                    t.note,
-                    series_id
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(new == 1)
-    }
-
-    async fn settle_recurring(&self, due: &[Occurrence]) -> anyhow::Result<usize> {
-        let mut conn = self.0.lock().unwrap();
-        let tx = conn.transaction()?;
-        let mut added = 0;
-        for o in due {
-            let new = tx.execute(
-                "INSERT OR IGNORE INTO recurring_settled (series_id, month) VALUES (?1, ?2)",
-                params![o.series_id, &o.date[..7]],
-            )?;
-            if new == 1 {
-                tx.execute(
-                    "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
-                                               note, sync_state, recurring_series_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
-                    params![
-                        o.date,
-                        o.amount_agorot,
-                        o.category_id,
-                        o.payment_method_id,
-                        o.note,
-                        o.series_id
-                    ],
-                )?;
-                added += 1;
-            }
-        }
-        tx.commit()?;
-        Ok(added)
-    }
-
-    async fn log_append(&self, e: &NewLogEntry) -> anyhow::Result<()> {
-        self.0.lock().unwrap().execute(
-            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                e.at,
-                e.kind,
-                e.entity_id,
-                e.old.as_ref().map(|v| v.to_string()),
-                e.new.as_ref().map(|v| v.to_string())
-            ],
-        )?;
-        Ok(())
-    }
-
-    async fn list_log(
-        &self,
-        limit: usize,
-        before_id: Option<i64>,
-    ) -> anyhow::Result<Vec<LogEntry>> {
-        let conn = self.0.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, at, kind, entity_id, old_value, new_value FROM change_log
-             WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![before_id.unwrap_or(i64::MAX), limit as i64], |r| {
-                Ok(LogEntry {
-                    id: r.get(0)?,
-                    at: r.get(1)?,
-                    kind: r.get(2)?,
-                    entity_id: r.get(3)?,
-                    old: r.get::<_, Option<String>>(4)?.and_then(|s| s.parse().ok()),
-                    new: r.get::<_, Option<String>>(5)?.and_then(|s| s.parse().ok()),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM change_log WHERE at < ?1", params![before])?)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mysql::MySqlStorage;
 
     /// Record a pending transaction as sent to Paamonim under `line`.
-    async fn mark(s: &SqliteStorage, id: i64, line: &str) {
+    async fn mark(s: &MySqlStorage, id: i64, line: &str) {
         let p = s
             .pending_mirrors()
             .await
@@ -1169,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn editing_a_synced_line_flags_it_modified() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = s
             .create_transaction(&tx("2026-10-03", -1000, None))
             .await
@@ -1194,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn import_links_parents_and_fills_missing_links_on_rerun() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let line = |cat: Option<&str>| ImportTransaction {
             line_id: "1".into(),
             date: "2026-10-03".into(),
@@ -1233,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn import_is_idempotent() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let batch = ImportBatch {
             categories: vec![ImportCategory {
                 key: "e:1".into(),
@@ -1271,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn monthly_totals_follow_inserts_and_deletes() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let a = s
             .create_transaction(&tx("2026-10-03", 1050, None))
             .await
@@ -1316,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn creating_categories_validates_and_nests_two_levels() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let top = s
             .create_category(&new_cat(" Home ", None, true))
             .await
@@ -1352,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_a_used_category_needs_a_valid_replacement() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let home = s
             .create_category(&new_cat("Home", None, false))
             .await
@@ -1410,7 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn moving_lines_flags_synced_ones_as_modified() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let a = s.create_category(&new_cat("A", None, false)).await.unwrap();
         let b = s.create_category(&new_cat("B", None, false)).await.unwrap();
         let synced = s
@@ -1441,7 +713,7 @@ mod tests {
 
     #[tokio::test]
     async fn reimport_does_not_bring_back_deleted_categories() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let batch = |extra: Vec<ImportCategory>, lines: Vec<ImportTransaction>| ImportBatch {
             categories: [
                 imported("ce:1", None),
@@ -1495,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_paamonim_category_without_replacement_leaves_new_lines_uncategorized() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let batch = |lines| ImportBatch {
             categories: vec![imported("e:1", None)],
             transactions: lines,
@@ -1514,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn repeating_rules_count_as_references_and_move_with_the_category() {
         use crate::recurring::NewRecurring;
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let a = s.create_category(&new_cat("A", None, false)).await.unwrap();
         let b = s.create_category(&new_cat("B", None, false)).await.unwrap();
         let rule = |month: &str| NewRecurring {

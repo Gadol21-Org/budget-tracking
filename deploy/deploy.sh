@@ -27,7 +27,6 @@ docker run -d --name "$name" \
   --restart unless-stopped \
   --log-opt max-size=10m --log-opt max-file=3 \
   -p "127.0.0.1:$host_port:3000" \
-  -v budget-data:/data \
   --env-file "$env_file" \
   "$image"
 

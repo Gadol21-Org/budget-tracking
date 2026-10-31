@@ -1,5 +1,4 @@
 mod assets;
-mod db;
 mod import;
 mod mirror;
 mod money;
@@ -9,6 +8,8 @@ mod paamonim;
 mod recurring;
 mod sheets;
 mod storage;
+#[cfg(test)]
+mod testdb;
 
 use std::sync::Arc;
 
@@ -20,8 +21,7 @@ use axum::{
 };
 use serde::Deserialize;
 use storage::{
-    Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction, SqliteStorage, Storage,
-    Transaction,
+    Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction, Storage, Transaction,
 };
 
 type Db = Arc<dyn Storage>;
@@ -515,15 +515,8 @@ async fn main() -> anyhow::Result<()> {
         return probe(args.get(2).map(String::as_str).unwrap_or("probe-out")).await;
     }
 
-    // STORAGE=sqlite (default, local/tests) | mysql (MySQL HeatWave or any MySQL 8)
-    let db: Db = match std::env::var("STORAGE").as_deref().unwrap_or("sqlite") {
-        "mysql" => Arc::new(mysql::MySqlStorage::connect().await?),
-        "sqlite" => {
-            let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "budget.db".into());
-            Arc::new(SqliteStorage::open(&db_path)?)
-        }
-        other => anyhow::bail!("unknown STORAGE '{other}' (expected sqlite or mysql)"),
-    };
+    // MySQL HeatWave or any MySQL 8, from MYSQL_URL.
+    let db: Db = Arc::new(mysql::MySqlStorage::connect().await?);
 
     // Every change made through the app is recorded in the change log.
     let db: Db = Arc::new(oplog::Logged(db));
@@ -612,9 +605,9 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn router_builds_without_overlapping_routes() {
-        let db: Db = Arc::new(SqliteStorage::open(":memory:").unwrap());
+    #[tokio::test]
+    async fn router_builds_without_overlapping_routes() {
+        let db: Db = Arc::new(crate::testdb::fresh().await);
         let _ = router(db);
     }
 }

@@ -40,14 +40,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/budget-backend /usr/local/bin/
 
-# The SQLite file (only used with STORAGE=sqlite) lives in /data, a Docker volume.
 RUN groupadd --gid 10001 app \
- && useradd --uid 10001 --gid 10001 --home-dir /data --create-home app \
+ && useradd --uid 10001 --gid 10001 --no-create-home app \
  && mkdir /app
-ENV DATABASE_URL=/data/budget.db \
-    BIND_ADDR=0.0.0.0:3000
+ENV BIND_ADDR=0.0.0.0:3000
 USER app
-VOLUME /data
 WORKDIR /app
 EXPOSE 3000
 CMD ["budget-backend"]
