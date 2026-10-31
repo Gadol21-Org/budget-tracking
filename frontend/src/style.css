@@ -55,7 +55,7 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .row:last-child { border-bottom: 0; }
 .row.sub { padding: 4px 0 4px 0; padding-inline-start: 16px; border-bottom: 0; font-size: .9rem; }
 .row .grow { flex: 1; min-width: 0; }
-.row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .name { font-weight: 600; overflow-wrap: anywhere; }
 .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--brand); }
 .daylabel { margin: 16px 4px 6px; font-size: .85rem; color: var(--muted); font-weight: 600; }
@@ -93,6 +93,13 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .note { margin-top: 10px; font-size: .9rem; }
 .error { color: var(--expense); }
 
+/* Phones: a little less side padding so names and amounts get more room. */
+@media (max-width: 600px) {
+  main { padding-inline: 8px; }
+  .card { padding-inline: 12px; }
+  .fab { inset-inline-start: 12px; }
+}
+
 /* Desktop: sidebar instead of bottom nav */
 @media (min-width: 900px) {
   .shell { flex-direction: row; }
@@ -109,7 +116,8 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .filterbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .filterbar .grow { flex: 1; min-width: 0; }
 .filterbar .btn { white-space: nowrap; padding: 8px 12px; }
-.filterbar .muted, .filterbar .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filterbar .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filterbar .name { overflow-wrap: anywhere; }
 .periodbtn { border: 0; background: none; cursor: pointer; padding: 8px 12px; border-radius: 10px; }
 .periodbtn:hover { background: var(--surface); }
 .seg3 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
