@@ -870,8 +870,24 @@ function openTransactionDialog(existing?: Transaction) {
     if (existing?.category_id === Number(top)) return Number(top);
     throw new Error("יש לבחור תת-קטגוריה");
   };
+  /** Saving stays greyed out until the category (and its sub-category, if it has any) is chosen. */
+  const categoryReady = () => {
+    try {
+      categoryId();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const syncSave = () => {
+    const ready = categoryReady();
+    save.disabled = !ready;
+    for (const b of dlg.querySelectorAll<HTMLButtonElement>(".needs-category")) b.disabled = !ready;
+  };
+  topPick.input.addEventListener("change", syncSave);
+  subPick.input.addEventListener("change", syncSave);
   let firstFill = true;
-  const fillCats = () => {
+  const fillCats = (sync = true) => {
     expBtn.setAttribute("aria-pressed", String(!isIncome));
     incBtn.setAttribute("aria-pressed", String(isIncome));
     // First time: the transaction's own category; after switching kind it no longer applies unless it fits.
@@ -887,10 +903,11 @@ function openTransactionDialog(existing?: Transaction) {
     if (!tops.some((c) => String(c.id) === top)) (top = ""), (sub = "");
     topPick.set(tops.map((c) => ({ value: String(c.id), label: c.name })), top);
     fillSubs(sub);
+    if (sync) syncSave();
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
-  fillCats();
+  fillCats(false);
 
   const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
@@ -958,6 +975,10 @@ function openTransactionDialog(existing?: Transaction) {
         )
       : el("div", { className: "actions" }, cancel, save),
   );
+  // The update menu of a repeating charge is greyed out the same way.
+  form.querySelectorAll(".menuwrap > button.primary").forEach((b) => b.classList.add("needs-category"));
+  dlg.append(form);
+  syncSave();
   form.onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -997,7 +1018,6 @@ function openTransactionDialog(existing?: Transaction) {
       save.disabled = false;
     }
   };
-  dlg.append(form);
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
   trackDialog(dlg);
