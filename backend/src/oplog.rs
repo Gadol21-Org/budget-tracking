@@ -379,7 +379,9 @@ impl Storage for Logged {
                 self.log(
                     kind::CATEGORY_MOVE,
                     Some(id),
-                    Some(json!({ "name": cat.name, "parent": category_path(&cats, cat.parent_id) })),
+                    Some(
+                        json!({ "name": cat.name, "parent": category_path(&cats, cat.parent_id) }),
+                    ),
                     Some(json!({ "name": cat.name, "parent": category_path(&cats, Some(to)) })),
                 )
                 .await;

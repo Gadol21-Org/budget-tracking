@@ -16,8 +16,9 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Category, REQUEUE_SKIPPED_SQL, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
+    rounds_to, Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
     PaymentMethod, PendingMirror, RawBackup, RawCategory, RawPaymentMethod, Storage, Transaction,
+    REQUEUE_SKIPPED_SQL,
 };
 
 const SCHEMA: [&str; 8] = [
@@ -353,9 +354,7 @@ impl Storage for MySqlStorage {
     }
 
     async fn requeue_skipped_sub_categories(&self) -> Result<usize> {
-        let res = sqlx::query(REQUEUE_SKIPPED_SQL)
-            .execute(&self.pool)
-            .await?;
+        let res = sqlx::query(REQUEUE_SKIPPED_SQL).execute(&self.pool).await?;
         Ok(res.rows_affected() as usize)
     }
 

@@ -524,8 +524,14 @@ fn router(db: Db) -> Router {
             get(list_categories).post(create_category),
         )
         .route("/api/categories/:id", delete(delete_category))
-        .route("/api/categories/:id/link", axum::routing::put(link_category))
-        .route("/api/categories/:id/move", axum::routing::post(move_category))
+        .route(
+            "/api/categories/:id/link",
+            axum::routing::put(link_category),
+        )
+        .route(
+            "/api/categories/:id/move",
+            axum::routing::post(move_category),
+        )
         .route("/api/recurring", get(list_recurring).post(create_recurring))
         .route("/api/recurring/occurrences", get(recurring_occurrences))
         .route(

@@ -341,7 +341,10 @@ pub trait Storage: Send + Sync {
     /// while one of its sub-categories is an item in Paamonim, whose place there is fixed.
     async fn link_category_to(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
         let all = self.list_categories().await?;
-        let cat = all.iter().find(|c| c.id == id).ok_or(CategoryError::NotFound)?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
         if cat.parent_id.is_some() || cat.from_paamonim {
             return Err(CategoryError::Invalid(
                 "only a top-level category made here can be linked".into(),
@@ -357,8 +360,7 @@ pub trait Storage: Send + Sync {
             .any(|c| c.parent_id == Some(id) && c.from_paamonim)
         {
             return Err(CategoryError::Invalid(
-                "a sub-category of this category is an item in Paamonim; move it out first"
-                    .into(),
+                "a sub-category of this category is an item in Paamonim; move it out first".into(),
             )
             .into());
         }
@@ -370,18 +372,18 @@ pub trait Storage: Send + Sync {
     /// the same Paamonim category, so nothing changes there.
     async fn move_category(&self, id: i64, to: i64) -> anyhow::Result<()> {
         let all = self.list_categories().await?;
-        let cat = all.iter().find(|c| c.id == id).ok_or(CategoryError::NotFound)?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
         let Some(from) = cat.parent_id.and_then(|p| all.iter().find(|c| c.id == p)) else {
             return Err(CategoryError::Invalid("only a sub-category can be moved".into()).into());
         };
-        let target = all
-            .iter()
-            .find(|c| c.id == to)
-            .ok_or_else(|| CategoryError::Invalid("the category to move to was not found".into()))?;
+        let target = all.iter().find(|c| c.id == to).ok_or_else(|| {
+            CategoryError::Invalid("the category to move to was not found".into())
+        })?;
         if target.parent_id.is_some() {
-            return Err(
-                CategoryError::Invalid("move it under a top-level category".into()).into(),
-            );
+            return Err(CategoryError::Invalid("move it under a top-level category".into()).into());
         }
         if target.is_income != cat.is_income {
             return Err(CategoryError::Invalid(
@@ -1686,11 +1688,18 @@ mod tests {
             .unwrap();
         s.move_category(salary, wife).await.unwrap();
         s.move_category(bonus, omer).await.unwrap();
-        let parent = |cats: &[Category], id: i64| cats.iter().find(|c| c.id == id).unwrap().parent_id;
+        let parent =
+            |cats: &[Category], id: i64| cats.iter().find(|c| c.id == id).unwrap().parent_id;
         let cats = s.list_categories().await.unwrap();
-        assert_eq!((parent(&cats, salary), parent(&cats, bonus)), (Some(wife), Some(omer)));
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
         let tx = s.list_transactions().await.unwrap();
-        assert_eq!(tx.iter().find(|x| x.id == t).unwrap().category_id, Some(salary));
+        assert_eq!(
+            tx.iter().find(|x| x.id == t).unwrap().category_id,
+            Some(salary)
+        );
         // A re-import leaves them where they were moved.
         let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
             key: key.into(),
@@ -1709,7 +1718,10 @@ mod tests {
         .await
         .unwrap();
         let cats = s.list_categories().await.unwrap();
-        assert_eq!((parent(&cats, salary), parent(&cats, bonus)), (Some(wife), Some(omer)));
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
         // Back under the Paamonim category is fine too.
         s.move_category(bonus, income).await.unwrap();
         // A Paamonim item can't move to a category that isn't linked to its Paamonim category.

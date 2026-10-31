@@ -1508,7 +1508,10 @@ mod tests {
         assert_eq!(state_of(&s, b).await, "synced");
         let m = mock.lock().unwrap();
         assert_eq!(m.custom.len(), 1);
-        assert_eq!((m.custom[0].1.as_str(), m.custom[0].2.as_str()), ("מאפייה", "3"));
+        assert_eq!(
+            (m.custom[0].1.as_str(), m.custom[0].2.as_str()),
+            ("מאפייה", "3")
+        );
         let items: Vec<&str> = m.lines.iter().map(|l| l.item).collect();
         assert_eq!(items, ["סופר", "מאפייה"]);
     }
