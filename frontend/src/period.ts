@@ -1,3 +1,4 @@
+import { fmtDate } from "./ui";
 /** The span of time the summary and list show. */
 export type Period =
   | { kind: "month"; month: string } // YYYY-MM
@@ -37,7 +38,7 @@ export function shift(p: Period, delta: number): Period | null {
   }
 }
 
-const day = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("he-IL");
+const day = fmtDate;
 
 export function title(p: Period): string {
   switch (p.kind) {
