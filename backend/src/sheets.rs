@@ -181,6 +181,8 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         "Deleted",
         "Merged into id",
         "Merged into",
+        "Linked to Paamonim category id",
+        "Linked to Paamonim category",
     ]);
     for c in &raw.categories {
         cats.push(vec![
@@ -193,6 +195,8 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
             (if c.deleted { "yes" } else { "" }).into(),
             opt(c.merged_into),
             name(&cat_names, c.merged_into).into(),
+            opt(c.linked_to),
+            name(&cat_names, c.linked_to).into(),
         ]);
     }
 

@@ -141,6 +141,43 @@ struct DeleteCategoryQuery {
     move_to: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct LinkCategory {
+    /// The Paamonim top-level category this one stands in for.
+    linked_to: Option<i64>,
+}
+
+/// Link a top-level category made here to a Paamonim top-level category.
+async fn link_category(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(b): Json<LinkCategory>,
+) -> Result<Json<()>, (StatusCode, String)> {
+    db.link_category_to(id, b.linked_to)
+        .await
+        .map(Json)
+        .map_err(category_error)
+}
+
+#[derive(Deserialize)]
+struct MoveCategory {
+    /// The top-level category to put the sub-category under.
+    parent_id: i64,
+}
+
+/// Move a sub-category, with its transactions and repeating rules, under another top-level
+/// category.
+async fn move_category(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(b): Json<MoveCategory>,
+) -> Result<Json<()>, (StatusCode, String)> {
+    db.move_category(id, b.parent_id)
+        .await
+        .map(Json)
+        .map_err(category_error)
+}
+
 /// Also deletes the sub-categories. Answers 409 when transactions need a `move_to`.
 async fn delete_category(
     State(db): State<Db>,
@@ -487,6 +524,8 @@ fn router(db: Db) -> Router {
             get(list_categories).post(create_category),
         )
         .route("/api/categories/:id", delete(delete_category))
+        .route("/api/categories/:id/link", axum::routing::put(link_category))
+        .route("/api/categories/:id/move", axum::routing::post(move_category))
         .route("/api/recurring", get(list_recurring).post(create_recurring))
         .route("/api/recurring/occurrences", get(recurring_occurrences))
         .route(

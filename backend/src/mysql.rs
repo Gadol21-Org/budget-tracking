@@ -16,7 +16,7 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
+    rounds_to, Category, REQUEUE_SKIPPED_SQL, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
     PaymentMethod, PendingMirror, RawBackup, RawCategory, RawPaymentMethod, Storage, Transaction,
 };
 
@@ -31,6 +31,8 @@ const SCHEMA: [&str; 8] = [
          -- its lines go to merged_into, if any.
          deleted BOOLEAN NOT NULL DEFAULT FALSE,
          merged_into BIGINT NULL,
+         -- On a top-level category made here: the Paamonim top-level category it stands in for.
+         linked_to BIGINT NULL,
          FOREIGN KEY (parent_id) REFERENCES categories(id)
      )",
     "CREATE TABLE IF NOT EXISTS payment_methods (
@@ -138,6 +140,10 @@ impl MySqlStorage {
                 .execute(&pool)
                 .await?;
         }
+        // Tables created before categories could be linked; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE categories ADD COLUMN linked_to BIGINT NULL")
+            .execute(&pool)
+            .await;
         // Tables created before repeating transactions existed; fails harmlessly if present.
         let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN recurring_series_id BIGINT NULL")
             .execute(&pool)
@@ -201,13 +207,21 @@ impl Storage for MySqlStorage {
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
         let rows = sqlx::query(
             "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note,
-                    c.paamonim_item_id AS item_key, c.name AS item_name,
+                    COALESCE(c.paamonim_item_id, (SELECT s.paamonim_item_id FROM categories s
+                       JOIN categories sp ON sp.id = s.parent_id AND NOT sp.deleted
+                       WHERE NOT s.deleted AND s.id <> c.id AND s.name = c.name
+                         AND s.is_income = c.is_income
+                         AND (s.paamonim_item_id LIKE 'e:%' OR s.paamonim_item_id LIKE 'i:%')
+                         AND COALESCE(sp.linked_to, sp.id) = COALESCE(pc.linked_to, pc.id)
+                       ORDER BY s.id LIMIT 1)) AS item_key,
+                    c.name AS item_name,
                     p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id,
-                    t.category_id, pc.paamonim_item_id AS parent_key,
+                    t.category_id, COALESCE(pc.paamonim_item_id, lc.paamonim_item_id) AS parent_key,
                     CAST(COALESCE(c.is_income, 0) AS SIGNED) AS is_income
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
              LEFT JOIN categories pc ON pc.id = c.parent_id AND NOT pc.deleted
+             LEFT JOIN categories lc ON lc.id = pc.linked_to AND NOT lc.deleted
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
              WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )
@@ -274,14 +288,24 @@ impl Storage for MySqlStorage {
 
     async fn link_category(&self, id: i64, key: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let n = sqlx::query(
-            "UPDATE categories SET paamonim_item_id = ? WHERE id = ? AND paamonim_item_id IS NULL",
-        )
-        .bind(key)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        // An item another category already holds stays with it; lines are still sent there.
+        let taken: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM categories WHERE paamonim_item_id = ?")
+                .bind(key)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let n = if taken.is_some() {
+            0
+        } else {
+            sqlx::query(
+                "UPDATE categories SET paamonim_item_id = ? WHERE id = ? AND paamonim_item_id IS NULL",
+            )
+            .bind(key)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+        };
         if n == 1 {
             sqlx::query(
                 "UPDATE transactions SET sync_state = 'pending'
@@ -329,22 +353,16 @@ impl Storage for MySqlStorage {
     }
 
     async fn requeue_skipped_sub_categories(&self) -> Result<usize> {
-        let res = sqlx::query(
-            "UPDATE transactions SET sync_state = 'pending'
-             WHERE sync_state IN ('skipped', 'error') AND paamonim_line_id IS NULL AND category_id IN (
-               SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
-               WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
-                 AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
-        )
-        .execute(&self.pool)
-        .await?;
+        let res = sqlx::query(REQUEUE_SKIPPED_SQL)
+            .execute(&self.pool)
+            .await?;
         Ok(res.rows_affected() as usize)
     }
 
     async fn raw_backup(&self) -> Result<RawBackup> {
         let categories = sqlx::query(
             "SELECT id, name, CAST(is_income AS SIGNED) AS is_income, paamonim_item_id, parent_id,
-                    CAST(deleted AS SIGNED) AS deleted, merged_into
+                    CAST(deleted AS SIGNED) AS deleted, merged_into, linked_to
              FROM categories ORDER BY id",
         )
         .fetch_all(&self.pool)
@@ -359,6 +377,7 @@ impl Storage for MySqlStorage {
                 parent_id: r.try_get("parent_id")?,
                 deleted: r.try_get::<i64, _>("deleted")? != 0,
                 merged_into: r.try_get("merged_into")?,
+                linked_to: r.try_get("linked_to")?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -507,9 +526,24 @@ impl Storage for MySqlStorage {
                 // Deleted here: stays deleted, and its name/parent are not refreshed.
                 Some((id, true)) => id,
                 Some((id, false)) => {
+                    // A sub-category moved here under a category linked to its Paamonim
+                    // category keeps its place.
+                    let kept: Option<i64> = match parent {
+                        Some(p) => sqlx::query_scalar(
+                            "SELECT c.parent_id FROM categories c
+                             JOIN categories pc ON pc.id = c.parent_id
+                             WHERE c.id = ? AND pc.linked_to = ?",
+                        )
+                        .bind(id)
+                        .bind(p)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        .flatten(),
+                        None => None,
+                    };
                     sqlx::query("UPDATE categories SET name = ?, parent_id = ? WHERE id = ?")
                         .bind(&c.name)
-                        .bind(parent)
+                        .bind(kept.or(parent))
                         .bind(id)
                         .execute(&mut *tx)
                         .await?;
@@ -734,7 +768,9 @@ impl Storage for MySqlStorage {
 
     async fn list_categories(&self) -> Result<Vec<Category>> {
         let rows = sqlx::query(
-            "SELECT id, name, is_income, parent_id FROM categories WHERE NOT deleted ORDER BY name",
+            "SELECT id, name, is_income, parent_id,
+                    CAST(paamonim_item_id IS NOT NULL AS SIGNED) AS from_paamonim, linked_to
+             FROM categories WHERE NOT deleted ORDER BY name",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -745,9 +781,35 @@ impl Storage for MySqlStorage {
                     name: r.try_get("name")?,
                     is_income: r.try_get("is_income")?,
                     parent_id: r.try_get("parent_id")?,
+                    from_paamonim: r.try_get::<i64, _>("from_paamonim")? != 0,
+                    linked_to: r.try_get("linked_to")?,
                 })
             })
             .collect()
+    }
+
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE categories SET linked_to = ? WHERE id = ?")
+            .bind(linked_to)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(REQUEUE_SKIPPED_SQL).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE categories SET parent_id = ? WHERE id = ?")
+            .bind(parent_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(REQUEUE_SKIPPED_SQL).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn insert_category(
