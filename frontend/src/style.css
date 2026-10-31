@@ -266,6 +266,8 @@ form.add label[hidden] { display: none; }
 .hmcell { aspect-ratio: 1; border-radius: 6px; font-size: .72rem; display: flex; align-items: flex-end; justify-content: flex-start; padding: 2px 4px; background: var(--line); color: var(--muted); }
 .hmcell.future { background: transparent; border: 1px dashed var(--line); }
 
+.banner { background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--expense); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; color: var(--muted); font-size: 14px; }
+
 /* Installed desktop app with Window Controls Overlay: the app draws its own title bar (the OS puts the window buttons on top of it). */
 .titlebar { display: none; }
 @media (display-mode: window-controls-overlay) {

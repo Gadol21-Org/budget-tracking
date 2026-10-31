@@ -2,6 +2,7 @@ import "./style.css";
 import { clickable, el, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
+import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
 type View = "month" | "list" | "insights" | "settings" | "log" | "categories";
@@ -31,6 +32,8 @@ const state = {
   syncSeen: new Map<number, string>(),
   /** Lines just saved in Paamonim, shown with ✅ until this time (ms). */
   justSynced: new Map<number, number>(),
+  /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
+  offline: false,
 };
 
 /** Browser history: every screen is a history entry, so the phone's back button/gesture goes to the previous screen (and closes a dialog first) instead of leaving the app. */
@@ -100,6 +103,7 @@ const SYNCED_SHOWN_MS = 2500;
 
 /** Saving / saved / failed marker of a line in Paamonim; nothing when mirroring is off. */
 function syncMark(t: Transaction): HTMLElement | null {
+  if (t.sync_state === "queued") return el("span", { className: "sync", title: "ממתין לחיבור כדי להישלח", textContent: "📴" });
   if (!state.mirror || t.upcoming) return null;
   if (IN_FLIGHT.has(t.sync_state)) return el("span", { className: "sync-ring", title: "שומר בפעמונים…", role: "status", ariaLabel: "שומר בפעמונים" });
   if (t.sync_state === "error") return el("span", { className: "sync", title: "לא נשמר בפעמונים", textContent: "⚠️" });
@@ -314,11 +318,12 @@ function listView(): HTMLElement {
             if (del)
               del.onclick = async () => {
                 if (!confirm("למחוק את התנועה?")) return;
-                await api.deleteTransaction(t.id);
+                if (t.sync_state === "queued") await dequeue(-t.id);
+                else await api.deleteTransaction(t.id);
                 await load();
               };
-            const edit = el("button", { className: "del", title: "עריכה", textContent: "✎" });
-            edit.onclick = () => openTransactionDialog(t);
+            const edit = t.sync_state === "queued" ? null : el("button", { className: "del", title: "עריכה", textContent: "✎" });
+            if (edit) edit.onclick = () => openTransactionDialog(t);
             return el(
               "div",
               { className: t.upcoming ? "row upcoming" : "row" },
@@ -1011,12 +1016,21 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
         if (seriesId !== undefined) await api.changeRecurring(seriesId, rule);
         else await api.addRecurring(rule);
       } else if (existing) await api.updateTransaction(existing.id, body);
-      else await api.addTransaction(body);
+      else {
+        try {
+          await api.addTransaction(body);
+        } catch (e3) {
+          // No connection: keep the line on this device and send it when the connection is back.
+          if (!isNetworkError(e3)) throw e3;
+          await enqueue(body);
+          requestPersistence();
+        }
+      }
       showPeriodFor(date.value);
       dlg.close();
       await load();
     } catch (e2) {
-      err.textContent = e2 instanceof Error ? e2.message : String(e2);
+      err.textContent = isNetworkError(e2) ? "אין חיבור: בלי חיבור אפשר רק להוסיף תנועה חדשה (לא חוזרת)" : e2 instanceof Error ? e2.message : String(e2);
       save.disabled = false;
     }
   };
@@ -1069,12 +1083,27 @@ function render() {
   renderedView = state.view;
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
-  const main = el("main", {}, view);
+  const banner = state.offline ? el("div", { className: "banner", role: "status", textContent: "אין חיבור: מוצגים הנתונים האחרונים. תנועות חדשות יישמרו וישלחו כשהחיבור יחזור." }) : null;
+  const main = el("main", {}, banner, view);
   main.dataset.view = state.view;
   root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);
 }
 
-async function load() {
+/** Send lines saved while offline, oldest first. Stops at the first one the server can't be reached for. */
+async function flushQueue() {
+  for (const q of await queuedList()) {
+    try {
+      await api.addTransaction(q.tx);
+    } catch (e) {
+      if (isNetworkError(e)) return;
+      // The server refused this line (it would be refused again): drop it rather than block the rest.
+    }
+    await dequeue(q.qid);
+  }
+}
+
+type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror">;
+async function fetchAll(): Promise<ServerData & { log?: LogEntry[] }> {
   const [cats, txs, recurring, occurrences, log, mirror] = await Promise.all([
     api.categories(),
     api.transactions(),
@@ -1083,7 +1112,28 @@ async function load() {
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
     api.mirrorStatus().catch(() => ({ enabled: false })),
   ]);
-  state.mirror = mirror.enabled;
+  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log };
+}
+
+async function load() {
+  await flushQueue();
+  let data: ServerData & { log?: LogEntry[] };
+  try {
+    data = await fetchAll();
+    state.offline = false;
+    void saveSnapshot({ ...data, savedAt: Date.now() });
+    requestPersistence();
+  } catch (e) {
+    // Offline: show what was last seen (if anything) instead of an error.
+    const snap = isNetworkError(e) ? await loadSnapshot() : undefined;
+    if (!snap) throw e;
+    data = snap;
+    state.offline = true;
+  }
+  const { cats, recurring, occurrences, log } = data;
+  const queued = await queuedList();
+  const txs: Transaction[] = [...data.txs, ...queued.map((q: Queued) => ({ id: -q.qid, ...q.tx, sync_state: "queued" }))];
+  state.mirror = data.mirror;
   trackSync(txs);
   if (log) {
     state.log = log;
@@ -1159,7 +1209,8 @@ function refreshIfStale() {
 }
 document.addEventListener("visibilitychange", refreshIfStale);
 window.addEventListener("pageshow", (e) => e.persisted && refreshIfStale());
-window.addEventListener("online", refreshIfStale);
+window.addEventListener("online", () => void refresh());
+window.addEventListener("offline", () => void refresh());
 
 // iOS Safari ignores user-scalable=no and touch-action for pinch, but still fires these gesture events.
 for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
