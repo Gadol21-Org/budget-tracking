@@ -242,6 +242,9 @@ impl Storage for Logged {
     async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize> {
         self.0.requeue_skipped_sub_categories().await
     }
+    async fn raw_backup(&self) -> anyhow::Result<crate::storage::RawBackup> {
+        self.0.raw_backup().await
+    }
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
         self.0.pending_line_deletes().await
     }

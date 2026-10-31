@@ -1,11 +1,11 @@
 //! Snapshot export to a Google Sheet owned by the user. A service account with
-//! Editor access to the sheet writes two tabs: `Transactions` and `Monthly`.
-//! The tabs are rewritten on every export, so the sheet is a readable copy, not a source.
+//! Editor access to the sheet writes one tab per table the app stores (transactions,
+//! categories, payment methods, repeating rules, change log, Paamonim sync state), so the sheet
+//! is a complete backup. Every tab is cleared and rewritten on each export.
 //!
 //! Config: `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (base64 of the key file; raw JSON also accepted)
 //! and `GOOGLE_SHEET_ID`.
 //!
-//! NOTE: not yet run against Google.
 
 use std::collections::HashMap;
 
@@ -35,7 +35,7 @@ fn default_token_uri() -> String {
 #[derive(Debug, Default, Serialize)]
 pub struct ExportSummary {
     pub transactions: usize,
-    pub monthly_rows: usize,
+    pub tabs: usize,
 }
 
 fn parse_service_account(raw: &str) -> Result<ServiceAccount> {
@@ -95,64 +95,185 @@ fn money(agorot: i64) -> f64 {
     agorot as f64 / 100.0
 }
 
-/// Build the two tabs as rows of cells.
-pub async fn build_tabs(storage: &dyn Storage) -> Result<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
-    let all = storage.list_categories().await?;
-    // "parent › child" for sub-categories.
-    let cats: HashMap<i64, String> = all
+type Rows = Vec<Vec<Value>>;
+
+fn header(cols: &[&str]) -> Rows {
+    vec![cols.iter().map(|c| Value::from(*c)).collect()]
+}
+
+fn opt<T: Into<Value>>(v: Option<T>) -> Value {
+    v.map(Into::into).unwrap_or(Value::from(""))
+}
+
+/// Build every tab as rows of cells: a complete, restorable copy of what the app stores.
+/// Names are included next to ids for readability; the ids are what link the tabs together.
+pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows)>> {
+    let raw = storage.raw_backup().await?;
+    let cat_names: HashMap<i64, String> = raw
+        .categories
         .iter()
         .map(|c| {
-            let name = match c.parent_id.and_then(|p| all.iter().find(|x| x.id == p)) {
+            let name = match c
+                .parent_id
+                .and_then(|p| raw.categories.iter().find(|x| x.id == p))
+            {
                 Some(p) => format!("{} › {}", p.name, c.name),
                 None => c.name.clone(),
             };
             (c.id, name)
         })
         .collect();
-    let pms: HashMap<i64, String> = storage
-        .list_payment_methods()
-        .await?
-        .into_iter()
-        .map(|p| (p.id, p.name))
+    let pm_names: HashMap<i64, String> = raw
+        .payment_methods
+        .iter()
+        .map(|p| (p.id, p.name.clone()))
         .collect();
     let name = |m: &HashMap<i64, String>, id: Option<i64>| {
         id.and_then(|i| m.get(&i).cloned()).unwrap_or_default()
     };
 
-    let mut tx = vec![[
-        "Date",
-        "Category",
-        "Payment method",
-        "Amount (ILS)",
-        "Note",
-        "Sync",
+    let links: HashMap<i64, (Option<String>, Option<String>)> = raw
+        .tx_links
+        .into_iter()
+        .map(|(id, line, date)| (id, (line, date)))
+        .collect();
+    let mut tx = header(&[
         "Id",
-    ]
-    .map(Value::from)
-    .to_vec()];
+        "Date",
+        "Amount (ILS)",
+        "Amount (agorot)",
+        "Category id",
+        "Category",
+        "Payment method id",
+        "Payment method",
+        "Note",
+        "Sync state",
+        "Recurring series id",
+        "Paamonim line id",
+        "Paamonim line date",
+    ]);
     for t in storage.list_transactions().await? {
+        let (line, mdate) = links.get(&t.id).cloned().unwrap_or_default();
         tx.push(vec![
+            json!(t.id),
             t.date.into(),
-            name(&cats, t.category_id).into(),
-            name(&pms, t.payment_method_id).into(),
             json!(money(t.amount_agorot)),
+            json!(t.amount_agorot),
+            opt(t.category_id),
+            name(&cat_names, t.category_id).into(),
+            opt(t.payment_method_id),
+            name(&pm_names, t.payment_method_id).into(),
             t.note.into(),
             t.sync_state.into(),
-            t.id.to_string().into(),
+            opt(t.recurring_series_id),
+            opt(line),
+            opt(mdate),
         ]);
     }
-    let mut monthly = vec![["Month", "Category", "Total (ILS)", "Count"]
-        .map(Value::from)
-        .to_vec()];
-    for m in storage.monthly_totals().await? {
-        monthly.push(vec![
-            m.month.into(),
-            name(&cats, m.category_id).into(),
-            json!(money(m.total_agorot)),
-            json!(m.count),
+
+    let mut cats = header(&[
+        "Id",
+        "Name",
+        "Parent id",
+        "Parent",
+        "Type",
+        "Paamonim item id",
+        "Deleted",
+        "Merged into id",
+        "Merged into",
+    ]);
+    for c in &raw.categories {
+        cats.push(vec![
+            json!(c.id),
+            c.name.clone().into(),
+            opt(c.parent_id),
+            name(&cat_names, c.parent_id).into(),
+            (if c.is_income { "income" } else { "expense" }).into(),
+            opt(c.paamonim_item_id.clone()),
+            (if c.deleted { "yes" } else { "" }).into(),
+            opt(c.merged_into),
+            name(&cat_names, c.merged_into).into(),
         ]);
     }
-    Ok((tx, monthly))
+
+    let mut pms = header(&["Id", "Name", "Paamonim id"]);
+    for p in &raw.payment_methods {
+        pms.push(vec![
+            json!(p.id),
+            p.name.clone().into(),
+            opt(p.paamonim_id.clone()),
+        ]);
+    }
+
+    let mut rec = header(&[
+        "Id",
+        "Series id",
+        "Start month",
+        "End month",
+        "Day",
+        "Amount (ILS)",
+        "Amount (agorot)",
+        "Category id",
+        "Category",
+        "Payment method id",
+        "Payment method",
+        "Note",
+    ]);
+    for r in storage.list_recurring().await? {
+        rec.push(vec![
+            json!(r.id),
+            json!(r.series_id),
+            r.start_month.into(),
+            opt(r.end_month),
+            json!(r.day),
+            json!(money(r.amount_agorot)),
+            json!(r.amount_agorot),
+            opt(r.category_id),
+            name(&cat_names, r.category_id).into(),
+            opt(r.payment_method_id),
+            name(&pm_names, r.payment_method_id).into(),
+            r.note.into(),
+        ]);
+    }
+
+    let mut settled = header(&["Series id", "Month"]);
+    for (series, month) in storage.settled_recurring().await? {
+        settled.push(vec![json!(series), month.into()]);
+    }
+
+    let json_cell = |v: Option<Value>| v.map(|v| v.to_string()).unwrap_or_default();
+    let mut log = header(&["Id", "At (UTC)", "Kind", "Entity id", "Old", "New"]);
+    for e in storage.list_log(1_000_000, None).await? {
+        log.push(vec![
+            json!(e.id),
+            e.at.into(),
+            e.kind.into(),
+            opt(e.entity_id),
+            json_cell(e.old).into(),
+            json_cell(e.new).into(),
+        ]);
+    }
+
+    let mut deletes = header(&["Paamonim line id", "Date"]);
+    for d in storage.pending_line_deletes().await? {
+        deletes.push(vec![d.line_id.into(), d.date.into()]);
+    }
+
+    let mut meta = header(&["Key", "Value"]);
+    for (k, v) in raw.meta {
+        meta.push(vec![k.into(), v.into()]);
+    }
+
+    Ok(vec![
+        ("Transactions", tx),
+        ("Categories", cats),
+        ("Payment methods", pms),
+        ("Recurring", rec),
+        ("Recurring settled", settled),
+        ("Change log", log),
+        ("Paamonim pending deletes", deletes),
+        ("Paamonim meta", meta),
+    ])
 }
 
 async fn check(resp: reqwest::Response) -> Result<Value> {
@@ -171,13 +292,13 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
             .context("GOOGLE_SERVICE_ACCOUNT_JSON_B64 not set")?,
     )?;
     let sheet_id = std::env::var("GOOGLE_SHEET_ID").context("GOOGLE_SHEET_ID not set")?;
-    let (tx, monthly) = build_tabs(storage).await?;
+    let tabs = build_tabs(storage).await?;
 
     let http = reqwest::Client::new();
     let token = access_token(&http, &sa).await?;
     let base = format!("{SHEETS}/{sheet_id}");
 
-    // Create the two tabs if they're missing.
+    // Create the tabs that are missing; drop the old `Monthly` tab, which is no longer written.
     let meta = check(
         http.get(format!("{base}?fields=sheets.properties.title"))
             .bearer_auth(&token)
@@ -185,31 +306,41 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
             .await?,
     )
     .await?;
-    let existing: Vec<&str> = meta["sheets"]
+    let sheets_meta: Vec<(i64, &str)> = meta["sheets"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|s| s["properties"]["title"].as_str())
+        .filter_map(|s| {
+            Some((
+                s["properties"]["sheetId"].as_i64()?,
+                s["properties"]["title"].as_str()?,
+            ))
+        })
         .collect();
-    let missing: Vec<Value> = ["Transactions", "Monthly"]
+    let mut requests: Vec<Value> = tabs
         .iter()
-        .filter(|t| !existing.contains(t))
-        .map(|t| json!({"addSheet": {"properties": {"title": t}}}))
+        .filter(|(t, _)| !sheets_meta.iter().any(|(_, e)| e == t))
+        .map(|(t, _)| json!({"addSheet": {"properties": {"title": t}}}))
         .collect();
-    if !missing.is_empty() {
+    // Only if another tab remains, since a spreadsheet can't have zero.
+    if let Some((id, _)) = sheets_meta.iter().find(|(_, t)| *t == "Monthly") {
+        requests.push(json!({"deleteSheet": {"sheetId": id}}));
+    }
+    if !requests.is_empty() {
         check(
             http.post(format!("{base}:batchUpdate"))
                 .bearer_auth(&token)
-                .json(&json!({"requests": missing}))
+                .json(&json!({"requests": requests}))
                 .send()
                 .await?,
         )
         .await?;
     }
 
-    for (tab, rows) in [("Transactions", &tx), ("Monthly", &monthly)] {
+    for (tab, rows) in &tabs {
+        let range = format!("'{tab}'");
         check(
-            http.post(format!("{base}/values/{tab}:clear"))
+            http.post(format!("{base}/values/{range}:clear"))
                 .bearer_auth(&token)
                 .json(&json!({}))
                 .send()
@@ -217,17 +348,17 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
         )
         .await?;
         check(
-            http.put(format!("{base}/values/{tab}!A1?valueInputOption=RAW"))
+            http.put(format!("{base}/values/{range}!A1?valueInputOption=RAW"))
                 .bearer_auth(&token)
-                .json(&json!({"range": format!("{tab}!A1"), "majorDimension": "ROWS", "values": rows}))
+                .json(&json!({"range": format!("{range}!A1"), "majorDimension": "ROWS", "values": rows}))
                 .send()
                 .await?,
         )
         .await?;
     }
     Ok(ExportSummary {
-        transactions: tx.len() - 1,
-        monthly_rows: monthly.len() - 1,
+        transactions: tabs[0].1.len() - 1,
+        tabs: tabs.len(),
     })
 }
 
@@ -251,7 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tabs_keep_non_round_amounts() {
+    async fn tabs_keep_non_round_amounts_and_all_tables() {
         let s = SqliteStorage::open(":memory:").unwrap();
         s.create_transaction(&NewTransaction {
             date: "2026-10-03".into(),
@@ -262,8 +393,12 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, monthly) = build_tabs(&s).await.unwrap();
-        assert_eq!(tx[1][3], json!(-10.5));
-        assert_eq!(monthly[1][2], json!(-10.5));
+        let tabs = build_tabs(&s).await.unwrap();
+        let titles: Vec<_> = tabs.iter().map(|(t, _)| *t).collect();
+        assert!(titles.contains(&"Categories") && titles.contains(&"Recurring"));
+        assert!(!titles.contains(&"Monthly"));
+        let tx = &tabs[0].1;
+        assert_eq!(tx[1][2], json!(-10.5));
+        assert_eq!(tx[1][3], json!(-1050));
     }
 }
