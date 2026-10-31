@@ -13,14 +13,17 @@ export interface BizData {
   tx: Map<number, number>;
   /** category id -> business id */
   cat: Map<number, number>;
+  /** categories whose new transactions must say which business they belong to */
+  required: Set<number>;
 }
 
-export const emptyBiz = (): BizData => ({ businesses: [], tx: new Map(), cat: new Map() });
+export const emptyBiz = (): BizData => ({ businesses: [], tx: new Map(), cat: new Map(), required: new Set() });
 
 export const toBizData = (d: BusinessData): BizData => ({
   businesses: d.businesses,
   tx: new Map(d.links.transactions),
   cat: new Map(d.links.categories),
+  required: new Set(d.links.required),
 });
 
 /** The business a category is linked to, directly or through its parent. */
@@ -34,6 +37,13 @@ export function categoryBusiness(d: BizData, cats: Category[], categoryId: numbe
 export function businessOf(d: BizData, cats: Category[], t: Transaction): number | undefined {
   const own = t.id > 0 ? d.tx.get(t.id) : undefined;
   return own ?? categoryBusiness(d, cats, t.category_id);
+}
+
+/** Whether a new line in this category must say which business it belongs to (and none is given already). */
+export function businessRequired(d: BizData, cats: Category[], categoryId: number | null): boolean {
+  const c = cats.find((x) => x.id === categoryId);
+  if (!c || categoryBusiness(d, cats, c.id) != null) return false;
+  return d.required.has(c.id) || (c.parent_id != null && d.required.has(c.parent_id));
 }
 
 export const bizName = (d: BizData, id: number | undefined | null) => d.businesses.find((b) => b.id === id)?.name ?? "";
@@ -323,7 +333,10 @@ export function summaryFigures(ctx: Pick<BizCtx, "txs" | "cats" | "biz" | "perio
  * It can also show the business a category already gives, with nothing to choose.
  */
 export function businessChips(biz: BizData, initial: number | null, collapsed = false) {
-  let value = initial;
+  /** undefined = nothing chosen yet (only while a choice is required). */
+  let value: number | null | undefined = initial;
+  let required = false;
+  let onChange = () => {};
   let expanded = !collapsed;
   let given: string | null = null;
   const root = el("div", { className: "bizpick" });
@@ -334,9 +347,10 @@ export function businessChips(biz: BizData, initial: number | null, collapsed = 
   toggle.onclick = () => ((expanded = true), draw());
   root.append(toggle, head, row, givenChip);
   const draw = () => {
-    const showRow = given == null && (expanded || value != null);
+    const showRow = given == null && (expanded || required || value != null);
     toggle.hidden = given != null || showRow;
     head.hidden = !(showRow || given != null);
+    head.textContent = required && given == null ? "עסק (חובה לבחור)" : "עסק";
     row.hidden = !showRow;
     givenChip.hidden = given == null;
     givenChip.replaceChildren(...(given != null ? [el("span", { className: "bizchip big", textContent: given }), el("span", { className: "muted small", textContent: " לפי הקטגוריה" })] : []));
@@ -344,7 +358,7 @@ export function businessChips(biz: BizData, initial: number | null, collapsed = 
       ...[{ id: null as number | null, name: "ללא" }, ...biz.businesses.map((b) => ({ id: b.id as number | null, name: b.name }))].map((o) => {
         const b = el("button", { type: "button", className: "qchip", textContent: o.name });
         b.setAttribute("aria-pressed", String(o.id === value));
-        b.onclick = () => ((value = o.id), draw());
+        b.onclick = () => ((value = o.id), draw(), onChange());
         return b;
       }),
     );
@@ -352,12 +366,36 @@ export function businessChips(biz: BizData, initial: number | null, collapsed = 
   draw();
   return {
     root,
-    get value() {
-      return value;
+    get value(): number | null {
+      return value ?? null;
+    },
+    /** A choice was made (None counts). Always true unless a choice is required and still open. */
+    get chosen() {
+      return value !== undefined;
     },
     set(v: number | null) {
       value = v;
       draw();
+    },
+    /** A line must say which business it is in: the buttons show with nothing chosen. */
+    setRequired(on: boolean) {
+      if (on === required) return;
+      required = on;
+      value = on ? undefined : null;
+      draw();
+    },
+    get required() {
+      return required;
+    },
+    /** Forget the choice (when the category changes and a new one is needed). */
+    clear() {
+      if (required) {
+        value = undefined;
+        draw();
+      }
+    },
+    set onchange(f: () => void) {
+      onChange = f;
     },
     /** Show the business the category already gives (no choice), or null to go back to the choice. */
     lock(name: string | null) {
@@ -458,6 +496,14 @@ export function businessesView(ctx: ManageCtx): HTMLElement {
 export function openCategoryBusinessDialog(ctx: ManageCtx, cat: Category) {
   ctx.openDialog((close) => {
     const pick = businessChips(ctx.biz, ctx.biz.cat.get(cat.id) ?? null);
+    const needed = el("input", { type: "checkbox", checked: ctx.biz.required.has(cat.id) });
+    const neededRow = el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, needed, "חובה לבחור עסק בכל תנועה (ללא עסק קבוע)");
+    const syncNeeded = () => {
+      needed.disabled = pick.value != null;
+      if (pick.value != null) needed.checked = false;
+    };
+    pick.onchange = syncNeeded;
+    syncNeeded();
     const err = el("div", { className: "error" });
     const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
     cancel.onclick = close;
@@ -468,6 +514,7 @@ export function openCategoryBusinessDialog(ctx: ManageCtx, cat: Category) {
       el("h2", { textContent: `עסק של "${cat.name}"` }),
       el("p", { className: "muted", textContent: cat.parent_id == null ? "כל התנועות בקטגוריה ובתתי-הקטגוריות שלה (שלא קושרו לעסק אחר) ייספרו בעסק, בלי תיוג נוסף." : "כל התנועות בתת-קטגוריה ייספרו בעסק, בלי תיוג נוסף." }),
       pick.root,
+      neededRow,
       err,
       el("div", { className: "actions" }, cancel, save),
     );
@@ -476,6 +523,7 @@ export function openCategoryBusinessDialog(ctx: ManageCtx, cat: Category) {
       try {
         save.disabled = true;
         await api.linkCategoryBusiness(cat.id, pick.value);
+        await api.requireCategoryBusiness(cat.id, needed.checked);
         close();
         await ctx.reload();
       } catch (e2) {

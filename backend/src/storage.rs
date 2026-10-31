@@ -48,6 +48,8 @@ pub struct BusinessLinks {
     pub transactions: Vec<(i64, i64)>,
     /// (category id, business id)
     pub categories: Vec<(i64, i64)>,
+    /// Categories whose transactions must say which business they belong to.
+    pub required: Vec<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -272,6 +274,12 @@ pub trait Storage: Send + Sync {
         &self,
         ids: &[i64],
         business: Option<i64>,
+    ) -> anyhow::Result<()>;
+    /// Make new transactions in `category` say which business they belong to (or none).
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
     ) -> anyhow::Result<()>;
     /// Raw rows for the full Google Sheets backup.
     async fn raw_backup(&self) -> anyhow::Result<RawBackup>;
@@ -788,7 +796,31 @@ impl Storage for SqliteStorage {
         out.categories = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare("SELECT category_id FROM category_business_required")?;
+        out.required = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(out)
+    }
+
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()> {
+        let conn = self.0.lock().unwrap();
+        if required {
+            conn.execute(
+                "INSERT OR IGNORE INTO category_business_required (category_id) VALUES (?1)",
+                params![category],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM category_business_required WHERE category_id = ?1",
+                params![category],
+            )?;
+        }
+        Ok(())
     }
 
     async fn set_category_business(

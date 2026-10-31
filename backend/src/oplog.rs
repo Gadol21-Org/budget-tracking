@@ -254,6 +254,15 @@ impl Storage for Logged {
     ) -> anyhow::Result<()> {
         self.0.set_transactions_business(ids, business).await
     }
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()> {
+        self.0
+            .set_category_business_required(category, required)
+            .await
+    }
     // Mirroring only changes sync bookkeeping, not the user's data: forwarded, not logged.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         self.0.pending_mirrors().await

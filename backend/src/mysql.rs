@@ -21,7 +21,7 @@ use crate::storage::{
     RawPaymentMethod, Storage, Transaction, REQUEUE_SKIPPED_SQL,
 };
 
-const SCHEMA: [&str; 11] = [
+const SCHEMA: [&str; 12] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -105,6 +105,9 @@ const SCHEMA: [&str; 11] = [
     "CREATE TABLE IF NOT EXISTS category_business (
          category_id BIGINT PRIMARY KEY,
          business_id BIGINT NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS category_business_required (
+         category_id BIGINT PRIMARY KEY
      )",
 ];
 
@@ -274,7 +277,11 @@ impl Storage for MySqlStorage {
         let c = sqlx::query("SELECT category_id, business_id FROM category_business")
             .fetch_all(&self.pool)
             .await?;
+        let q = sqlx::query("SELECT category_id FROM category_business_required")
+            .fetch_all(&self.pool)
+            .await?;
         Ok(BusinessLinks {
+            required: q.iter().map(|r| r.try_get(0)).collect::<Result<_, _>>()?,
             transactions: t
                 .iter()
                 .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
@@ -305,6 +312,21 @@ impl Storage for MySqlStorage {
                     .await?
             }
         };
+        Ok(())
+    }
+
+    async fn set_category_business_required(&self, category: i64, required: bool) -> Result<()> {
+        if required {
+            sqlx::query("INSERT IGNORE INTO category_business_required (category_id) VALUES (?)")
+                .bind(category)
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM category_business_required WHERE category_id = ?")
+                .bind(category)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 

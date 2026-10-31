@@ -3,7 +3,7 @@ import { clickable, dateField, el, fmtDate, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
-import { businessChips, businessDashboard, businessesView, businessOf, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, openTagDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
+import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, openTagDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
 import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
 type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
@@ -1060,11 +1060,13 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     }
     const given = cat != null ? categoryBusiness(state.biz, state.cats, cat) : undefined;
     bizPick.lock(given != null && ownTag == null ? bizName(state.biz, given) : null);
+    // A new line in a category that needs a business must pick one (None is a choice); nothing is chosen for it.
+    bizPick.setRequired(!existing && cat != null && !repeat.checked && businessRequired(state.biz, state.cats, cat));
     bizRow.style.display = state.biz.businesses.length === 0 || repeat.checked ? "none" : "";
   };
   /** A new line starts with the business last used in the same category. */
   const rememberedBiz = () => {
-    if (existing) return;
+    if (existing || bizPick.required) return;
     try {
       const sub = subPick.value || topPick.value;
       const v = sub ? localStorage.getItem(lastKey(Number(sub))) : null;
@@ -1145,7 +1147,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     }
   };
   const syncSave = () => {
-    const ready = categoryReady() && amountReady();
+    const ready = categoryReady() && amountReady() && bizPick.chosen;
     save.disabled = !ready;
     for (const b of dlg.querySelectorAll<HTMLButtonElement>(".needs-category")) b.disabled = !ready;
   };
@@ -1175,8 +1177,9 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
   fillCats(false);
-  for (const c of [topPick.input, subPick.input]) c.addEventListener("change", () => (rememberedBiz(), syncBiz()));
-  repeat.addEventListener("change", syncBiz);
+  for (const c of [topPick.input, subPick.input]) c.addEventListener("change", () => (bizPick.clear(), syncBiz(), rememberedBiz(), syncSave()));
+  repeat.addEventListener("change", () => (syncBiz(), syncSave()));
+  bizPick.onchange = syncSave;
   syncBiz();
 
   const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });

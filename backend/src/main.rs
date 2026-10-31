@@ -184,6 +184,23 @@ async fn link_category_business(
 }
 
 #[derive(Deserialize)]
+struct BusinessRequired {
+    required: bool,
+}
+
+/// Require (or stop requiring) new transactions in a category to say which business they are in.
+async fn require_category_business(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(b): Json<BusinessRequired>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    db.set_category_business_required(id, b.required)
+        .await
+        .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
 struct TagTransactions {
     ids: Vec<i64>,
     business_id: Option<i64>,
@@ -671,6 +688,10 @@ fn router(db: Db) -> Router {
         .route(
             "/api/categories/:id/business",
             axum::routing::put(link_category_business),
+        )
+        .route(
+            "/api/categories/:id/business-required",
+            axum::routing::put(require_category_business),
         )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))

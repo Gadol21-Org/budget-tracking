@@ -59,7 +59,7 @@ export interface Business {
 /** Which transactions (tags) and categories count in which business, as [id, business id] pairs. */
 export interface BusinessData {
   businesses: Business[];
-  links: { transactions: [number, number][]; categories: [number, number][] };
+  links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
 export interface MonthlyTotal {
@@ -139,6 +139,9 @@ export const api = {
   /** Make a category's transactions count in a business (null removes the link). */
   linkCategoryBusiness: (category: number, business: number | null) =>
     request<void>(`/api/categories/${category}/business`, { method: "PUT", body: JSON.stringify({ business_id: business }) }),
+  /** Require new transactions in a category to say which business they belong to (or none). */
+  requireCategoryBusiness: (category: number, required: boolean) =>
+    request<void>(`/api/categories/${category}/business-required`, { method: "PUT", body: JSON.stringify({ required }) }),
   /** Tag transactions as a business's (null removes their tags). */
   tagTransactions: (ids: number[], business: number | null) =>
     request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: business }) }),

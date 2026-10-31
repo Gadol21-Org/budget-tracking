@@ -82,6 +82,10 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              category_id INTEGER PRIMARY KEY,
              business_id INTEGER NOT NULL
          );
+         -- Categories whose new transactions must say which business they belong to (or none).
+         CREATE TABLE IF NOT EXISTS category_business_required (
+             category_id INTEGER PRIMARY KEY
+         );
          CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
