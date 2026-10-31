@@ -1410,10 +1410,13 @@ mod tests {
             .await
             .unwrap();
         let a = s.create_transaction(&tx(D, -2500, bakery)).await.unwrap();
+        let b = s.create_transaction(&tx(D, -1000, bakery)).await.unwrap();
         s.set_mirror_state(a, "skipped").await.unwrap();
-        assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 1);
+        // The first line of an earlier run, whose item came back without a category.
+        s.set_mirror_state(b, "error").await.unwrap();
+        assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 2);
         let sum = run(&c, &s, &opts()).await.unwrap();
-        assert_eq!((sum.items_created, sum.mirrored), (1, 1), "{sum:?}");
+        assert_eq!((sum.items_created, sum.mirrored), (1, 2), "{sum:?}");
         {
             let m = mock.lock().unwrap();
             assert_eq!(
@@ -1422,6 +1425,7 @@ mod tests {
             );
         }
         assert_eq!(state_of(&s, a).await, "synced");
+        assert_eq!(state_of(&s, b).await, "synced");
         assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 0);
     }
 
