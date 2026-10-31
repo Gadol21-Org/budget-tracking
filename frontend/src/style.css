@@ -283,3 +283,6 @@ form.add label[hidden] { display: none; }
 @media (display-mode: window-controls-overlay) and (min-width: 900px) {
   .nav { height: calc(100vh - env(titlebar-area-height, 33px)); height: calc(100dvh - env(titlebar-area-height, 33px)); }
 }
+
+.sidesw { margin-bottom: 10px; }
+.donutlegend .clickable { border-radius: 6px; padding: 2px 4px; margin-inline: -4px; }
