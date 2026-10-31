@@ -286,6 +286,7 @@ form.add label[hidden] { display: none; }
 
 .sidesw { margin-bottom: 10px; }
 .donutlegend .clickable { border-radius: 6px; padding: 2px 4px; margin-inline: -4px; }
+.totalrow { border-top: 1px solid var(--line); }
 
 .datefield { position: relative; }
 .datefield .dateshown { display: block; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font-size: 1rem; color: var(--text); direction: ltr; text-align: start; }
