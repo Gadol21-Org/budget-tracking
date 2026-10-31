@@ -14,22 +14,32 @@ fi
 post() { curl -fsS -X POST -H 'Content-Type: application/json' -d "$2" "$base$1"; }
 cat_id() { post /api/categories "$1"; }   # prints the new id
 
-food=$(cat_id '{"name":"Food"}')
-home=$(cat_id '{"name":"Home"}')
-fun=$(cat_id '{"name":"Leisure"}')
-car=$(cat_id '{"name":"Car"}')
-work=$(cat_id '{"name":"Salary","is_income":true}')
-extra=$(cat_id '{"name":"Other income","is_income":true}')
+food=$(cat_id '{"name":"אוכל"}')
+home=$(cat_id '{"name":"בית"}')
+fun=$(cat_id '{"name":"פנאי"}')
+car=$(cat_id '{"name":"רכב"}')
+kids=$(cat_id '{"name":"ילדים"}')
+work=$(cat_id '{"name":"משכורת","is_income":true}')
+biz=$(cat_id '{"name":"עסקים והכנסות צד","is_income":true}')
+extra=$(cat_id '{"name":"הכנסות אחרות","is_income":true}')
 
-groceries=$(cat_id "{\"name\":\"Groceries\",\"parent_id\":$food}")
-eating=$(cat_id "{\"name\":\"Restaurants\",\"parent_id\":$food}")
-rent=$(cat_id "{\"name\":\"Rent\",\"parent_id\":$home}")
-utilities=$(cat_id "{\"name\":\"Utilities\",\"parent_id\":$home}")
-trips=$(cat_id "{\"name\":\"Trips\",\"parent_id\":$fun}")
-movies=$(cat_id "{\"name\":\"Movies\",\"parent_id\":$fun}")
-fuel=$(cat_id "{\"name\":\"Fuel\",\"parent_id\":$car}")
-pay=$(cat_id "{\"name\":\"Monthly pay\",\"parent_id\":$work}")
-gifts=$(cat_id "{\"name\":\"Gifts\",\"parent_id\":$extra}")
+groceries=$(cat_id "{\"name\":\"סופרמרקט\",\"parent_id\":$food}")
+eating=$(cat_id "{\"name\":\"מסעדות\",\"parent_id\":$food}")
+rent=$(cat_id "{\"name\":\"שכר דירה\",\"parent_id\":$home}")
+utilities=$(cat_id "{\"name\":\"חשמל ומים\",\"parent_id\":$home}")
+arnona=$(cat_id "{\"name\":\"ארנונה\",\"parent_id\":$home}")
+trips=$(cat_id "{\"name\":\"טיולים\",\"parent_id\":$fun}")
+movies=$(cat_id "{\"name\":\"קולנוע ובילויים\",\"parent_id\":$fun}")
+fuel=$(cat_id "{\"name\":\"דלק\",\"parent_id\":$car}")
+carins=$(cat_id "{\"name\":\"ביטוח רכב\",\"parent_id\":$car}")
+gan=$(cat_id "{\"name\":\"גן וחוגים\",\"parent_id\":$kids}")
+# Several income sources: an employee salary, two small businesses and freelance work.
+salary=$(cat_id "{\"name\":\"משכורת - חברת הייטק\",\"parent_id\":$work}")
+spouse=$(cat_id "{\"name\":\"משכורת - בן/בת זוג\",\"parent_id\":$work}")
+shop=$(cat_id "{\"name\":\"עסק - חנות אונליין\",\"parent_id\":$biz}")
+studio=$(cat_id "{\"name\":\"עסק - סטודיו לצילום\",\"parent_id\":$biz}")
+freelance=$(cat_id "{\"name\":\"פרילנס - ייעוץ\",\"parent_id\":$biz}")
+gifts=$(cat_id "{\"name\":\"מתנות והחזרים\",\"parent_id\":$extra}")
 
 # add <months ago> <day> <shekels> <category id> <note>; negative = expense. Amounts in agorot.
 add() {
@@ -40,22 +50,34 @@ add() {
 }
 
 for m in 5 4 3 2 1 0; do
-  add $m 1  12000 "$pay" "Salary"
-  add $m 2  -4200 "$rent" "Rent"
-  add $m 5   -310 "$utilities" "Electricity"
-  add $m 6   -180 "$groceries" "Supermarket"
-  add $m 11  -420 "$groceries" "Supermarket"
-  add $m 18  -265 "$groceries" "Market"
-  add $m 9   -140 "$eating" "Lunch"
-  add $m 21  -230 "$eating" "Dinner out"
-  add $m 14  -300 "$fuel" "Fuel"
-  add $m 24   -90 "$movies" "Cinema"
+  add $m 1  14500 "$salary" "משכורת"
+  add $m 10  8200 "$spouse" "משכורת"
+  add $m 2  -5200 "$rent" "שכר דירה"
+  add $m 5   -410 "$utilities" "חשמל"
+  add $m 8   -320 "$utilities" "מים וגז"
+  add $m 15  -780 "$arnona" "ארנונה"
+  add $m 6   -380 "$groceries" "שופרסל"
+  add $m 11  -520 "$groceries" "רמי לוי"
+  add $m 18  -295 "$groceries" "שוק"
+  add $m 9   -140 "$eating" "ארוחת צהריים"
+  add $m 21  -330 "$eating" "ארוחת ערב במסעדה"
+  add $m 14  -350 "$fuel" "תדלוק"
+  add $m 3  -2100 "$gan" "גן וחוגים"
+  add $m 24  -110 "$movies" "קולנוע"
+  add $m 20  3200 "$studio" "צילומי משפחה ואירועים"
 done
-add 3 15 -1800 "$trips" "Weekend trip"
-add 1 12  -950 "$trips" "Day trip"
-add 4 20   400 "$gifts" "Birthday gift"
-add 0 3    250 "$gifts" "Refund"
+# The online shop and consulting income vary from month to month.
+add 5 12 4800 "$shop" "מכירות החודש"; add 4 12 6100 "$shop" "מכירות החודש"
+add 3 12 3900 "$shop" "מכירות החודש"; add 2 12 7300 "$shop" "מכירות החודש"
+add 1 12 5400 "$shop" "מכירות החודש"; add 0 12 4600 "$shop" "מכירות החודש"
+add 4 25 5000 "$freelance" "פרויקט ייעוץ"; add 2 25 7500 "$freelance" "פרויקט ייעוץ"
+add 0 4  3000 "$freelance" "ריטיינר"
+add 3 15 -1800 "$trips" "סוף שבוע בצפון"
+add 1 12  -950 "$trips" "טיול ליום אחד"
+add 2 7  -2400 "$carins" "ביטוח רכב"
+add 4 20   400 "$gifts" "מתנת יום הולדת"
+add 0 3    250 "$gifts" "החזר כספי"
 
-post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":28,\"amount_agorot\":-4900,\"category_id\":$utilities,\"note\":\"Internet\"}" >/dev/null
+post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":28,\"amount_agorot\":-4900,\"category_id\":$utilities,\"note\":\"אינטרנט\"}" >/dev/null
 
 echo "seeded sample data"
