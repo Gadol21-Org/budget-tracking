@@ -48,7 +48,7 @@ Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet wit
 ## Layout
 - `backend/src/storage.rs` – `Storage` trait (SQLite and MySQL). Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
 - `backend/src/mysql.rs` – MySQL implementation of `Storage`.
-- `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). Unverified against a real account yet.
+- `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). The server logs in once and keeps the session; when Paamonim redirects a request to the login page (session expired), the client logs in again and resends it once.
 - `backend/src/money.rs` – agorot to shekel rounding for export.
 
 ## Status

@@ -9,9 +9,14 @@ use chrono::NaiveDate;
 use scraper::{ElementRef, Html, Selector};
 use serde::Deserialize;
 
+/// A logged-in session. Paamonim answers any request whose session has expired with a
+/// redirect to the login page; the client then logs in again once and resends the request
+/// (the expired request was not acted on), so one `Client` can be kept for many runs.
 pub struct Client {
     http: reqwest::Client,
     base: String,
+    /// Username and password, to log in again; `None` for a test client.
+    credentials: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,10 +57,28 @@ struct HtmlEnvelope {
 
 impl Client {
     pub async fn login(base: &str, username: &str, password: &str) -> Result<Self> {
-        let http = reqwest::Client::builder().cookie_store(true).build()?;
-        let base = base.trim_end_matches('/').to_string();
+        let client = Self {
+            http: reqwest::Client::builder().cookie_store(true).build()?,
+            base: base.trim_end_matches('/').to_string(),
+            credentials: Some((username.to_string(), password.to_string())),
+        };
+        client.sign_in().await?;
+        Ok(client)
+    }
 
-        let page = http.get(format!("{base}/")).send().await?.text().await?;
+    /// Log in through the HTML form; the session cookie lands in the client's cookie store.
+    async fn sign_in(&self) -> Result<()> {
+        let Some((username, password)) = &self.credentials else {
+            bail!("no Paamonim credentials to log in with");
+        };
+        let base = &self.base;
+        let page = self
+            .http
+            .get(format!("{base}/"))
+            .send()
+            .await?
+            .text()
+            .await?;
         let token = {
             let doc = Html::parse_document(&page);
             let sel = Selector::parse("input[name=authenticity_token]").unwrap();
@@ -66,36 +89,65 @@ impl Client {
                 .to_string()
         };
 
-        let resp = http
+        let resp = self
+            .http
             .post(format!("{base}/login"))
             .form(&[
                 ("utf8", "\u{2713}"),
                 ("authenticity_token", token.as_str()),
-                ("login", username),
-                ("password", password),
+                ("login", username.as_str()),
+                ("password", password.as_str()),
                 ("save[login]", "0"),
             ])
             .send()
             .await?;
         let body = resp.text().await?;
         // Still on the login form => credentials rejected.
-        if body.contains("id=\"frm_login\"") {
+        if is_login_page(&body) {
             bail!("Paamonim login failed (still on login form)");
         }
-        Ok(Self { http, base })
+        Ok(())
     }
 
-    /// Raw GET returning (status, body); used by the `probe` command to record real responses.
-    pub async fn get_raw(&self, path: &str, query: &[(&str, &str)]) -> Result<(u16, String)> {
-        let resp = self
-            .http
-            .get(format!("{}{}", self.base, path))
+    /// Send a request built by `build`, returning (status, body). If the session has expired,
+    /// log in again and send it once more. Redirects are followed, so an expired session shows
+    /// up as the login page (or a 401), never as a 404 or a success.
+    async fn send(
+        &self,
+        build: impl Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+    ) -> Result<(u16, String)> {
+        let (status, body) = self.send_once(&build).await?;
+        if !session_expired(status, &body) {
+            return Ok((status, body));
+        }
+        if self.credentials.is_none() {
+            bail!("Paamonim session expired");
+        }
+        tracing::info!("paamonim session expired; logging in again");
+        self.sign_in().await?;
+        let (status, body) = self.send_once(&build).await?;
+        if session_expired(status, &body) {
+            bail!("Paamonim session expired, and logging in again did not help");
+        }
+        Ok((status, body))
+    }
+
+    async fn send_once(
+        &self,
+        build: &impl Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+    ) -> Result<(u16, String)> {
+        let resp = build(&self.http, &self.base)
             .header("X-Requested-With", "XMLHttpRequest")
-            .query(query)
             .send()
             .await?;
         let status = resp.status().as_u16();
         Ok((status, resp.text().await?))
+    }
+
+    /// Raw GET returning (status, body); used by the `probe` command to record real responses.
+    pub async fn get_raw(&self, path: &str, query: &[(&str, &str)]) -> Result<(u16, String)> {
+        self.send(|http, base| http.get(format!("{base}{path}")).query(query))
+            .await
     }
 
     /// GET an endpoint and return its `html` fragment (JSON envelope unwrapped).
@@ -147,14 +199,10 @@ impl Client {
     /// Delete a history line: the site POSTs `line_id` to `path` (`/rishumit/delete_history_line`,
     /// answered with the text `deleted`).
     pub async fn delete_item_line(&self, path: &str, param: &str, line_id: &str) -> Result<()> {
-        self.http
-            .post(format!("{}{}", self.base, path))
-            .header("X-Requested-With", "XMLHttpRequest")
-            .form(&[(param, line_id)])
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
+        let (status, _) = self
+            .send(|http, base| http.post(format!("{base}{path}")).form(&[(param, line_id)]))
+            .await?;
+        ok_status(path, status)
     }
 
     /// The day of history line `line_id`, read from its edit form; `None` if Paamonim
@@ -215,21 +263,20 @@ impl Client {
                 .unwrap_or_default()
                 .to_string()
         };
-        self.http
-            .post(format!("{}/rishumit/save_family_custom_item", self.base))
-            .header("X-Requested-With", "XMLHttpRequest")
-            .form(&[
-                ("utf8", "\u{2713}"),
-                ("authenticity_token", token.as_str()),
-                ("new_budget_item_name", name),
-                ("item_type", item_type),
-                ("custom_item_id", ""),
-                ("budget_category_id", category_id),
-            ])
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
+        let (status, _) = self
+            .send(|http, base| {
+                http.post(format!("{base}/rishumit/save_family_custom_item"))
+                    .form(&[
+                        ("utf8", "\u{2713}"),
+                        ("authenticity_token", token.as_str()),
+                        ("new_budget_item_name", name),
+                        ("item_type", item_type),
+                        ("custom_item_id", ""),
+                        ("budget_category_id", category_id),
+                    ])
+            })
+            .await?;
+        ok_status("save_family_custom_item", status)
     }
 
     /// A client for a test server, skipping the login.
@@ -238,20 +285,36 @@ impl Client {
         Self {
             http: reqwest::Client::new(),
             base: base.trim_end_matches('/').to_string(),
+            credentials: None,
         }
     }
 
     /// Mirror a line to Paamonim. `amount_shekels` must already be rounded.
     pub async fn save_item_line(&self, fields: &[(&str, String)]) -> Result<()> {
-        self.http
-            .get(format!("{}/rishumit/save_item_line", self.base))
-            .header("X-Requested-With", "XMLHttpRequest")
-            .query(fields)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
+        let (status, _) = self
+            .send(|http, base| {
+                http.get(format!("{base}/rishumit/save_item_line"))
+                    .query(fields)
+            })
+            .await?;
+        ok_status("save_item_line", status)
     }
+}
+
+fn is_login_page(body: &str) -> bool {
+    body.contains("id=\"frm_login\"")
+}
+
+/// Paamonim redirects requests without a valid session to the login page.
+fn session_expired(status: u16, body: &str) -> bool {
+    status == 401 || is_login_page(body)
+}
+
+fn ok_status(what: &str, status: u16) -> Result<()> {
+    if !(200..300).contains(&status) {
+        bail!("{what} returned HTTP {status}");
+    }
+    Ok(())
 }
 
 pub(crate) const HEBREW_MONTHS: [&str; 12] = [
@@ -651,5 +714,117 @@ mod tests {
             }]
         );
         assert!(parse_item_categories("{}").is_err());
+    }
+
+    /// A pretend Paamonim whose session can be expired: requests without a live session are
+    /// redirected to the login page, as the real site does.
+    async fn expiring_site() -> (String, std::sync::Arc<std::sync::Mutex<(u32, u32)>>) {
+        use axum::{http::HeaderMap, response::IntoResponse, routing::get, routing::post, Router};
+        use std::sync::{Arc, Mutex};
+        // (logins so far, session number the server accepts)
+        let state = Arc::new(Mutex::new((0u32, 0u32)));
+        let live = |s: &Arc<Mutex<(u32, u32)>>, h: &HeaderMap| {
+            let want = format!("s={}", s.lock().unwrap().1);
+            h.get("cookie")
+                .and_then(|c| c.to_str().ok())
+                .is_some_and(|c| c.split("; ").any(|kv| kv == want))
+        };
+        let login_page =
+            r#"<form id="frm_login"><input name="authenticity_token" value="t"></form>"#;
+        let to_login = || {
+            (
+                axum::http::StatusCode::FOUND,
+                [("location", "/")],
+                "You are being redirected",
+            )
+                .into_response()
+        };
+        let (s1, s2, s3, s4) = (state.clone(), state.clone(), state.clone(), state.clone());
+        let app = Router::new()
+            .route(
+                "/",
+                get(move |h: HeaderMap| async move {
+                    if live(&s1, &h) {
+                        "home"
+                    } else {
+                        login_page
+                    }
+                }),
+            )
+            .route(
+                "/login",
+                post(move || async move {
+                    let mut st = s2.lock().unwrap();
+                    st.0 += 1;
+                    st.1 += 1;
+                    let cookie = format!("s={}; Path=/", st.1);
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [("location", "/".to_string()), ("set-cookie", cookie)],
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/rishumit/activity_history",
+                get(move |h: HeaderMap| async move {
+                    if live(&s3, &h) {
+                        r#"{"html":"history"}"#.into_response()
+                    } else {
+                        to_login()
+                    }
+                }),
+            )
+            .route(
+                "/rishumit/edit_item_line",
+                get(move |h: HeaderMap| async move {
+                    if live(&s4, &h) {
+                        (axum::http::StatusCode::NOT_FOUND, "").into_response()
+                    } else {
+                        to_login()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, state)
+    }
+
+    #[tokio::test]
+    async fn logs_in_again_when_the_session_expires() {
+        let (base, state) = expiring_site().await;
+        let client = Client::login(&base, "u", "p").await.unwrap();
+        assert_eq!(
+            client.activity_history_html("a", "b").await.unwrap(),
+            "history"
+        );
+        assert_eq!(state.lock().unwrap().0, 1, "the session is reused");
+        assert_eq!(
+            client.activity_history_html("a", "b").await.unwrap(),
+            "history"
+        );
+        assert_eq!(state.lock().unwrap().0, 1);
+
+        // The server forgets the session.
+        state.lock().unwrap().1 += 1;
+        assert_eq!(
+            client.activity_history_html("a", "b").await.unwrap(),
+            "history"
+        );
+        assert_eq!(state.lock().unwrap().0, 2, "logged in again once");
+
+        // An expired session is never read as "no such line".
+        state.lock().unwrap().1 += 1;
+        assert_eq!(client.line_date("7").await.unwrap(), None);
+        assert_eq!(state.lock().unwrap().0, 3);
+    }
+
+    #[tokio::test]
+    async fn expired_session_without_credentials_is_an_error() {
+        let (base, _) = expiring_site().await;
+        let client = Client::for_tests(&base);
+        let err = client.line_date("7").await.unwrap_err();
+        assert!(err.to_string().contains("expired"), "{err}");
     }
 }

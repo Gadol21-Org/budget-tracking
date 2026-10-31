@@ -276,24 +276,11 @@ async fn import_paamonim(
     State(db): State<Db>,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<storage::ImportSummary>, (StatusCode, String)> {
-    let base =
-        std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
-    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| {
-        (
-            StatusCode::PRECONDITION_FAILED,
-            "PAAMONIM_USERNAME not set".into(),
-        )
+    let client = paamonim_session().await.map_err(|e| match e {
+        SessionError::NoCredentials(e) => e,
+        SessionError::Login(e) => internal(e),
     })?;
-    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| {
-        (
-            StatusCode::PRECONDITION_FAILED,
-            "PAAMONIM_PASSWORD not set".into(),
-        )
-    })?;
-    let client = paamonim::Client::login(&base, &user, &pass)
-        .await
-        .map_err(internal)?;
-    import::run(&client, db.as_ref(), &req.from, &req.to)
+    import::run(client, db.as_ref(), &req.from, &req.to)
         .await
         .map(Json)
         .map_err(|e| {
@@ -320,6 +307,22 @@ fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, Strin
     Ok((base, user, pass))
 }
 
+enum SessionError {
+    NoCredentials((StatusCode, String)),
+    Login(anyhow::Error),
+}
+
+/// One Paamonim session for the whole server: logged in on first use and kept, so each change
+/// doesn't log in again. The client logs in again by itself when the session expires.
+async fn paamonim_session() -> Result<&'static paamonim::Client, SessionError> {
+    static SESSION: tokio::sync::OnceCell<paamonim::Client> = tokio::sync::OnceCell::const_new();
+    let (base, user, pass) = paamonim_credentials().map_err(SessionError::NoCredentials)?;
+    SESSION
+        .get_or_try_init(|| paamonim::Client::login(&base, &user, &pass))
+        .await
+        .map_err(SessionError::Login)
+}
+
 /// Writing to Paamonim is on whenever Paamonim credentials are set; `PAAMONIM_MIRROR=0` turns
 /// it off. Without credentials it is off, so nothing waits for a sync that can't happen.
 fn mirroring_enabled() -> bool {
@@ -340,9 +343,11 @@ async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
     if db.pending_mirrors().await?.is_empty() && db.pending_line_deletes().await?.is_empty() {
         return Ok(mirror::MirrorSummary::default());
     }
-    let (base, user, pass) = paamonim_credentials().map_err(|e| anyhow::anyhow!(e.1))?;
-    let client = paamonim::Client::login(&base, &user, &pass).await?;
-    mirror::run(&client, db, &mirror::Options::from_env()).await
+    let client = paamonim_session().await.map_err(|e| match e {
+        SessionError::NoCredentials(e) => anyhow::anyhow!(e.1),
+        SessionError::Login(e) => e,
+    })?;
+    mirror::run(client, db, &mirror::Options::from_env()).await
 }
 
 /// After a local change: mirror it, in the background. Failures stay visible via `sync_state`
