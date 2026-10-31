@@ -32,7 +32,11 @@ body {
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
 }
 button, input, select { font: inherit; color: inherit; }
-.shell { min-height: 100vh; display: flex; flex-direction: column; }
+/* Native-app feel: controls and chrome are not selectable and don't flash on tap; typed text and notes stay selectable. */
+body { -webkit-tap-highlight-color: transparent; }
+button, [role="button"], .nav, .fab, .daylabel, .stats .label { -webkit-user-select: none; user-select: none; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+.shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 /* #app is itself a <main>: it spans the window; the inner <main> is the content column. */
 #app { display: block; max-width: none; padding: 0; margin: 0; }
 .shell > main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px calc(var(--nav-h) + 96px); }
@@ -109,7 +113,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 /* Desktop: sidebar instead of bottom nav */
 @media (min-width: 900px) {
   .shell { flex-direction: row; }
-  .nav { position: sticky; top: 0; inset-inline: auto; height: 100vh; width: 200px; flex-direction: column; justify-content: flex-start; gap: 4px; padding: 20px 12px; border-top: 0; border-inline-end: 1px solid var(--line); }
+  .nav { position: sticky; top: 0; inset-inline: auto; height: 100vh; height: 100dvh; width: 200px; flex-direction: column; justify-content: flex-start; gap: 4px; padding: 20px 12px; border-top: 0; border-inline-end: 1px solid var(--line); }
   .nav button { flex: none; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; border-radius: 10px; font-size: 1rem; }
   .nav button[aria-current="page"] { background: var(--bg); }
   /* Centre the whole app (sidebar + content) on wide screens instead of hugging one edge. */
@@ -263,3 +267,19 @@ form.add label[hidden] { display: none; }
 .hmcell.future { background: transparent; border: 1px dashed var(--line); }
 
 .banner { background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--expense); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; color: var(--muted); font-size: 14px; }
+
+/* Installed desktop app with Window Controls Overlay: the app draws its own title bar (the OS puts the window buttons on top of it). */
+.titlebar { display: none; }
+@media (display-mode: window-controls-overlay) {
+  .titlebar {
+    display: flex; align-items: center; position: fixed; top: 0; inset-inline: 0; z-index: 30;
+    height: env(titlebar-area-height, 33px); padding-inline: 16px;
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    font-size: .8rem; color: var(--muted); -webkit-app-region: drag; app-region: drag; user-select: none;
+  }
+  .shell { padding-top: env(titlebar-area-height, 33px); }
+  .nav { top: env(titlebar-area-height, 33px); }
+}
+@media (display-mode: window-controls-overlay) and (min-width: 900px) {
+  .nav { height: calc(100vh - env(titlebar-area-height, 33px)); height: calc(100dvh - env(titlebar-area-height, 33px)); }
+}
