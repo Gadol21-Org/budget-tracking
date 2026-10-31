@@ -705,6 +705,87 @@ function menuButton(label: string, items: [string, () => void][], className = "b
   return el("div", { className: "menuwrap" }, button, menu);
 }
 
+
+interface ComboItem {
+  value: string;
+  label: string;
+}
+/**
+ * A text field with a drop-down list that narrows as you type. Picking an item sets `value`;
+ * leaving the field with text that matches nothing puts the picked label back.
+ */
+function combo(placeholder: string) {
+  let items: ComboItem[] = [];
+  let value = "";
+  const input = el("input", { type: "text", placeholder, autocomplete: "off", spellcheck: false });
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  const list = el("div", { className: "combo-list", hidden: true });
+  list.setAttribute("role", "listbox");
+  const root = el("div", { className: "combo" }, input, list);
+  const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
+  const close = () => {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+  };
+  const pick = (v: string) => {
+    value = v;
+    input.value = labelOf(v);
+    close();
+  };
+  const show = (filter: string) => {
+    const q = filter.trim().toLowerCase();
+    const shown = items.filter((i) => !q || i.label.toLowerCase().includes(q));
+    list.replaceChildren(
+      ...(shown.length
+        ? shown.map((i) => {
+            const b = el("button", { type: "button", textContent: i.label });
+            b.setAttribute("role", "option");
+            b.setAttribute("aria-selected", String(i.value === value));
+            // mousedown, so the pick lands before the input's blur closes the list.
+            b.onmousedown = (e) => (e.preventDefault(), pick(i.value), input.dispatchEvent(new Event("change")));
+            return b;
+          })
+        : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
+    );
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+  };
+  input.onfocus = () => (input.select(), show(""));
+  input.onclick = () => list.hidden && show("");
+  input.oninput = () => show(input.value);
+  input.onblur = () => {
+    close();
+    input.value = labelOf(value);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Escape" && !list.hidden) (e.stopPropagation(), e.preventDefault(), close());
+    if (e.key === "Enter" && !list.hidden) {
+      // Enter takes the first match instead of submitting the form.
+      e.preventDefault();
+      const first = list.querySelector<HTMLButtonElement>("button");
+      if (first) first.dispatchEvent(new MouseEvent("mousedown", { cancelable: true }));
+    }
+  };
+  return {
+    root,
+    input,
+    get value() {
+      return value;
+    },
+    set(newItems: ComboItem[], v = "") {
+      items = newItems;
+      pick(v);
+    },
+    pick,
+    setDisabled(d: boolean, ph = placeholder) {
+      input.disabled = d;
+      input.placeholder = ph;
+      if (d) close();
+    },
+  };
+}
+
 const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
 const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);
 
@@ -728,7 +809,8 @@ function openTransactionDialog(existing?: Transaction) {
     value: existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
   });
   const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
-  const category = el("select");
+  const topPick = combo("חיפוש קטגוריה…");
+  const subPick = combo("תת-קטגוריה");
   const note = el("input", { type: "text", placeholder: "אופציונלי", maxLength: 35, value: existing?.note ?? "" });
   const err = el("div", { className: "error" });
 
@@ -750,22 +832,42 @@ function openTransactionDialog(existing?: Transaction) {
 
   const expBtn = el("button", { type: "button", textContent: "הוצאה" });
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
+  const kindCats = () => state.cats.filter((c) => c.is_income === isIncome);
+  const kidsOf = (topId: string) => kindCats().filter((k) => String(k.parent_id) === topId);
+  /** The second list follows the first: empty and locked until a category with sub-categories is picked. */
+  const fillSubs = (keepSub = "") => {
+    const kids = kidsOf(topPick.value);
+    subPick.set(kids.map((k) => ({ value: String(k.id), label: k.name })), keepSub);
+    subPick.setDisabled(kids.length === 0, kids.length ? "חיפוש תת-קטגוריה…" : topPick.value ? "אין תתי-קטגוריות" : "קודם בוחרים קטגוריה");
+  };
+  topPick.input.addEventListener("change", () => fillSubs());
+  /** The category the transaction goes on: the sub-category when the category has any. */
+  const categoryId = (): number | null => {
+    const top = topPick.value;
+    if (!top) return null;
+    if (kidsOf(top).length === 0) return Number(top);
+    if (subPick.value) return Number(subPick.value);
+    // A transaction already on a parent keeps it; otherwise the sub-category is required.
+    if (existing?.category_id === Number(top)) return Number(top);
+    throw new Error("יש לבחור תת-קטגוריה");
+  };
+  let firstFill = true;
   const fillCats = () => {
     expBtn.setAttribute("aria-pressed", String(!isIncome));
     incBtn.setAttribute("aria-pressed", String(isIncome));
-    const keep = category.value || (existing?.category_id != null ? String(existing.category_id) : "");
-    const opt = (c: Category) => el("option", { value: String(c.id), textContent: c.name });
-    const ofKind = state.cats.filter((c) => c.is_income === isIncome);
-    const tops = ofKind.filter((c) => c.parent_id == null);
-    category.replaceChildren(
-      el("option", { value: "", textContent: "ללא קטגוריה" }),
-      ...tops.map((c) => {
-        const kids = ofKind.filter((k) => k.parent_id === c.id);
-        // A parent is only a heading; transactions go on its sub-categories.
-        return kids.length ? el("optgroup", { label: c.name }, ...kids.map(opt)) : opt(c);
-      }),
-    );
-    category.value = keep;
+    // First time: the transaction's own category; after switching kind it no longer applies unless it fits.
+    let top = topPick.value;
+    let sub = subPick.value;
+    if (firstFill && existing?.category_id != null) {
+      const own = catById(existing.category_id);
+      top = String(own?.parent_id ?? existing.category_id);
+      sub = own?.parent_id != null ? String(own.id) : "";
+    }
+    firstFill = false;
+    const tops = kindCats().filter((c) => c.parent_id == null);
+    if (!tops.some((c) => String(c.id) === top)) (top = ""), (sub = "");
+    topPick.set([{ value: "", label: "ללא קטגוריה" }, ...tops.map((c) => ({ value: String(c.id), label: c.name }))], top);
+    fillSubs(sub);
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
@@ -782,7 +884,7 @@ function openTransactionDialog(existing?: Transaction) {
       await api.settleRecurringMonth(seriesId!, month, {
         date: date.value,
         amount_agorot: isIncome ? abs : -abs,
-        category_id: category.value ? Number(category.value) : null,
+        category_id: categoryId(),
         payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
       });
@@ -820,7 +922,8 @@ function openTransactionDialog(existing?: Transaction) {
     { className: "add", method: "dialog" },
     el("div", { className: "seg" }, expBtn, incBtn),
     el("label", {}, "סכום (₪)", amount),
-    el("label", {}, "קטגוריה", category),
+    el("label", {}, "קטגוריה", topPick.root),
+    el("label", {}, "תת-קטגוריה", subPick.root),
     el("label", {}, "תאריך", date),
     el("label", {}, "הערה", note),
     !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
@@ -845,7 +948,7 @@ function openTransactionDialog(existing?: Transaction) {
       const body = {
         date: date.value,
         amount_agorot: isIncome ? abs : -abs,
-        category_id: category.value ? Number(category.value) : null,
+        category_id: categoryId(),
         payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
       };
