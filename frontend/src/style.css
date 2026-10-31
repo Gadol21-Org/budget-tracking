@@ -261,3 +261,5 @@ form.add label[hidden] { display: none; }
 .hmhead { text-align: center; font-size: .75rem; color: var(--muted); }
 .hmcell { aspect-ratio: 1; border-radius: 6px; font-size: .72rem; display: flex; align-items: flex-end; justify-content: flex-start; padding: 2px 4px; background: var(--line); color: var(--muted); }
 .hmcell.future { background: transparent; border: 1px dashed var(--line); }
+
+.banner { background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--expense); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; color: var(--muted); font-size: 14px; }
