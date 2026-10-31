@@ -1,8 +1,10 @@
 import "./style.css";
+import { clickable, el, type Child } from "./ui";
+import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
-type View = "month" | "list" | "settings" | "log" | "categories";
+type View = "month" | "list" | "insights" | "settings" | "log" | "categories";
 
 const root = document.getElementById("app")!;
 const state = {
@@ -18,6 +20,8 @@ const state = {
   /** Which side of the category manager in settings is shown (true = income). */
   catKind: false,
   filter: undefined as { id: number | null } | undefined,
+  /** The insights tab: open dashboard, drill-down position and what the period is compared with. */
+  insights: { dash: "overview", cmp: { kind: "prev" } } as InsightsState,
   /** Change log entries loaded so far (newest first) and whether older ones remain. */
   log: [] as LogEntry[],
   logMore: false,
@@ -30,9 +34,9 @@ const state = {
 };
 
 /** Browser history: every screen is a history entry, so the phone's back button/gesture goes to the previous screen (and closes a dialog first) instead of leaving the app. */
-type Screen = { view: View; filter?: { id: number | null }; dlg?: boolean; n: number };
+type Screen = { view: View; filter?: { id: number | null }; ins?: InsightsNav; dlg?: boolean; n: number };
 function screenState(extra: Partial<Screen> = {}): Screen {
-  return { view: state.view, filter: state.filter, n: history.state?.n ?? 0, ...extra };
+  return { view: state.view, filter: state.filter, ins: { dash: state.insights.dash, cat: state.insights.cat, sub: state.insights.sub }, n: history.state?.n ?? 0, ...extra };
 }
 history.replaceState(screenState({ n: 0 }), "");
 /** Go to a screen as a new history entry. */
@@ -71,8 +75,29 @@ window.addEventListener("popstate", (e) => {
   if (st?.dlg) return;
   state.view = st?.view ?? "month";
   state.filter = st?.filter;
+  restoreInsights(st?.ins);
   render();
 });
+
+function restoreInsights(ins?: InsightsNav) {
+  state.insights.dash = ins?.dash ?? "overview";
+  state.insights.cat = ins?.cat;
+  state.insights.sub = ins?.sub;
+}
+/** Move inside the insights tab. A drill-down step is a history entry (back goes up a level); switching dashboards replaces it. */
+function navigateInsights(patch: Partial<InsightsNav>, mode: "push" | "replace") {
+  Object.assign(state.insights, { cat: undefined, sub: undefined }, patch);
+  const st = screenState(mode === "push" ? { n: (history.state?.n ?? 0) + 1 } : {});
+  if (mode === "push") history.pushState(st, "");
+  else history.replaceState(st, "");
+  window.scrollTo(0, 0);
+  render();
+}
+/** The insights tab opens on the last complete month, because a month in progress compares badly. */
+function lastCompleteMonth(): Period {
+  const now = new Date();
+  return { kind: "month", month: new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1)).toISOString().slice(0, 7) };
+}
 
 /** States of a line whose change is on its way to Paamonim. */
 const IN_FLIGHT = new Set(["pending", "modified", "verifying"]);
@@ -87,18 +112,6 @@ function syncMark(t: Transaction): HTMLElement | null {
   if (t.sync_state === "skipped") return el("span", { className: "sync", title: "לא נשלח לפעמונים: אין לו מקום שם", textContent: "⚠️" });
   if ((state.justSynced.get(t.id) ?? 0) > Date.now()) return el("span", { className: "sync", title: "נשמר בפעמונים", textContent: "✅" });
   return null;
-}
-
-type Child = Node | string | null | false;
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Record<string, unknown> = {},
-  ...kids: Child[]
-): HTMLElementTagNameMap[K] {
-  const node = Object.assign(document.createElement(tag), props);
-  node.append(...kids.filter((k): k is Node | string => !!k));
-  return node;
 }
 
 const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
@@ -125,21 +138,6 @@ function inFilter(t: Transaction): boolean {
   if (!state.filter) return true;
   const id = state.filter.id;
   return t.category_id === id || (id !== null && catById(t.category_id)?.parent_id === id);
-}
-
-/** Make a row act as a button: click, Enter and Space. */
-function clickable<T extends HTMLElement>(node: T, onActivate: () => void): T {
-  node.classList.add("clickable");
-  node.tabIndex = 0;
-  node.setAttribute("role", "button");
-  node.onclick = onActivate;
-  node.onkeydown = (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onActivate();
-    }
-  };
-  return node;
 }
 
 function showCategory(id: number | null) {
@@ -993,16 +991,40 @@ function nav(): HTMLElement {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
     if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories"))) b.setAttribute("aria-current", "page");
     b.onclick = () => {
+      if (view === "insights") {
+        if (state.view === "insights") {
+          if (state.insights.cat !== undefined) navigateInsights({}, "push");
+          return;
+        }
+        const p = state.period;
+        if (p.kind === "month" && p.month === new Date().toISOString().slice(0, 7)) state.period = lastCompleteMonth();
+        Object.assign(state.insights, { cat: undefined, sub: undefined });
+      }
       go(view);
     };
     return b;
   };
-  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
+  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("insights", "📈", "תובנות"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
+}
+
+function insightsScreen(): HTMLElement {
+  return insightsView({
+    txs: state.txs,
+    cats: state.cats,
+    period: state.period,
+    ins: state.insights,
+    monthBar,
+    navigate: navigateInsights,
+    setCmp: (c: Cmp) => ((state.insights.cmp = c), render()),
+    setPeriod: (p) => ((state.period = p), render()),
+    openList: showCategory,
+    openDialog,
+  });
 }
 
 let renderedView: View | undefined;
 function render() {
-  const view = { month: monthView, list: listView, log: logView, categories: categoriesView, settings: settingsView }[state.view]();
+  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   if (renderedView !== state.view) window.scrollTo(0, 0);
   renderedView = state.view;
