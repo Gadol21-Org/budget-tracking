@@ -860,13 +860,12 @@ function openTransactionDialog(existing?: Transaction) {
       fillSubs(sub);
     }
   });
-  /** The category the transaction goes on: the sub-category when the category has any. Both are required. */
+  /** The category the transaction goes on: always a sub-category (top-level entries are not mirrored to Paamonim). */
   const categoryId = (): number => {
     const top = topPick.value;
     if (!top) throw new Error("יש לבחור קטגוריה");
-    if (kidsOf(top).length === 0) return Number(top);
     if (subPick.value) return Number(subPick.value);
-    // A transaction already on a parent keeps it; otherwise the sub-category is required.
+    // Only a transaction already on a top-level category (from before sub-categories were required) keeps it.
     if (existing?.category_id === Number(top)) return Number(top);
     throw new Error("יש לבחור תת-קטגוריה");
   };
@@ -899,7 +898,8 @@ function openTransactionDialog(existing?: Transaction) {
       sub = own?.parent_id != null ? String(own.id) : "";
     }
     firstFill = false;
-    const tops = kindCats().filter((c) => c.parent_id == null);
+    // A category without sub-categories cannot hold transactions, so it is not offered (unless one already sits on it).
+    const tops = kindCats().filter((c) => c.parent_id == null && (kidsOf(String(c.id)).length > 0 || c.id === existing?.category_id));
     if (!tops.some((c) => String(c.id) === top)) (top = ""), (sub = "");
     topPick.set(tops.map((c) => ({ value: String(c.id), label: c.name })), top);
     fillSubs(sub);
