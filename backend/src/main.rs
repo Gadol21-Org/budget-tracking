@@ -310,6 +310,10 @@ static MIRROR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
     let _guard = MIRROR_LOCK.lock().await;
+    // Nothing to do: don't log in to Paamonim at all.
+    if db.pending_mirrors().await?.is_empty() && db.pending_line_deletes().await?.is_empty() {
+        return Ok(mirror::MirrorSummary::default());
+    }
     let (base, user, pass) = paamonim_credentials().map_err(|e| anyhow::anyhow!(e.1))?;
     let client = paamonim::Client::login(&base, &user, &pass).await?;
     mirror::run(&client, db, &mirror::Options::from_env()).await

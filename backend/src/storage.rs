@@ -158,8 +158,6 @@ pub struct PendingMirror {
     pub payment_key: Option<String>,
     /// The Paamonim line this transaction is linked to, if any.
     pub line_id: Option<String>,
-    /// The day that line has in Paamonim (differs from `date` after a local date edit).
-    pub mirror_date: Option<String>,
 }
 
 /// A line in Paamonim that no longer has a local transaction (deleted or replaced locally).
@@ -440,7 +438,7 @@ impl Storage for SqliteStorage {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note, c.paamonim_item_id,
-                    c.name, p.paamonim_id, t.paamonim_line_id, t.mirror_date
+                    c.name, p.paamonim_id, t.paamonim_line_id
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
@@ -458,7 +456,6 @@ impl Storage for SqliteStorage {
                     item_name: r.get(6)?,
                     payment_key: r.get(7)?,
                     line_id: r.get(8)?,
-                    mirror_date: r.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -571,6 +568,12 @@ impl Storage for SqliteStorage {
             .exists([])?;
         let mut n = 0;
         if !done {
+            // Imported lines keep their Paamonim day from here on.
+            tx.execute(
+                "UPDATE transactions SET mirror_date = date
+                 WHERE paamonim_line_id IS NOT NULL AND mirror_date IS NULL AND sync_state = 'synced'",
+                [],
+            )?;
             // Edited lines count as in step (their divergence is accepted); unsent ones are
             // set aside as `local` and never sent.
             tx.execute(
@@ -784,10 +787,20 @@ impl Storage for SqliteStorage {
 
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute(
-            "UPDATE transactions SET date = ?2, amount_agorot = ?3, category_id = ?4, payment_method_id = ?5, note = ?6,
+            // mirror_date keeps the day the line has in Paamonim (SET reads the old `date`).
+            "UPDATE transactions SET mirror_date = CASE WHEN paamonim_line_id IS NULL THEN NULL
+                                                   ELSE COALESCE(mirror_date, date) END,
+               date = ?2, amount_agorot = ?3, category_id = ?4, payment_method_id = ?5, note = ?6,
                sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
              WHERE id = ?1",
-            params![id, t.date, t.amount_agorot, t.category_id, t.payment_method_id, t.note],
+            params![
+                id,
+                t.date,
+                t.amount_agorot,
+                t.category_id,
+                t.payment_method_id,
+                t.note
+            ],
         )?;
         Ok(())
     }

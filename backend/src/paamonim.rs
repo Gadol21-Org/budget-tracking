@@ -34,7 +34,8 @@ pub struct HistoryEntry {
     pub note: String,
     /// Second `<small>`; takes only a handful of distinct values, possibly empty.
     pub label: String,
-    /// Id from the `payment-<id>` class and the text beside it, when the line has one.
+    /// From the `payment-<id>` class and the text beside it (`3 מתוך 10`): the line is one
+    /// installment of a group whose root line is `<id>`. Not a payment method.
     pub payment: Option<(String, String)>,
 }
 
@@ -154,6 +155,31 @@ impl Client {
             .await?
             .error_for_status()?;
         Ok(())
+    }
+
+    /// The day of history line `line_id`, read from its edit form; `None` if Paamonim
+    /// answers 404 (no such line, e.g. already deleted).
+    pub async fn line_date(&self, line_id: &str) -> Result<Option<String>> {
+        let (status, body) = self
+            .get_raw("/rishumit/edit_item_line", &[("line_id", line_id)])
+            .await?;
+        if status == 404 {
+            return Ok(None);
+        }
+        if status != 200 {
+            bail!("edit_item_line for line {line_id} returned HTTP {status}");
+        }
+        let html = match serde_json::from_str::<HtmlEnvelope>(&body) {
+            Ok(env) => env.html,
+            Err(_) => body,
+        };
+        let doc = Html::parse_fragment(&html);
+        let sel = Selector::parse("input[name=\"balance_history[payment_date]\"]").unwrap();
+        doc.select(&sel)
+            .next()
+            .and_then(|e| e.value().attr("value"))
+            .map(|d| Some(d.to_string()))
+            .context("payment date not found in the line's edit form")
     }
 
     /// A client for a test server, skipping the login.

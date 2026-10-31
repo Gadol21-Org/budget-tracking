@@ -191,8 +191,7 @@ impl Storage for MySqlStorage {
         let rows = sqlx::query(
             "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note,
                     c.paamonim_item_id AS item_key, c.name AS item_name,
-                    p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id,
-                    t.mirror_date
+                    p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
@@ -212,7 +211,6 @@ impl Storage for MySqlStorage {
                     item_name: r.try_get("item_name")?,
                     payment_key: r.try_get("payment_key")?,
                     line_id: r.try_get("line_id")?,
-                    mirror_date: r.try_get("mirror_date")?,
                 })
             })
             .collect()
@@ -338,6 +336,13 @@ impl Storage for MySqlStorage {
             .await?;
         let mut n = 0;
         if done == 0 {
+            // Imported lines keep their Paamonim day from here on.
+            sqlx::query(
+                "UPDATE transactions SET mirror_date = date
+                 WHERE paamonim_line_id IS NOT NULL AND mirror_date IS NULL AND sync_state = 'synced'",
+            )
+            .execute(&mut *tx)
+            .await?;
             sqlx::query(
                 "UPDATE transactions SET sync_state = 'synced'
                  WHERE sync_state = 'modified' AND paamonim_line_id IS NOT NULL",
@@ -574,7 +579,10 @@ impl Storage for MySqlStorage {
 
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> Result<()> {
         sqlx::query(
-            "UPDATE transactions SET date = ?, amount_agorot = ?, category_id = ?,
+            // mirror_date first: MySQL applies SET left to right, so it still sees the old date.
+            "UPDATE transactions SET mirror_date = CASE WHEN paamonim_line_id IS NULL THEN NULL
+                                                   ELSE COALESCE(mirror_date, date) END,
+               date = ?, amount_agorot = ?, category_id = ?,
                payment_method_id = ?, note = ?,
                sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
              WHERE id = ?",

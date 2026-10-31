@@ -99,12 +99,27 @@ pub fn parse_account_ids(html: &str) -> Option<(String, String)> {
     Some((get("family_id")?, get("user_id")?))
 }
 
+/// Payment method ids offered by the edit form's `payment_method_id` select.
+pub fn parse_payment_methods(html: &str) -> HashSet<String> {
+    let doc = Html::parse_fragment(html);
+    let sel =
+        Selector::parse("select[name=\"balance_history[payment_method_id]\"] option").unwrap();
+    doc.select(&sel)
+        .filter_map(|o| o.value().attr("value"))
+        .filter(|v| !v.is_empty() && *v != "-1")
+        .map(str::to_string)
+        .collect()
+}
+
 /// Query fields for `save_item_line`, in the order the site's form serializes them.
+/// The payment method is sent only if it is one the form offers: imported "payment methods"
+/// come from installment groups in the history and are not real method ids.
 pub fn save_fields(
     p: &PendingMirror,
     item_id: &str,
     family_id: &str,
     user_id: &str,
+    methods: &HashSet<String>,
 ) -> Option<Vec<(&'static str, String)>> {
     let shekels = to_paamonim_shekels(p.amount_agorot.abs());
     if shekels == 0 {
@@ -118,7 +133,10 @@ pub fn save_fields(
         ("balance_history[remark]", remark),
         (
             "balance_history[payment_method_id]",
-            p.payment_key.clone().unwrap_or_default(),
+            p.payment_key
+                .clone()
+                .filter(|k| methods.contains(k))
+                .unwrap_or_default(),
         ),
         ("balance_history[total_payments]", "1".to_string()),
         ("balance_history[family_id]", family_id.to_string()),
@@ -167,11 +185,25 @@ fn same_values(e: &HistoryEntry, p: &PendingMirror, shekels: i64) -> bool {
         && p.item_name.as_deref().is_none_or(|n| e.item_name == n)
 }
 
-/// Same, and the note and payment method too.
+/// Same, and the note too, as a single payment (the history doesn't show payment methods).
 fn same_line(e: &HistoryEntry, p: &PendingMirror, shekels: i64) -> bool {
-    same_values(e, p, shekels)
-        && e.note == squash(&remark(p))
-        && e.payment.as_ref().map(|(id, _)| id.as_str()) == p.payment_key.as_deref()
+    same_values(e, p, shekels) && e.note == squash(&remark(p)) && e.payment.is_none()
+}
+
+/// The history entry of `line_id`, found by id (its edit form gives its day) so a wrong or
+/// stale local date can't hide it. `None` if Paamonim no longer has it.
+async fn find_line(client: &Client, line_id: &str) -> Result<Option<HistoryEntry>> {
+    let Some(day) = client.line_date(line_id).await? else {
+        return Ok(None);
+    };
+    let found = history(client, &day)
+        .await?
+        .into_iter()
+        .find(|e| e.line_id == line_id);
+    match found {
+        Some(e) => Ok(Some(e)),
+        None => bail!("line {line_id} has an edit form but is not in the history of {day}"),
+    }
 }
 
 /// Rounded amount to send, or why the row can't be mirrored.
@@ -231,26 +263,25 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
             sum.unsupported += 1;
             continue;
         };
+        let Some(line) = find_line(client, &d.line_id).await? else {
+            if !opts.dry_run {
+                storage.finish_line_delete(&d.line_id).await?;
+            }
+            continue;
+        };
+        if line.payment.is_some() {
+            // One installment of a group: the site deletes the whole group at once.
+            sum.unsupported += 1;
+            continue;
+        }
         if opts.dry_run {
             sum.planned
                 .push(format!("delete line {} ({})", d.line_id, d.date));
             continue;
         }
-        if !history(client, &d.date)
-            .await?
-            .iter()
-            .any(|e| e.line_id == d.line_id)
-        {
-            storage.finish_line_delete(&d.line_id).await?;
-            continue;
-        }
         ops += 1;
         client.delete_item_line(path, param, &d.line_id).await?;
-        if history(client, &d.date)
-            .await?
-            .iter()
-            .any(|e| e.line_id == d.line_id)
-        {
+        if client.line_date(&d.line_id).await?.is_some() {
             sum.stopped = Some(format!(
                 "line {} is still in Paamonim after deleting it",
                 d.line_id
@@ -305,21 +336,23 @@ async fn push(
     };
 
     if let Some(old) = &p.line_id {
-        // Edit. If Paamonim already holds these values (rounding can hide an edit) there is
-        // nothing to do.
-        let day = p.mirror_date.as_deref().unwrap_or(&p.date);
+        // Edit: the new line is posted, then the old one deleted.
         if opts.delete.is_none() {
             // The old line couldn't be removed afterwards, so don't post a second one.
             sum.unsupported += 1;
             return Ok(Step::Continue);
         }
-        if !opts.dry_run {
-            let lines = history(client, day).await?;
-            if lines
-                .iter()
-                .any(|e| &e.line_id == old && same_line(e, p, shekels))
-            {
-                storage.mark_mirrored(p, old).await?;
+        if let Some(e) = find_line(client, old).await? {
+            if e.payment.is_some() {
+                // An installment: replacing it would delete its whole group there.
+                sum.unsupported += 1;
+                return Ok(Step::Continue);
+            }
+            // Paamonim already holds these values (rounding can hide an edit).
+            if same_line(&e, p, shekels) {
+                if !opts.dry_run {
+                    storage.mark_mirrored(p, old).await?;
+                }
                 sum.unchanged += 1;
                 return Ok(Step::Continue);
             }
@@ -345,7 +378,8 @@ async fn push(
     let Some((family, user)) = parse_account_ids(&form) else {
         bail!("account ids not found in edit form")
     };
-    let Some(fields) = save_fields(p, item, &family, &user) else {
+    let methods = parse_payment_methods(&form);
+    let Some(fields) = save_fields(p, item, &family, &user, &methods) else {
         return Ok(Step::Continue);
     };
     let before: HashSet<String> = history(client, &p.date)
@@ -476,7 +510,8 @@ mod tests {
         income: bool,
         shekels: i64,
         note: String,
-        pay: Option<String>,
+        /// Installment group root (`payment-<id>`), as the history shows it.
+        group: Option<String>,
     }
 
     #[derive(Default)]
@@ -485,6 +520,8 @@ mod tests {
         next_id: i64,
         saves: usize,
         deletes: usize,
+        /// `payment_method_id` of the last save.
+        last_method: String,
         /// Next save: answer 500 without saving.
         fail_before_save: bool,
         /// Next save: save, then answer 500.
@@ -500,8 +537,26 @@ mod tests {
     const ITEMS: [(&str, &str, bool); 2] = [("5", "סופר", false), ("7", "משכורת", true)];
 
     async fn serve(mock: M) -> Client {
-        async fn form() -> &'static str {
-            r#"<input name="balance_history[family_id]" value="1"><input name="balance_history[user_id]" value="2">"#
+        async fn form(
+            State(m): State<M>,
+            Query(q): Query<HashMap<String, String>>,
+        ) -> (StatusCode, String) {
+            let ids = r#"<input name="balance_history[family_id]" value="1"><input name="balance_history[user_id]" value="2">"#;
+            let Some(line) = q.get("line_id") else {
+                let select = r#"<select name="balance_history[payment_method_id]"><option value=""></option><option value="1896">cash</option><option value="-1">new</option></select>"#;
+                return (StatusCode::OK, format!("{ids}{select}"));
+            };
+            let m = m.lock().unwrap();
+            match m.lines.iter().find(|l| l.id.to_string() == *line) {
+                Some(l) => (
+                    StatusCode::OK,
+                    format!(
+                        r#"{ids}<input type="date" value="{}" name="balance_history[payment_date]">"#,
+                        l.date
+                    ),
+                ),
+                None => (StatusCode::NOT_FOUND, String::new()),
+            }
         }
         async fn save(State(m): State<M>, Query(q): Query<HashMap<String, String>>) -> StatusCode {
             let mut m = m.lock().unwrap();
@@ -512,6 +567,7 @@ mod tests {
             if std::mem::take(&mut m.silently_drop) {
                 return StatusCode::OK;
             }
+            m.last_method = q["balance_history[payment_method_id]"].clone();
             let item = ITEMS
                 .iter()
                 .find(|i| i.0 == q["balance_history[budget_item_id]"])
@@ -526,8 +582,7 @@ mod tests {
                     income: item.2,
                     shekels: q["balance_history[amount]"].parse().unwrap(),
                     note: q["balance_history[remark]"].clone(),
-                    pay: Some(q["balance_history[payment_method_id]"].clone())
-                        .filter(|p| !p.is_empty()),
+                    group: None,
                 });
             };
             add(&mut m);
@@ -564,8 +619,8 @@ mod tests {
                         chrono::Datelike::year(&d)
                     );
                 }
-                let pay = l.pay.as_ref().map_or(String::new(), |p| {
-                    format!(r#"<small class="payment-{p}">x</small>"#)
+                let pay = l.group.as_ref().map_or(String::new(), |p| {
+                    format!(r#"<small class="pull-right payment-{p}">1 מתוך 2</small>"#)
                 });
                 out += &format!(
                     r#"<div class="historyLine" line_id="{}"><div>{} <span class="{}">{}</span></div><div><small>{}</small></div><div><small></small>{}</div></div>"#,
@@ -835,7 +890,7 @@ mod tests {
             income: false,
             shekels: 11,
             note: String::new(),
-            pay: None,
+            group: None,
         });
         s.create_transaction(&tx(D, -1050, food)).await.unwrap();
         assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
@@ -953,6 +1008,117 @@ mod tests {
         assert_eq!(m.lines[0].shekels, 12346);
     }
 
+    /// An imported line 900 on day `D` in "סופר", also present in the mock.
+    async fn imported(s: &SqliteStorage, mock: &M, group: Option<&str>) -> i64 {
+        mock.lock().unwrap().lines.push(Line {
+            id: 900,
+            date: D.into(),
+            item: "סופר",
+            income: false,
+            shekels: 10,
+            note: String::new(),
+            group: group.map(str::to_string),
+        });
+        s.import_paamonim(&ImportBatch {
+            categories: vec![ImportCategory {
+                key: "e:5".into(),
+                name: "סופר".into(),
+                is_income: false,
+                parent_key: None,
+            }],
+            transactions: vec![ImportTransaction {
+                line_id: "900".into(),
+                date: D.into(),
+                amount_agorot: -1000,
+                category_key: Some("e:5".into()),
+                payment_key: None,
+                note: String::new(),
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        s.list_transactions().await.unwrap()[0].id
+    }
+
+    #[tokio::test]
+    async fn editing_the_date_of_an_imported_line_replaces_it_on_its_original_day() {
+        let (s, food, _) = setup().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let id = imported(&s, &mock, None).await;
+        s.update_transaction(id, &tx("2026-10-09", -1000, food))
+            .await
+            .unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.replaced, sum.deleted), (1, 1));
+        let m = mock.lock().unwrap();
+        assert_eq!(m.lines.len(), 1);
+        assert_eq!(m.lines[0].date, "2026-10-09");
+        assert_ne!(m.lines[0].id, 900);
+    }
+
+    #[tokio::test]
+    async fn a_delete_finds_the_line_even_if_the_queued_day_is_wrong() {
+        let (s, _, _) = setup().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        imported(&s, &mock, None).await;
+        s.queue_line_delete("900", "2020-01-01").await.unwrap();
+        assert_eq!(run(&c, &s, &opts()).await.unwrap().deleted, 1);
+        assert!(mock.lock().unwrap().lines.is_empty());
+    }
+
+    #[tokio::test]
+    async fn installment_lines_are_never_deleted_or_replaced() {
+        let (s, food, _) = setup().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let id = imported(&s, &mock, Some("1000")).await;
+        s.update_transaction(id, &tx(D, -5000, food)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!(sum.unsupported, 1);
+        s.delete_transaction(id).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!(sum.unsupported, 1);
+        let m = mock.lock().unwrap();
+        assert_eq!((m.lines.len(), m.saves, m.deletes), (1, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn only_payment_methods_the_site_offers_are_sent() {
+        let (s, food, _) = setup().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        s.import_paamonim(&ImportBatch {
+            payment_methods: vec![
+                crate::storage::ImportPaymentMethod {
+                    key: "1896".into(),
+                    name: "cash".into(),
+                },
+                crate::storage::ImportPaymentMethod {
+                    key: "13000000".into(),
+                    name: "1 מתוך 10".into(),
+                },
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let pms = s.list_payment_methods().await.unwrap();
+        for (name, sent) in [("cash", "1896"), ("1 מתוך 10", "")] {
+            let pm = pms.iter().find(|p| p.name == name).unwrap().id;
+            s.create_transaction(&NewTransaction {
+                payment_method_id: Some(pm),
+                ..tx(D, -1000, food)
+            })
+            .await
+            .unwrap();
+            assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
+            assert_eq!(mock.lock().unwrap().last_method, sent);
+        }
+    }
+
     #[tokio::test]
     async fn the_run_stops_at_the_operation_limit() {
         let (s, food, _) = setup().await;
@@ -981,13 +1147,19 @@ mod tests {
             state: "pending".into(),
             item_name: Some("סופר".into()),
             line_id: None,
-            mirror_date: None,
         }
     }
 
     #[test]
     fn rounds_to_whole_shekels_and_truncates_remark() {
-        let f = save_fields(&pending(-1050, &"x".repeat(50)), "5", "F", "U").unwrap();
+        let f = save_fields(
+            &pending(-1050, &"x".repeat(50)),
+            "5",
+            "F",
+            "U",
+            &HashSet::new(),
+        )
+        .unwrap();
         assert_eq!(f[1], ("balance_history[amount]", "11".to_string()));
         assert_eq!(f[3].1.chars().count(), 35);
         assert_eq!(f[4].1, "");
@@ -995,7 +1167,7 @@ mod tests {
 
     #[test]
     fn amounts_rounding_to_zero_are_not_sent() {
-        assert!(save_fields(&pending(30, ""), "5", "F", "U").is_none());
+        assert!(save_fields(&pending(30, ""), "5", "F", "U", &HashSet::new()).is_none());
     }
 
     #[test]
