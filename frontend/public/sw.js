@@ -1,9 +1,9 @@
 // Network first, falling back to cache, so the app shell (including hashed assets)
 // still opens offline once it has been loaded. API calls are never cached.
-const CACHE = "budget-shell-v4";
+const CACHE = "budget-shell-v5";
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png"])));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icon-v2.svg", "/icon-192-v2.png"])));
   self.skipWaiting();
 });
 
