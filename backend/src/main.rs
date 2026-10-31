@@ -57,6 +57,9 @@ async fn create_transaction(
     State(db): State<Db>,
     Json(t): Json<NewTransaction>,
 ) -> Result<Json<i64>, (StatusCode, String)> {
+    if t.amount_agorot == 0 {
+        return Err((StatusCode::BAD_REQUEST, "amount must not be zero".into()));
+    }
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     let id = db.create_transaction(&t).await.map_err(internal)?;
@@ -69,6 +72,9 @@ async fn update_transaction(
     Path(id): Path<i64>,
     Json(t): Json<NewTransaction>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    if t.amount_agorot == 0 {
+        return Err((StatusCode::BAD_REQUEST, "amount must not be zero".into()));
+    }
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     db.update_transaction(id, &t).await.map_err(internal)?;

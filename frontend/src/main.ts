@@ -871,11 +871,20 @@ function openTransactionDialog(existing?: Transaction) {
       return false;
     }
   };
+  /** A usable amount: a number that is not zero (to the agora). */
+  const amountReady = () => {
+    try {
+      return parseAgorot(amount.value) !== 0 && amount.value.trim() !== "";
+    } catch {
+      return false;
+    }
+  };
   const syncSave = () => {
-    const ready = categoryReady();
+    const ready = categoryReady() && amountReady();
     save.disabled = !ready;
     for (const b of dlg.querySelectorAll<HTMLButtonElement>(".needs-category")) b.disabled = !ready;
   };
+  amount.addEventListener("input", syncSave);
   topPick.input.addEventListener("change", syncSave);
   subPick.input.addEventListener("change", syncSave);
   let firstFill = true;
