@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use crate::oplog::{self, kind};
 use crate::storage::{MonthlyTotal, NewTransaction, Storage};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -56,7 +57,7 @@ fn first_day() -> u32 {
 }
 
 impl RecurringSegment {
-    fn to_new(&self) -> NewRecurring {
+    pub(crate) fn to_new(&self) -> NewRecurring {
         NewRecurring {
             start_month: self.start_month.clone(),
             end_month: self.end_month.clone(),
@@ -316,7 +317,16 @@ fn validate(r: &NewRecurring) -> Result<(), RecurringError> {
 /// Start a new series; returns its id.
 pub async fn create(db: &dyn Storage, r: &NewRecurring) -> Result<i64, RecurringError> {
     validate(r)?;
-    Ok(db.insert_recurring(None, r).await?)
+    let id = db.insert_recurring(None, r).await?;
+    oplog::record(
+        db,
+        kind::RECURRING_CREATE,
+        Some(id),
+        None,
+        oplog::rule_value(db, r).await,
+    )
+    .await;
+    Ok(id)
 }
 
 async fn series_segments(
@@ -356,6 +366,7 @@ pub async fn change_from(
     if !is_unsettled(from, current.day, today) {
         return invalid("that month has already settled; edit its transaction instead");
     }
+    let old = oplog::segment_value(db, current).await;
     if current.start_month == from {
         db.update_recurring(current.id, r).await?;
     } else {
@@ -368,6 +379,8 @@ pub async fn change_from(
     for later in segs.iter().filter(|s| s.start_month.as_str() > from) {
         db.delete_recurring(later.id).await?;
     }
+    let new = oplog::rule_value(db, r).await;
+    oplog::record(db, kind::RECURRING_UPDATE, Some(series_id), old, new).await;
     Ok(())
 }
 
@@ -393,6 +406,7 @@ pub async fn cancel_from(
     if !is_unsettled(from_month, current.day, today) {
         return invalid("that month has already settled; delete its transaction instead");
     }
+    let old = oplog::segment_value(db, current).await;
     for s in segs {
         if s.start_month.as_str() >= from_month {
             db.delete_recurring(s.id).await?;
@@ -402,6 +416,8 @@ pub async fn cancel_from(
             db.update_recurring(s.id, &cut).await?;
         }
     }
+    let new = Some(serde_json::json!({ "from_month": from_month }));
+    oplog::record(db, kind::RECURRING_CANCEL, Some(series_id), old, new).await;
     Ok(())
 }
 

@@ -1,8 +1,8 @@
 import "./style.css";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
-import { api, formatShekels, parseAgorot, type Category, type RecurringSegment, type Transaction } from "./api";
+import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
-type View = "month" | "list" | "settings";
+type View = "month" | "list" | "settings" | "log";
 
 const root = document.getElementById("app")!;
 const state = {
@@ -18,6 +18,9 @@ const state = {
   /** Which side of the category manager in settings is shown (true = income). */
   catKind: false,
   filter: undefined as { id: number | null } | undefined,
+  /** Change log entries loaded so far (newest first) and whether older ones remain. */
+  log: [] as LogEntry[],
+  logMore: false,
 };
 
 type Child = Node | string | null | false;
@@ -465,7 +468,151 @@ function settingsView(): HTMLElement {
     el("h1", { textContent: "הגדרות" }),
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
     categoriesCard(),
+    historyCard(),
   );
+}
+
+function historyCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "צפייה בהיסטוריית שינויים" });
+  open.onclick = () => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"));
+  return el(
+    "div",
+    { className: "card" },
+    el("h2", { textContent: "היסטוריית שינויים" }),
+    el("p", { className: "muted", textContent: "כל הוספה, עריכה ומחיקה של תנועות, קטגוריות והוצאות חוזרות, עם הערכים לפני ואחרי. נשמרת שנה אחת." }),
+    el("div", { className: "actions", style: "justify-content:flex-start" }, open),
+  );
+}
+
+const LOG_PAGE = 100;
+
+/** Icon and Hebrew name of each kind of change. */
+const LOG_KINDS: Record<string, [string, string]> = {
+  transaction_create: ["➕", "תנועה חדשה"],
+  transaction_update: ["✎", "תנועה נערכה"],
+  transaction_delete: ["🗑", "תנועה נמחקה"],
+  category_create: ["➕", "קטגוריה חדשה"],
+  category_delete: ["🗑", "קטגוריה נמחקה"],
+  recurring_create: ["🔁", "הוצאה חוזרת חדשה"],
+  recurring_update: ["🔁", "הוצאה חוזרת עודכנה"],
+  recurring_cancel: ["⏹", "הוצאה חוזרת בוטלה"],
+  recurring_override: ["✎", "חודש אחד בהוצאה חוזרת נערך"],
+  recurring_skip: ["⏭", "חודש אחד בהוצאה חוזרת דולג"],
+  recurring_settle: ["✅", "חיוב חוזר בוצע"],
+  import: ["⬇", "ייבוא מפעמונים"],
+};
+
+const LOG_FIELDS: Record<string, string> = {
+  date: "תאריך",
+  amount_agorot: "סכום",
+  category: "קטגוריה",
+  payment_method: "אמצעי תשלום",
+  note: "הערה",
+  start_month: "מחודש",
+  end_month: "עד חודש",
+  day: "יום בחודש",
+  name: "שם",
+  parent: "תחת",
+  is_income: "סוג",
+  subcategories: "תתי-קטגוריות",
+  moved_to: "התנועות הועברו אל",
+  transactions_moved: "תנועות שהועברו",
+  from_month: "בוטלה מחודש",
+  categories_added: "קטגוריות חדשות",
+  payment_methods_added: "אמצעי תשלום חדשים",
+  transactions_added: "תנועות חדשות",
+  transactions_skipped: "תנועות שכבר היו קיימות",
+  transactions_adopted: "תנועות שקושרו",
+};
+
+const monthLabel = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
+
+function logValue(key: string, v: unknown): string {
+  if (v == null || v === "" || (Array.isArray(v) && !v.length)) return key === "end_month" ? "ללא סיום" : "—";
+  if (key === "amount_agorot") return formatShekels(v as number);
+  if (key === "date") return new Date(`${v}T00:00:00`).toLocaleDateString("he-IL");
+  if (key.endsWith("_month")) return monthLabel(v as string);
+  if (key === "is_income") return v ? "הכנסה" : "הוצאה";
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+}
+
+/** The lines under a log entry: what changed (old ← new) for an edit, otherwise the values recorded. */
+function logLines(e: LogEntry): HTMLElement[] {
+  const line = (key: string, text: string) =>
+    el("div", { className: "logline" }, el("span", { className: "muted", textContent: `${LOG_FIELDS[key] ?? key}: ` }), el("span", { textContent: text }));
+  const values = (o: Record<string, unknown> | null) =>
+    Object.entries(o ?? {})
+      .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
+      .map(([k, v]) => line(k, logValue(k, v)));
+  if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override"].includes(e.kind)) {
+    const keys = Object.keys({ ...e.old, ...e.new }).filter((k) => JSON.stringify(e.old![k] ?? null) !== JSON.stringify(e.new![k] ?? null));
+    return keys.map((k) => line(k, `${logValue(k, e.old![k])} ← ${logValue(k, e.new![k])}`));
+  }
+  return [...values(e.old), ...values(e.new)];
+}
+
+function logEntryRow(e: LogEntry): HTMLElement {
+  const [ico, label] = LOG_KINDS[e.kind] ?? ["•", e.kind];
+  const snap = (e.new ?? e.old) as Record<string, unknown> | null;
+  const what = e.kind.startsWith("category_") ? (snap?.name as string | undefined) : (snap?.category as string | null | undefined) ?? (e.kind.startsWith("transaction_") || e.kind.startsWith("recurring_") ? "ללא קטגוריה" : undefined);
+  const time = new Date(e.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+  return el(
+    "div",
+    { className: "row logentry" },
+    el("span", { className: "logico", textContent: ico }),
+    el(
+      "div",
+      { className: "grow" },
+      el("div", { className: "logtitle" }, label, what ? el("span", { className: "muted", textContent: ` · ${what}` }) : null),
+      ...logLines(e),
+    ),
+    el("span", { className: "muted logtime", textContent: time }),
+  );
+}
+
+function logView(): HTMLElement {
+  const back = el("button", { className: "btn", textContent: "→ הגדרות", title: "חזרה להגדרות" });
+  back.onclick = () => {
+    state.view = "settings";
+    render();
+  };
+  const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");
+  const days = [...new Set(state.log.map((e) => localDay(e.at)))];
+  const body = days.map((d) =>
+    el(
+      "div",
+      {},
+      el("div", { className: "daylabel", textContent: new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) }),
+      el("div", { className: "card rows" }, ...state.log.filter((e) => localDay(e.at) === d).map(logEntryRow)),
+    ),
+  );
+  const more = el("button", { className: "btn", textContent: "הצגת שינויים ישנים יותר" });
+  more.onclick = async () => {
+    more.disabled = true;
+    try {
+      const older = await api.log(state.log[state.log.length - 1]?.id, LOG_PAGE);
+      state.log = [...state.log, ...older];
+      state.logMore = older.length === LOG_PAGE;
+      render();
+    } catch {
+      more.disabled = false;
+    }
+  };
+  return el(
+    "div",
+    {},
+    el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, el("div", { className: "name", textContent: "היסטוריית שינויים" }), el("div", { className: "muted", textContent: "שנה אחרונה" }))),
+    ...(body.length ? body : [el("div", { className: "empty", textContent: "עוד לא נרשמו שינויים" })]),
+    state.logMore ? el("div", { className: "actions", style: "justify-content:center;margin-top:12px" }, more) : null,
+  );
+}
+
+async function openLog() {
+  state.log = await api.log(undefined, LOG_PAGE);
+  state.logMore = state.log.length === LOG_PAGE;
+  state.view = "log";
+  render();
 }
 
 /** A button that opens a small menu of choices above it. */
@@ -660,7 +807,7 @@ function openTransactionDialog(existing?: Transaction) {
 function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && state.view === "log")) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       state.view = view;
       state.filter = undefined;
@@ -672,14 +819,24 @@ function nav(): HTMLElement {
 }
 
 function render() {
-  const view = state.view === "month" ? monthView() : state.view === "list" ? listView() : settingsView();
+  const view = state.view === "month" ? monthView() : state.view === "list" ? listView() : state.view === "log" ? logView() : settingsView();
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
   root.replaceChildren(el("div", { className: "shell" }, nav(), el("main", {}, view)), fab);
 }
 
 async function load() {
-  const [cats, txs, recurring, occurrences] = await Promise.all([api.categories(), api.transactions(), api.recurring(), api.occurrences()]);
+  const [cats, txs, recurring, occurrences, log] = await Promise.all([
+    api.categories(),
+    api.transactions(),
+    api.recurring(),
+    api.occurrences(),
+    state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
+  ]);
+  if (log) {
+    state.log = log;
+    state.logMore = log.length >= LOG_PAGE;
+  }
   state.cats = cats;
   state.recurring = recurring;
   const generated: Transaction[] = occurrences.map((o) => ({
@@ -725,22 +882,10 @@ window.addEventListener("online", refreshIfStale);
 for (const g of ["gesturestart", "gesturechange"]) document.addEventListener(g, (e) => e.preventDefault());
 
 // Pull to refresh (touch screens only): the page follows the finger from the top, the spinner rides
-// along, a short haptic tick marks the threshold (navigator.vibrate is unavailable on iOS Safari),
+// along, a short haptic tick marks the threshold (navigator.vibrate; unavailable on iOS Safari),
 // and release glides back with an eased transition.
 const PULL_THRESHOLD = 72;
 const PULL_MAX = 120;
-/** Haptic tick: navigator.vibrate on Android; on iOS Safari (17.4+) toggling a hidden `switch` checkbox makes the system click. */
-const hapticSwitch = el("input", { type: "checkbox", id: "haptic" });
-hapticSwitch.setAttribute("switch", "");
-hapticSwitch.setAttribute("aria-hidden", "true");
-hapticSwitch.tabIndex = -1;
-const hapticLabel = el("label", { className: "haptic" }, hapticSwitch);
-hapticLabel.htmlFor = "haptic";
-document.body.append(hapticLabel);
-function haptic(pattern: number | number[] = 12) {
-  if (navigator.vibrate) navigator.vibrate(pattern);
-  else hapticLabel.click();
-}
 const spinner = el("div", { className: "ptr" }, el("div", { className: "ptr-dot" }));
 document.body.append(spinner);
 let pullStart: number | undefined;
@@ -779,7 +924,7 @@ document.addEventListener(
     // Rubber band: resistance grows as the page is pulled further.
     pullDist = PULL_MAX * (1 - Math.exp(-dy / (PULL_MAX * 1.6)));
     setPull(pullDist);
-    if (!armed && pullDist >= PULL_THRESHOLD) haptic();
+    if (!armed && pullDist >= PULL_THRESHOLD) navigator.vibrate?.(12);
     armed = pullDist >= PULL_THRESHOLD;
     spinner.classList.toggle("ready", armed);
   },
@@ -793,7 +938,7 @@ async function endPull() {
   glideTo(PULL_THRESHOLD * 0.8);
   lastLoad = Date.now();
   const [ok] = await Promise.all([refresh(), new Promise((r) => setTimeout(r, 600))]);
-  if (!ok) haptic([30, 40, 30]);
+  if (!ok) navigator.vibrate?.([30, 40, 30]);
   spinner.classList.remove("spin", "ready");
   glideTo(0);
   armed = false;
