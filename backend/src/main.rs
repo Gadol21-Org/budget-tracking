@@ -20,8 +20,8 @@ use axum::{
 };
 use serde::Deserialize;
 use storage::{
-    Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction, SqliteStorage, Storage,
-    Transaction,
+    Business, BusinessLinks, Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction,
+    SqliteStorage, Storage, Transaction,
 };
 
 type Db = Arc<dyn Storage>;
@@ -89,6 +89,126 @@ async fn delete_transaction(
     db.delete_transaction(id).await.map_err(internal)?;
     trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Serialize)]
+struct BusinessData {
+    businesses: Vec<Business>,
+    links: BusinessLinks,
+}
+
+/// The businesses with their tags and category links.
+async fn get_businesses(State(db): State<Db>) -> Result<Json<BusinessData>, (StatusCode, String)> {
+    Ok(Json(BusinessData {
+        businesses: db.list_businesses().await.map_err(internal)?,
+        links: db.business_links().await.map_err(internal)?,
+    }))
+}
+
+#[derive(Deserialize)]
+struct NewBusiness {
+    name: String,
+    #[serde(default)]
+    is_general: bool,
+}
+
+async fn create_business(
+    State(db): State<Db>,
+    Json(b): Json<NewBusiness>,
+) -> Result<Json<i64>, (StatusCode, String)> {
+    let name = b.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name must not be empty".into()));
+    }
+    let existing = db.list_businesses().await.map_err(internal)?;
+    if existing.iter().any(|x| x.name == name) {
+        return Err((
+            StatusCode::CONFLICT,
+            "a business with this name exists".into(),
+        ));
+    }
+    if b.is_general && existing.iter().any(|x| x.is_general) {
+        return Err((
+            StatusCode::CONFLICT,
+            "there is already a general business".into(),
+        ));
+    }
+    db.insert_business(name, b.is_general)
+        .await
+        .map(Json)
+        .map_err(internal)
+}
+
+#[derive(Deserialize)]
+struct RenameBusiness {
+    name: String,
+}
+
+async fn rename_business(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(b): Json<RenameBusiness>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let name = b.name.trim();
+    if name.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "name must not be empty".into()));
+    }
+    db.rename_business(id, name).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_business(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    db.remove_business(id).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BusinessChoice {
+    business_id: Option<i64>,
+}
+
+/// Make a category's transactions count in a business (null removes the link).
+async fn link_category_business(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(b): Json<BusinessChoice>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    check_business(&db, b.business_id).await?;
+    db.set_category_business(id, b.business_id)
+        .await
+        .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct TagTransactions {
+    ids: Vec<i64>,
+    business_id: Option<i64>,
+}
+
+/// Tag transactions as a business's (null removes their tags).
+async fn tag_transactions(
+    State(db): State<Db>,
+    Json(b): Json<TagTransactions>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    check_business(&db, b.business_id).await?;
+    db.set_transactions_business(&b.ids, b.business_id)
+        .await
+        .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn check_business(db: &Db, id: Option<i64>) -> Result<(), (StatusCode, String)> {
+    if let Some(id) = id {
+        let all = db.list_businesses().await.map_err(internal)?;
+        if !all.iter().any(|b| b.id == id) {
+            return Err((StatusCode::BAD_REQUEST, "unknown business".into()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -541,6 +661,16 @@ fn router(db: Db) -> Router {
         .route(
             "/api/recurring/:series_id",
             axum::routing::put(change_recurring).delete(cancel_recurring),
+        )
+        .route("/api/businesses", get(get_businesses).post(create_business))
+        .route(
+            "/api/businesses/:id",
+            delete(delete_business).put(rename_business),
+        )
+        .route("/api/businesses/tag", axum::routing::put(tag_transactions))
+        .route(
+            "/api/categories/:id/business",
+            axum::routing::put(link_category_business),
         )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))

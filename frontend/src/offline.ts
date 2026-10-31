@@ -16,6 +16,8 @@ export type NewTransaction = Omit<Transaction, "id" | "sync_state">;
 export interface Queued {
   qid: number;
   tx: NewTransaction;
+  /** The business to tag the line with once it is saved. */
+  business?: number | null;
 }
 
 let dbp: Promise<IDBDatabase> | undefined;
@@ -45,7 +47,7 @@ async function run<T>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectS
 export const saveSnapshot = (s: Snapshot) => run("kv", "readwrite", (o) => o.put(s, "snapshot")).catch(() => {});
 export const loadSnapshot = () => run<Snapshot | undefined>("kv", "readonly", (o) => o.get("snapshot")).catch(() => undefined);
 export const queuedList = () => run<Queued[]>("queue", "readonly", (o) => o.getAll()).catch(() => [] as Queued[]);
-export const enqueue = (tx: NewTransaction) => run("queue", "readwrite", (o) => o.add({ tx }));
+export const enqueue = (tx: NewTransaction, business: number | null = null) => run("queue", "readwrite", (o) => o.add({ tx, business }));
 export const dequeue = (qid: number) => run("queue", "readwrite", (o) => o.delete(qid)).catch(() => {});
 
 /** Ask the browser not to evict our data under storage pressure (a no-op where unsupported). */
