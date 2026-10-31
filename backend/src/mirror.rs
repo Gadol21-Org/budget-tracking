@@ -1334,6 +1334,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_income_sub_category_made_here_gets_its_own_income_item() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        s.import_paamonim(&ImportBatch {
+            categories: vec![
+                ImportCategory {
+                    key: "ci:17".into(),
+                    name: "שכר".into(),
+                    is_income: true,
+                    parent_key: None,
+                },
+                ImportCategory {
+                    key: "i:7".into(),
+                    name: "משכורת".into(),
+                    is_income: true,
+                    parent_key: Some("ci:17".into()),
+                },
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        s.baseline_mirror().await.unwrap();
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let pay = cat_id(&s.list_categories().await.unwrap(), "שכר");
+        let bonus = s
+            .create_category(&crate::storage::NewCategory {
+                name: "בונוס".into(),
+                is_income: true,
+                parent_id: Some(pay),
+            })
+            .await
+            .unwrap();
+        let a = s.create_transaction(&tx(D, 50000, bonus)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.items_created, sum.mirrored), (1, 1), "{sum:?}");
+        assert_eq!(
+            mock.lock().unwrap().custom,
+            vec![(500, "בונוס".to_string(), "17".to_string(), true)]
+        );
+        assert_eq!(state_of(&s, a).await, "synced");
+    }
+
+    #[tokio::test]
     async fn an_existing_item_with_the_same_name_is_reused() {
         let s = with_parent().await;
         let mock = M::default();
