@@ -203,7 +203,9 @@ function barChart(o: BarOpts): string {
     const x0 = padX + (n - 1 - i) * slot;
     const hot = o.highlight.size === 0 || o.highlight.has(i);
     const op = hot ? 1 : 0.45;
-    if (o.peek === i && !(o.highlight.has(i) && o.highlight.size < n)) {
+    // Figures above the tapped month and the active period's months: both bars of a pair, or the stack total.
+    let figs = "";
+    if (o.peek === i || (o.highlight.has(i) && o.highlight.size < n)) {
       const fmt = (v: number) => Math.round(v / 100).toLocaleString("he-IL");
       if (mode === "grouped") {
         // One figure above each bar of the pair; the taller one is lifted so the two never overlap.
@@ -212,9 +214,9 @@ function barChart(o: BarOpts): string {
         const order = o.series.map((_, j) => j).sort((a, b) => o.series[b][i] - o.series[a][i]);
         order.forEach((j, rank) => {
           const yy = ys[j] - (rank === 0 && o.series.length > 1 && Math.abs(ys[0] - ys[1]) < 10 ? 10 : 0);
-          out += `<text x="${x0 + slot * 0.1 + j * bw + bw / 2}" y="${yy}" font-size="8" font-weight="700" text-anchor="middle" fill="${o.colors[j]}">${fmt(o.series[j][i])}</text>`;
+          figs += `<text x="${x0 + slot * 0.1 + j * bw + bw / 2}" y="${yy}" font-size="8" font-weight="700" text-anchor="middle" fill="${o.colors[j]}" stroke="var(--bg)" stroke-width="3" paint-order="stroke">${fmt(o.series[j][i])}</text>`;
         });
-      } else out += `<text x="${x0 + slot / 2}" y="${top + H - y(totals[i]) - 4}" font-size="9" font-weight="700" text-anchor="middle" fill="currentColor">${fmt(totals[i])}</text>`;
+      } else figs += `<text x="${x0 + slot / 2}" y="${top + H - y(totals[i]) - 4}" font-size="9" font-weight="700" text-anchor="middle" fill="currentColor" stroke="var(--bg)" stroke-width="3" paint-order="stroke">${fmt(totals[i])}</text>`;
     }
     if (mode === "grouped") {
       const bw = (slot * 0.8) / o.series.length;
@@ -230,7 +232,7 @@ function barChart(o: BarOpts): string {
         out += `<rect x="${x0 + slot * 0.14}" y="${base}" width="${slot * 0.72}" height="${h}" rx="${mode === "stacked" ? 0 : 3}" fill="${o.colors[j]}" opacity="${op}"/>`;
       });
     }
-    if (o.highlight.has(i) && o.highlight.size < n) out += `<text x="${x0 + slot / 2}" y="${top + H - y(totals[i]) - 4}" font-size="9" font-weight="700" text-anchor="middle" fill="currentColor">${Math.round(totals[i] / 100).toLocaleString("he-IL")}</text>`;
+    out += figs; // drawn over the bars so a figure is never hidden behind its neighbour
     out += `<text x="${x0 + slot / 2}" y="${top + H + 14}" font-size="9" text-anchor="middle" fill="${o.highlight.has(i) && o.highlight.size < n ? "var(--brand)" : "var(--muted)"}" font-weight="${o.highlight.has(i) && o.highlight.size < n ? 700 : 400}">${esc(label)}</text>`;
     out += `<rect data-i="${i}" x="${x0}" y="0" width="${slot}" height="${H + top + 18}" fill="transparent" style="cursor:pointer"><title>${esc(o.tips[i])}</title></rect>`;
   });
