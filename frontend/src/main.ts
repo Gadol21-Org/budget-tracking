@@ -114,6 +114,11 @@ const catPath = (id: number | null) => {
 const dayTitle = (d: string) =>
   new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
 
+/** After saving, keep the period the user is viewing; switch to the item's month only if it would otherwise be out of view. */
+function showPeriodFor(date: string) {
+  if (!contains(state.period, date)) state.period = monthOf(date);
+}
+
 const inPeriod = () => state.txs.filter((t) => contains(state.period, t.date));
 
 function inFilter(t: Transaction): boolean {
@@ -781,7 +786,7 @@ function openTransactionDialog(existing?: Transaction) {
         payment_method_id: existing?.payment_method_id ?? null,
         note: note.value,
       });
-      state.period = monthOf(date.value);
+      showPeriodFor(date.value);
       dlg.close();
       await load();
     } catch (e2) {
@@ -862,7 +867,7 @@ function openTransactionDialog(existing?: Transaction) {
         else await api.addRecurring(rule);
       } else if (existing) await api.updateTransaction(existing.id, body);
       else await api.addTransaction(body);
-      state.period = monthOf(date.value);
+      showPeriodFor(date.value);
       dlg.close();
       await load();
     } catch (e2) {
