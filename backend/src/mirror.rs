@@ -36,6 +36,8 @@ pub struct Options {
     pub dry_run: bool,
     /// Most requests that change Paamonim in one run.
     pub max_ops: usize,
+    /// After a failed save, how long to wait before checking whether it went through anyway.
+    pub recheck_after: std::time::Duration,
     /// `(path, id parameter)` of the endpoint that deletes a history line (a POST). `None`
     /// leaves edits and deletes waiting.
     pub delete: Option<(String, String)>,
@@ -55,6 +57,7 @@ impl Options {
             max_ops: var("PAAMONIM_MIRROR_MAX_OPS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50),
+            recheck_after: std::time::Duration::from_secs(2),
             delete: Some((
                 var("PAAMONIM_DELETE_PATH")
                     .unwrap_or_else(|| "/rishumit/delete_history_line".into()),
@@ -68,13 +71,15 @@ impl Options {
 pub struct MirrorSummary {
     /// New lines posted.
     pub mirrored: usize,
+    /// Paamonim items linked to sub-categories made here (created, or found by name).
+    pub items_created: usize,
     /// Edited transactions: new line posted, old one queued for deletion.
     pub replaced: usize,
     /// Edited, but Paamonim already holds the same values (e.g. rounding hides the change).
     pub unchanged: usize,
     /// Lines deleted in Paamonim.
     pub deleted: usize,
-    /// Not mirrored by design: no Paamonim budget item, a zero amount, or the wrong sign.
+    /// Not mirrored by design (`skipped`): no Paamonim item, a zero amount, or the wrong sign.
     pub skipped: usize,
     /// Edits/deletes waiting because no delete endpoint is configured.
     pub unsupported: usize,
@@ -235,8 +240,35 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
         m
     };
     let mut claimed: HashMap<String, usize> = HashMap::new();
+    // Items created (or found) this run for categories made here, by category id.
+    let mut linked: HashMap<i64, Option<String>> = HashMap::new();
 
     for p in &pending {
+        let mut p = p.clone();
+        if p.item_key.is_none() && p.state != "verifying" {
+            if let Some(cat) = p.category_id {
+                let key = match linked.get(&cat) {
+                    Some(k) => k.clone(),
+                    None => {
+                        let k = match ensure_item(client, storage, opts, &p, &mut ops, &mut sum)
+                            .await?
+                        {
+                            Ok(k) => k,
+                            Err(why) => {
+                                storage.set_mirror_state(p.id, "error").await?;
+                                sum.failed += 1;
+                                sum.stopped = Some(why);
+                                return Ok(sum);
+                            }
+                        };
+                        linked.insert(cat, k.clone());
+                        k
+                    }
+                };
+                p.item_key = key;
+            }
+        }
+        let p = &p;
         if ops >= opts.max_ops {
             sum.stopped = Some("operation limit reached; run again to continue".into());
             return Ok(sum);
@@ -305,6 +337,69 @@ fn sig(p: &PendingMirror) -> String {
     )
 }
 
+/// The Paamonim item for `p`'s category when it was made here as a sub-category of a Paamonim
+/// category: an item of the family's own with the same name under that category is used, or
+/// created. `Ok(None)` when there can't be one (top-level category, name taken elsewhere, dry
+/// run); `Err(reason)` when creating it failed.
+async fn ensure_item(
+    client: &Client,
+    storage: &dyn Storage,
+    opts: &Options,
+    p: &PendingMirror,
+    ops: &mut usize,
+    sum: &mut MirrorSummary,
+) -> Result<std::result::Result<Option<String>, String>> {
+    let (Some(cat), Some(parent), Some(name)) = (p.category_id, &p.parent_key, &p.item_name) else {
+        return Ok(Ok(None));
+    };
+    let (item_type, tag, pid) = match parent.split_once(':') {
+        Some(("ce", id)) if !p.is_income => ("expense", "e", id),
+        Some(("ci", id)) if p.is_income => ("income", "i", id),
+        _ => return Ok(Ok(None)),
+    };
+    // A parent known only by name (no Paamonim id) can't take items.
+    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(Ok(None));
+    }
+    let name = squash(name);
+    let find = |items: &[paamonim::CustomItem]| {
+        items.iter().find(|i| i.name == name).map(|i| {
+            (i.category_id.as_deref() == Some(pid)).then(|| format!("{tag}:{}", i.item_id))
+        })
+    };
+    let key = match find(&client.custom_items(item_type).await?) {
+        // Same name under another category: leave it alone.
+        Some(None) => return Ok(Ok(None)),
+        Some(Some(key)) => key,
+        None => {
+            if opts.dry_run {
+                sum.planned
+                    .push(format!("create item \"{name}\" under category {pid}"));
+                return Ok(Ok(None));
+            }
+            *ops += 1;
+            if let Err(e) = client.add_custom_item(&name, item_type, pid).await {
+                return Ok(Err(format!(
+                    "creating item \"{name}\" in Paamonim failed: {e}"
+                )));
+            }
+            match find(&client.custom_items(item_type).await?) {
+                Some(Some(key)) => key,
+                _ => {
+                    return Ok(Err(format!(
+                        "item \"{name}\" was sent but did not appear in Paamonim"
+                    )))
+                }
+            }
+        }
+    };
+    if !opts.dry_run {
+        storage.link_category(cat, &key).await?;
+    }
+    sum.items_created += 1;
+    Ok(Ok(Some(key)))
+}
+
 /// Send a `pending` or `modified` row.
 async fn push(
     client: &Client,
@@ -315,10 +410,14 @@ async fn push(
     sum: &mut MirrorSummary,
 ) -> Result<Step> {
     let Some(item) = item_id(p) else {
-        // No Paamonim budget item (a local category, or a parent). Nothing to send; an edited
-        // line that used to have one is removed there.
-        if p.line_id.is_some() && !opts.dry_run {
-            storage.detach_mirror(p.id).await?;
+        // No Paamonim budget item (a top-level category made here, or a parent). Nothing to
+        // send; an edited line that used to have one is removed there.
+        if !opts.dry_run {
+            if p.line_id.is_some() {
+                storage.detach_mirror(p.id).await?;
+            } else {
+                storage.set_mirror_state(p.id, "skipped").await?;
+            }
         }
         sum.skipped += 1;
         return Ok(Step::Continue);
@@ -328,7 +427,7 @@ async fn push(
             if p.line_id.is_some() {
                 storage.detach_mirror(p.id).await?;
             } else {
-                storage.set_mirror_state(p.id, "local").await?;
+                storage.set_mirror_state(p.id, "skipped").await?;
             }
         }
         sum.skipped += 1;
@@ -345,6 +444,9 @@ async fn push(
         if let Some(e) = find_line(client, old).await? {
             if e.payment.is_some() {
                 // An installment: replacing it would delete its whole group there.
+                if !opts.dry_run {
+                    storage.set_mirror_state(p.id, "error").await?;
+                }
                 sum.unsupported += 1;
                 return Ok(Step::Continue);
             }
@@ -391,11 +493,10 @@ async fn push(
     // From here on the outcome may be unknown until checked: never re-send blindly.
     storage.set_mirror_state(p.id, "verifying").await?;
     *ops += 1;
-    if let Err(e) = client.save_item_line(&fields).await {
-        return Ok(Step::Stop(format!(
-            "sending #{} failed ({e}); left as `verifying` and will be checked next run",
-            p.id
-        )));
+    let failed = client.save_item_line(&fields).await.err();
+    if failed.is_some() {
+        // The request may still have gone through: look again after a moment.
+        tokio::time::sleep(opts.recheck_after).await;
     }
     let known: HashSet<String> = storage.known_line_ids().await?.into_iter().collect();
     let new: Vec<HistoryEntry> = history(client, &p.date)
@@ -417,10 +518,13 @@ async fn push(
         [] => {
             storage.set_mirror_state(p.id, "error").await?;
             sum.failed += 1;
-            Ok(Step::Stop(format!(
-                "#{} was sent but no matching new line appeared in Paamonim",
-                p.id
-            )))
+            Ok(Step::Stop(match failed {
+                Some(e) => format!("sending #{} failed: {e}", p.id),
+                None => format!(
+                    "#{} was sent but no matching new line appeared in Paamonim",
+                    p.id
+                ),
+            }))
         }
         _ => {
             storage.set_mirror_state(p.id, "error").await?;
@@ -522,6 +626,8 @@ mod tests {
         deletes: usize,
         /// `payment_method_id` of the last save.
         last_method: String,
+        /// Items of the family's own: (id, name, category id, income).
+        custom: Vec<(i64, String, String, bool)>,
         /// Next save: answer 500 without saving.
         fail_before_save: bool,
         /// Next save: save, then answer 500.
@@ -568,9 +674,17 @@ mod tests {
                 return StatusCode::OK;
             }
             m.last_method = q["balance_history[payment_method_id]"].clone();
+            let id = &q["balance_history[budget_item_id]"];
+            let custom = m
+                .custom
+                .iter()
+                .find(|c| c.0.to_string() == *id)
+                .map(|c| (Box::leak(c.1.clone().into_boxed_str()) as &'static str, c.3));
             let item = ITEMS
                 .iter()
-                .find(|i| i.0 == q["balance_history[budget_item_id]"])
+                .find(|i| i.0 == id)
+                .map(|i| (i.1, i.2))
+                .or(custom)
                 .unwrap();
             let add = |m: &mut Mock| {
                 m.next_id += 1;
@@ -578,8 +692,8 @@ mod tests {
                 m.lines.push(Line {
                     id,
                     date: q["balance_history[payment_date]"].clone(),
-                    item: item.1,
-                    income: item.2,
+                    item: item.0,
+                    income: item.1,
                     shekels: q["balance_history[amount]"].parse().unwrap(),
                     note: q["balance_history[remark]"].clone(),
                     group: None,
@@ -638,7 +752,46 @@ mod tests {
             }
             out
         }
+        async fn customs(State(m): State<M>, Query(q): Query<HashMap<String, String>>) -> String {
+            let income = q["item_type"] == "income";
+            m.lock()
+                .unwrap()
+                .custom
+                .iter()
+                .filter(|c| c.3 == income)
+                .map(|c| {
+                    format!(
+                        r#"<a class="customItem" item_id="{}" budget_category_id="{}">{}</a>"#,
+                        c.0, c.2, c.1
+                    )
+                })
+                .collect()
+        }
+        async fn add_custom(
+            State(m): State<M>,
+            axum::extract::Form(q): axum::extract::Form<HashMap<String, String>>,
+        ) -> StatusCode {
+            let mut m = m.lock().unwrap();
+            assert_eq!(q["authenticity_token"], "tok");
+            let id = 500 + m.custom.len() as i64;
+            m.custom.push((
+                id,
+                q["new_budget_item_name"].clone(),
+                q["budget_category_id"].clone(),
+                q["item_type"] == "income",
+            ));
+            StatusCode::OK
+        }
+        async fn page() -> &'static str {
+            r#"<form><input name="authenticity_token" value="tok"></form>"#
+        }
         let app = Router::new()
+            .route("/rishumit", get(page))
+            .route("/rishumit/get_custom_items", get(customs))
+            .route(
+                "/rishumit/save_family_custom_item",
+                axum::routing::post(add_custom),
+            )
             .route("/rishumit/edit_item_line", get(form))
             .route("/rishumit/save_item_line", get(save))
             .route("/rishumit/delete_history_line", axum::routing::post(delete))
@@ -654,6 +807,7 @@ mod tests {
         Options {
             dry_run: false,
             max_ops: 50,
+            recheck_after: std::time::Duration::ZERO,
             delete: Some(("/rishumit/delete_history_line".into(), "line_id".into())),
         }
     }
@@ -825,12 +979,10 @@ mod tests {
         let c = serve(mock.clone()).await;
         let id = s.create_transaction(&tx(D, -1050, food)).await.unwrap();
         mock.lock().unwrap().fail_after_save = true;
+        // The error answer is checked against the history: the line is there, so it is linked.
         let sum = run(&c, &s, &opts()).await.unwrap();
-        assert!(sum.stopped.is_some());
-        assert_eq!(state_of(&s, id).await, "verifying");
-        // Next run finds the line it created and links it; no second post.
-        let sum = run(&c, &s, &opts()).await.unwrap();
-        assert_eq!(sum.mirrored, 1);
+        assert_eq!((sum.mirrored, sum.failed), (1, 0));
+        run(&c, &s, &opts()).await.unwrap();
         {
             let m = mock.lock().unwrap();
             assert_eq!((m.saves, m.lines.len()), (1, 1));
@@ -845,9 +997,10 @@ mod tests {
         let c = serve(mock.clone()).await;
         let id = s.create_transaction(&tx(D, -1050, food)).await.unwrap();
         mock.lock().unwrap().fail_before_save = true;
-        run(&c, &s, &opts()).await.unwrap();
-        run(&c, &s, &opts()).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert!(sum.stopped.is_some());
         assert_eq!(state_of(&s, id).await, "error");
+        run(&c, &s, &opts()).await.unwrap();
         assert_eq!(mock.lock().unwrap().saves, 1);
         // After a look, a manual retry puts it back in the queue.
         assert!(s.retry_mirror(id).await.unwrap());
@@ -985,7 +1138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rows_that_cannot_be_represented_are_kept_local() {
+    async fn rows_that_cannot_be_represented_are_skipped() {
         let (s, food, pay) = setup().await;
         let tiny = s.create_transaction(&tx(D, -30, food)).await.unwrap();
         let refund = s.create_transaction(&tx(D, 5000, food)).await.unwrap();
@@ -994,8 +1147,8 @@ mod tests {
         assert_eq!((sum.skipped, sum.mirrored), (2, 1));
         // Under a shekel is sent as ₪1.
         assert_eq!(state_of(&s, tiny).await, "synced");
-        assert_eq!(state_of(&s, refund).await, "local");
-        assert_eq!(state_of(&s, zero).await, "local");
+        assert_eq!(state_of(&s, refund).await, "skipped");
+        assert_eq!(state_of(&s, zero).await, "skipped");
         let _ = pay;
     }
 
@@ -1122,6 +1275,112 @@ mod tests {
         }
     }
 
+    /// Storage whose "סופר" item sits under Paamonim category 3 (`ce:3`).
+    async fn with_parent() -> SqliteStorage {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: name.into(),
+            is_income: false,
+            parent_key: parent.map(str::to_string),
+        };
+        s.import_paamonim(&ImportBatch {
+            categories: vec![cat("ce:3", "מזון", None), cat("e:5", "סופר", Some("ce:3"))],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        s.baseline_mirror().await.unwrap();
+        s
+    }
+
+    fn cat_id(cats: &[crate::storage::Category], name: &str) -> i64 {
+        cats.iter().find(|c| c.name == name).unwrap().id
+    }
+
+    #[tokio::test]
+    async fn a_sub_category_made_here_gets_its_own_item_in_paamonim() {
+        let s = with_parent().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let food = cat_id(&s.list_categories().await.unwrap(), "מזון");
+        let bakery = s
+            .create_category(&crate::storage::NewCategory {
+                name: "מאפייה".into(),
+                is_income: false,
+                parent_id: Some(food),
+            })
+            .await
+            .unwrap();
+        let a = s.create_transaction(&tx(D, -2500, bakery)).await.unwrap();
+        let b = s.create_transaction(&tx(D, -1200, bakery)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.items_created, sum.mirrored), (1, 2));
+        {
+            let m = mock.lock().unwrap();
+            assert_eq!(
+                m.custom,
+                vec![(500, "מאפייה".to_string(), "3".to_string(), false)]
+            );
+            assert!(m.lines.iter().all(|l| l.item == "מאפייה"));
+        }
+        assert_eq!(state_of(&s, a).await, "synced");
+        assert_eq!(state_of(&s, b).await, "synced");
+        // Later lines use the linked item without creating another.
+        s.create_transaction(&tx(D, -300, bakery)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.items_created, sum.mirrored), (0, 1));
+        assert_eq!(mock.lock().unwrap().custom.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_existing_item_with_the_same_name_is_reused() {
+        let s = with_parent().await;
+        let mock = M::default();
+        mock.lock()
+            .unwrap()
+            .custom
+            .push((77, "מאפייה".into(), "3".into(), false));
+        let c = serve(mock.clone()).await;
+        let food = cat_id(&s.list_categories().await.unwrap(), "מזון");
+        let bakery = s
+            .create_category(&crate::storage::NewCategory {
+                name: "מאפייה".into(),
+                is_income: false,
+                parent_id: Some(food),
+            })
+            .await
+            .unwrap();
+        s.create_transaction(&tx(D, -2500, bakery)).await.unwrap();
+        assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
+        assert_eq!(mock.lock().unwrap().custom.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_top_level_category_made_here_is_skipped_until_moved() {
+        let s = with_parent().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let mine = s
+            .create_category(&crate::storage::NewCategory {
+                name: "שלי".into(),
+                is_income: false,
+                parent_id: None,
+            })
+            .await
+            .unwrap();
+        let id = s.create_transaction(&tx(D, -2500, mine)).await.unwrap();
+        run(&c, &s, &opts()).await.unwrap();
+        assert_eq!(state_of(&s, id).await, "skipped");
+        assert!(mock.lock().unwrap().custom.is_empty());
+        // Moved to a Paamonim item, it is mirrored.
+        let food_item = cat_id(&s.list_categories().await.unwrap(), "סופר");
+        s.update_transaction(id, &tx(D, -2500, food_item))
+            .await
+            .unwrap();
+        assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
+    }
+
     #[tokio::test]
     async fn the_run_stops_at_the_operation_limit() {
         let (s, food, _) = setup().await;
@@ -1150,6 +1409,9 @@ mod tests {
             state: "pending".into(),
             item_name: Some("סופר".into()),
             line_id: None,
+            category_id: None,
+            parent_key: None,
+            is_income: false,
         }
     }
 

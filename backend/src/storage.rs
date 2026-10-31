@@ -159,6 +159,11 @@ pub struct PendingMirror {
     pub payment_key: Option<String>,
     /// The Paamonim line this transaction is linked to, if any.
     pub line_id: Option<String>,
+    pub category_id: Option<i64>,
+    /// Key of the category's parent (`ce:<id>` / `ci:<id>` for a Paamonim category), used to
+    /// create a Paamonim item for a sub-category made here.
+    pub parent_key: Option<String>,
+    pub is_income: bool,
 }
 
 /// A line in Paamonim that no longer has a local transaction (deleted or replaced locally).
@@ -188,8 +193,11 @@ pub trait Storage: Send + Sync {
     /// since `posted` was read it becomes `modified` instead of `synced`. Returns false when
     /// the transaction no longer exists (the caller then queues `line_id` for deletion).
     async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool>;
+    /// Give a category made here the Paamonim item it now has (`e:<id>` / `i:<id>`); its
+    /// `skipped` transactions go back to `pending`. False if it already had one.
+    async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool>;
     /// Stop mirroring a transaction (e.g. moved to a category Paamonim doesn't have): queue
-    /// its line for deletion, unlink it and mark it `local`.
+    /// its line for deletion, unlink it and mark it `skipped`.
     async fn detach_mirror(&self, id: i64) -> anyhow::Result<()>;
     /// `error` -> `pending`/`modified`, for a manual retry. False if it wasn't in `error`.
     async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool>;
@@ -455,9 +463,11 @@ impl Storage for SqliteStorage {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note, c.paamonim_item_id,
-                    c.name, p.paamonim_id, t.paamonim_line_id
+                    c.name, p.paamonim_id, t.paamonim_line_id, t.category_id, pc.paamonim_item_id,
+                    COALESCE(c.is_income, 0)
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
+             LEFT JOIN categories pc ON pc.id = c.parent_id AND pc.deleted = 0
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
              WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )?;
@@ -473,6 +483,9 @@ impl Storage for SqliteStorage {
                     item_name: r.get(6)?,
                     payment_key: r.get(7)?,
                     line_id: r.get(8)?,
+                    category_id: r.get(9)?,
+                    parent_key: r.get(10)?,
+                    is_income: r.get::<_, i64>(11)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -507,6 +520,24 @@ impl Storage for SqliteStorage {
         Ok(n == 1)
     }
 
+    async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        let n = tx.execute(
+            "UPDATE categories SET paamonim_item_id = ?2 WHERE id = ?1 AND paamonim_item_id IS NULL",
+            params![id, key],
+        )?;
+        if n == 1 {
+            tx.execute(
+                "UPDATE transactions SET sync_state = 'pending'
+                 WHERE category_id = ?1 AND sync_state = 'skipped'",
+                params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n == 1)
+    }
+
     async fn detach_mirror(&self, id: i64) -> anyhow::Result<()> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
@@ -518,7 +549,7 @@ impl Storage for SqliteStorage {
         )?;
         tx.execute(
             "UPDATE transactions SET paamonim_line_id = NULL, mirror_date = NULL,
-               sync_state = 'local' WHERE id = ?1",
+               sync_state = 'skipped' WHERE id = ?1",
             params![id],
         )?;
         tx.commit()?;
@@ -600,7 +631,7 @@ impl Storage for SqliteStorage {
             )?;
             n = tx.execute(
                 "UPDATE transactions SET sync_state = 'local'
-                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error')",
+                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error', 'skipped')",
                 [],
             )?;
             tx.execute("DELETE FROM mirror_deletes", [])?;
@@ -808,7 +839,8 @@ impl Storage for SqliteStorage {
             "UPDATE transactions SET mirror_date = CASE WHEN paamonim_line_id IS NULL THEN NULL
                                                    ELSE COALESCE(mirror_date, date) END,
                date = ?2, amount_agorot = ?3, category_id = ?4, payment_method_id = ?5, note = ?6,
-               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
              WHERE id = ?1",
             params![
                 id,
@@ -877,7 +909,8 @@ impl Storage for SqliteStorage {
                 // Like any local edit: a line already in Paamonim now differs from it.
                 tx.execute(
                     "UPDATE transactions SET category_id = ?2,
-                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
                      WHERE category_id = ?1",
                     params![id, to],
                 )?;

@@ -28,7 +28,7 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              payment_method_id INTEGER REFERENCES payment_methods(id),
              note TEXT NOT NULL DEFAULT '',
              paamonim_line_id TEXT UNIQUE,       -- set once mirrored/imported
-             sync_state TEXT NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | local
+             sync_state TEXT NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | skipped | local
              recurring_series_id INTEGER,         -- set on a settled repeating transaction
              mirror_date TEXT                     -- the line's date in Paamonim, when linked
          );

@@ -35,17 +35,21 @@ fn today() -> chrono::NaiveDate {
 }
 
 /// Make charges that have come due real transactions before anything reads them.
-async fn settle(db: &dyn Storage) -> Result<(), (StatusCode, String)> {
-    recurring::settle_due(db, today())
+async fn settle(db: &Db) -> Result<(), (StatusCode, String)> {
+    let added = recurring::settle_due(db.as_ref(), today())
         .await
-        .map(|_| ())
-        .map_err(internal)
+        .map_err(internal)?;
+    // Newly settled charges are ordinary transactions waiting to be mirrored.
+    if added > 0 {
+        trigger_mirror(db);
+    }
+    Ok(())
 }
 
 async fn list_transactions(
     State(db): State<Db>,
 ) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     db.list_transactions().await.map(Json).map_err(internal)
 }
 
@@ -147,7 +151,7 @@ async fn delete_category(
 async fn monthly_totals(
     State(db): State<Db>,
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     let mut totals = db.monthly_totals().await.map_err(internal)?;
     let through = recurring::default_through(today());
     let ahead = recurring::upcoming_stored(db.as_ref(), &through, today())
@@ -186,7 +190,7 @@ async fn recurring_occurrences(
         Some(_) => return Err((StatusCode::BAD_REQUEST, "through must be YYYY-MM".into())),
         None => recurring::default_through(today()),
     };
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::upcoming_stored(db.as_ref(), &through, today())
         .await
         .map(Json)
@@ -210,7 +214,7 @@ async fn change_recurring(
     Path(series_id): Path<i64>,
     Json(r): Json<recurring::NewRecurring>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::change_from(db.as_ref(), series_id, &r, today())
         .await
         .map_err(recurring_error)?;
@@ -224,7 +228,7 @@ async fn settle_recurring_month(
     Path((series_id, month)): Path<(i64, String)>,
     Json(t): Json<NewTransaction>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::settle_month(db.as_ref(), series_id, &month, &t)
         .await
         .map_err(recurring_error)?;
@@ -236,7 +240,7 @@ async fn skip_recurring_month(
     State(db): State<Db>,
     Path((series_id, month)): Path<(i64, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::skip_month(db.as_ref(), series_id, &month)
         .await
         .map_err(recurring_error)?;
@@ -254,7 +258,7 @@ async fn cancel_recurring(
     Path(series_id): Path<i64>,
     Query(q): Query<CancelQuery>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::cancel_from(db.as_ref(), series_id, &q.from, today())
         .await
         .map_err(recurring_error)?;
@@ -356,6 +360,18 @@ fn trigger_mirror(db: &Db) {
     }
 }
 
+#[derive(serde::Serialize)]
+struct MirrorStatus {
+    /// Writing to Paamonim is on, so `pending`/`modified`/`verifying` lines are on their way.
+    enabled: bool,
+}
+
+async fn mirror_status() -> Json<MirrorStatus> {
+    Json(MirrorStatus {
+        enabled: mirroring_enabled(),
+    })
+}
+
 /// Put a transaction in `error` back in the queue (after checking Paamonim by hand).
 async fn retry_mirror(
     State(db): State<Db>,
@@ -383,7 +399,7 @@ async fn mirror_paamonim(
 async fn export_sheets(
     State(db): State<Db>,
 ) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     sheets::export(db.as_ref())
         .await
         .map(Json)
@@ -472,6 +488,7 @@ fn router(db: Db) -> Router {
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
+        .route("/api/mirror/status", get(mirror_status))
         .route(
             "/api/mirror/paamonim/retry/:id",
             axum::routing::post(retry_mirror),

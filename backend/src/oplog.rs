@@ -230,6 +230,9 @@ impl Storage for Logged {
     async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {
         self.0.mark_mirrored(posted, line_id).await
     }
+    async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool> {
+        self.0.link_category(id, key).await
+    }
     async fn detach_mirror(&self, id: i64) -> anyhow::Result<()> {
         self.0.detach_mirror(id).await
     }

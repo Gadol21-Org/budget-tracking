@@ -46,7 +46,7 @@ const SCHEMA: [&str; 8] = [
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
          paamonim_line_id VARCHAR(100) UNIQUE,   -- set once mirrored/imported
-         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | local
+         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | skipped | local
          recurring_series_id BIGINT NULL,        -- set on a settled repeating transaction
          mirror_date VARCHAR(10) NULL,           -- the line's date in Paamonim, when linked
          INDEX idx_tx_date (date),
@@ -202,9 +202,12 @@ impl Storage for MySqlStorage {
         let rows = sqlx::query(
             "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note,
                     c.paamonim_item_id AS item_key, c.name AS item_name,
-                    p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id
+                    p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id,
+                    t.category_id, pc.paamonim_item_id AS parent_key,
+                    CAST(COALESCE(c.is_income, 0) AS SIGNED) AS is_income
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
+             LEFT JOIN categories pc ON pc.id = c.parent_id AND NOT pc.deleted
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
              WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )
@@ -222,6 +225,9 @@ impl Storage for MySqlStorage {
                     item_name: r.try_get("item_name")?,
                     payment_key: r.try_get("payment_key")?,
                     line_id: r.try_get("line_id")?,
+                    category_id: r.try_get("category_id")?,
+                    parent_key: r.try_get("parent_key")?,
+                    is_income: r.try_get::<i64, _>("is_income")? != 0,
                 })
             })
             .collect()
@@ -266,6 +272,29 @@ impl Storage for MySqlStorage {
         Ok(res.rows_affected() == 1)
     }
 
+    async fn link_category(&self, id: i64, key: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let n = sqlx::query(
+            "UPDATE categories SET paamonim_item_id = ? WHERE id = ? AND paamonim_item_id IS NULL",
+        )
+        .bind(key)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if n == 1 {
+            sqlx::query(
+                "UPDATE transactions SET sync_state = 'pending'
+                 WHERE category_id = ? AND sync_state = 'skipped'",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(n == 1)
+    }
+
     async fn detach_mirror(&self, id: i64) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -278,7 +307,7 @@ impl Storage for MySqlStorage {
         .await?;
         sqlx::query(
             "UPDATE transactions SET paamonim_line_id = NULL, mirror_date = NULL,
-               sync_state = 'local' WHERE id = ?",
+               sync_state = 'skipped' WHERE id = ?",
         )
         .bind(id)
         .execute(&mut *tx)
@@ -362,7 +391,7 @@ impl Storage for MySqlStorage {
             .await?;
             n = sqlx::query(
                 "UPDATE transactions SET sync_state = 'local'
-                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error')",
+                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error', 'skipped')",
             )
             .execute(&mut *tx)
             .await?
@@ -595,7 +624,8 @@ impl Storage for MySqlStorage {
                                                    ELSE COALESCE(mirror_date, date) END,
                date = ?, amount_agorot = ?, category_id = ?,
                payment_method_id = ?, note = ?,
-               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
              WHERE id = ?",
         )
         .bind(&t.date)
@@ -669,7 +699,8 @@ impl Storage for MySqlStorage {
                 // Like any local edit: a line already in Paamonim now differs from it.
                 sqlx::query(
                     "UPDATE transactions SET category_id = ?,
-                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
                      WHERE category_id = ?",
                 )
                 .bind(to)

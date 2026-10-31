@@ -182,6 +182,56 @@ impl Client {
             .context("payment date not found in the line's edit form")
     }
 
+    /// The family's own items of one kind (`expense` / `income`).
+    pub async fn custom_items(&self, item_type: &str) -> Result<Vec<CustomItem>> {
+        let html = self
+            .fragment("/rishumit/get_custom_items", &[("item_type", item_type)])
+            .await?;
+        Ok(parse_custom_items(&html))
+    }
+
+    /// Add an item of the family's own (`item_type` `expense` / `income`) under Paamonim
+    /// category `category_id`, as the site's "add item" form does. Returns nothing; read the
+    /// items again to get its id.
+    pub async fn add_custom_item(
+        &self,
+        name: &str,
+        item_type: &str,
+        category_id: &str,
+    ) -> Result<()> {
+        let (_, page) = self.get_raw("/rishumit", &[]).await?;
+        let token = {
+            let doc = Html::parse_document(&page);
+            let input = Selector::parse("input[name=authenticity_token]").unwrap();
+            let meta = Selector::parse("meta[name=csrf-token]").unwrap();
+            doc.select(&input)
+                .next()
+                .and_then(|e| e.value().attr("value"))
+                .or_else(|| {
+                    doc.select(&meta)
+                        .next()
+                        .and_then(|e| e.value().attr("content"))
+                })
+                .unwrap_or_default()
+                .to_string()
+        };
+        self.http
+            .post(format!("{}/rishumit/save_family_custom_item", self.base))
+            .header("X-Requested-With", "XMLHttpRequest")
+            .form(&[
+                ("utf8", "\u{2713}"),
+                ("authenticity_token", token.as_str()),
+                ("new_budget_item_name", name),
+                ("item_type", item_type),
+                ("custom_item_id", ""),
+                ("budget_category_id", category_id),
+            ])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
     /// A client for a test server, skipping the login.
     #[cfg(test)]
     pub fn for_tests(base: &str) -> Self {
