@@ -136,11 +136,11 @@ function monthsEnding(p: Period): string[] {
 
 // ---- Small pieces --------------------------------------------------------------------------------
 
-/** "▲ 12%" against the comparison; muted (no red/green) while the period is still running. */
-function delta(cur: number, base: number, higherIsBad: boolean, muted: boolean): HTMLElement | null {
+/** "▲ 12%" against the comparison; red when it is a rise in spending, green when it is a fall. */
+function delta(cur: number, base: number, higherIsBad: boolean): HTMLElement | null {
   if (base === 0) return cur === 0 ? null : el("span", { className: "delta flat", textContent: "חדש" });
   const pct = Math.round(((cur - base) / base) * 100);
-  const flat = muted || Math.abs(pct) < 3;
+  const flat = Math.abs(pct) < 3;
   const bad = higherIsBad ? pct > 0 : pct < 0;
   const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "■";
   return el("span", { className: `delta ${flat ? "flat" : bad ? "bad" : "good"}` }, el("span", { className: "num", textContent: `${pct > 0 ? "+" : ""}${pct}%` }), ` ${arrow}`);
@@ -262,7 +262,7 @@ export function insightsView(ctx: Ctx): HTMLElement {
   const cmpBtn = el("button", { className: "cmpbtn", type: "button", textContent: `${base.label} ▾` });
   cmpBtn.onclick = () => openCompareDialog(ctx);
   const partial = isPartial(ctx.period);
-  const body = { overview, cats, trends, changes, fixed, rhythm }[ctx.ins.dash](ctx, base.label, partial);
+  const body = { overview, cats, trends, changes, fixed, rhythm }[ctx.ins.dash](ctx, base.label);
   const hasCompare = ctx.ins.dash !== "trends" && ctx.ins.dash !== "fixed";
   return el(
     "div",
@@ -270,7 +270,7 @@ export function insightsView(ctx: Ctx): HTMLElement {
     ctx.monthBar(),
     chips,
     hasCompare && el("div", { className: "cmpbar" }, el("span", { className: "muted", textContent: "השוואה:" }), cmpBtn),
-    hasCompare && partial && el("div", { className: "partialnote", textContent: "התקופה טרם הסתיימה: הסכומים חלקיים, ולכן אחוזי השינוי אינם צבועים. לתמונה מלאה בחרו חודש שהסתיים." }),
+    hasCompare && partial && el("div", { className: "partialnote", textContent: "התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה. לתמונה מלאה בחרו חודש שהסתיים." }),
     body,
   );
 }
@@ -324,7 +324,7 @@ function openCompareDialog(ctx: Ctx) {
 
 // ---- Dashboard: overview ---------------------------------------------------------------------
 
-type Body = (ctx: Ctx, baseLabel: string, partial: boolean) => HTMLElement;
+type Body = (ctx: Ctx, baseLabel: string) => HTMLElement;
 
 const catName = (ctx: Ctx, id: number | null) => ctx.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
 
@@ -335,7 +335,7 @@ function highlightSet(ctx: Ctx, months: string[]): Set<number> {
   return new Set(months.flatMap((m, i) => (contains(ctx.period, `${m}-15`) ? [i] : [])));
 }
 
-const overview: Body = (ctx, baseLabel, partial) => {
+const overview: Body = (ctx, baseLabel) => {
   const cur = aggregate(ctx, ctx.period);
   const bal = cur.income - cur.expense;
   const bExp = baseValue(ctx, (a) => a.expense);
@@ -376,9 +376,9 @@ const overview: Body = (ctx, baseLabel, partial) => {
     el(
       "div",
       { className: "kpis" },
-      kpi("הוצאות", money(cur.expense, "expense"), delta(cur.expense, bExp, true, partial)),
-      kpi("הכנסות", money(cur.income, "income"), delta(cur.income, bInc, false, partial)),
-      kpi("יתרה", money(bal, bal < 0 ? "expense" : "income"), el("span", { className: `num delta ${partial || Math.abs(bal - bBal) < 100 ? "flat" : bal > bBal ? "good" : "bad"}` }, `${bal >= bBal ? "+" : "−"}${shekels(Math.abs(bal - bBal))}`)),
+      kpi("הוצאות", money(cur.expense, "expense"), delta(cur.expense, bExp, true)),
+      kpi("הכנסות", money(cur.income, "income"), delta(cur.income, bInc, false)),
+      kpi("יתרה", money(bal, bal < 0 ? "expense" : "income"), el("span", { className: `num delta ${Math.abs(bal - bBal) < 100 ? "flat" : bal > bBal ? "good" : "bad"}` }, `${bal >= bBal ? "+" : "−"}${shekels(Math.abs(bal - bBal))}`)),
       kpi("שיעור חיסכון", el("span", { className: "num", textContent: rate == null ? "–" : `${rate}%` }), el("span", { className: "delta flat", textContent: "מההכנסות" })),
     ),
     el("h2", { textContent: "תובנות" }),
@@ -406,9 +406,9 @@ const catColor = (ctx: Ctx, id: number | null): string => {
   return i < PALETTE.length ? PALETTE[i] : `hsl(${Math.round((i * 137.5) % 360)} 55% 45%)`;
 };
 
-const cats: Body = (ctx, baseLabel, partial) => {
-  if (ctx.ins.cat !== undefined && ctx.ins.sub !== undefined) return subDetail(ctx, partial);
-  if (ctx.ins.cat !== undefined) return catDetail(ctx, baseLabel, partial);
+const cats: Body = (ctx, baseLabel) => {
+  if (ctx.ins.cat !== undefined && ctx.ins.sub !== undefined) return subDetail(ctx);
+  if (ctx.ins.cat !== undefined) return catDetail(ctx, baseLabel);
   const cur = aggregate(ctx, ctx.period);
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
   const rows = [...cur.groups.entries()].sort((a, b) => b[1].total - a[1].total);
@@ -439,7 +439,7 @@ const cats: Body = (ctx, baseLabel, partial) => {
                   "div",
                   { className: "row" },
                   el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(ctx, id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%;background:${catColor(ctx, id)}` }))),
-                  el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, true, partial), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
+                  el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, true), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.expense) * 100)}%` }))),
                   el("span", { className: "chev muted", textContent: "‹" }),
                 ),
                 () => ctx.navigate({ dash: "cats", cat: id, sub: undefined }, "push"),
@@ -483,7 +483,7 @@ function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: 
   };
 }
 
-function catDetail(ctx: Ctx, baseLabel: string, partial: boolean): HTMLElement {
+function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   const id = ctx.ins.cat!;
   const cur = aggregate(ctx, ctx.period);
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
@@ -497,7 +497,7 @@ function catDetail(ctx: Ctx, baseLabel: string, partial: boolean): HTMLElement {
       "div",
       { className: "row" },
       el("div", { className: "grow" }, el("div", { className: "name", textContent: name }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (v / kidMax) * 100)}%;background:${catColor(ctx, id)}` }))),
-      el("div", { className: "amt" }, money(v), el("div", {}, delta(v, was, true, partial))),
+      el("div", { className: "amt" }, money(v), el("div", {}, delta(v, was, true))),
       onTap ? el("span", { className: "chev muted", textContent: "‹" }) : null,
     );
     return onTap ? clickable(r, onTap) : r;
@@ -513,7 +513,7 @@ function catDetail(ctx: Ctx, baseLabel: string, partial: boolean): HTMLElement {
     el(
       "div",
       { className: "kpis" },
-      kpi(periodTitle(ctx.period), money(g.total, "expense"), el("span", {}, delta(g.total, was, true, partial), ` ${baseLabel}`)),
+      kpi(periodTitle(ctx.period), money(g.total, "expense"), el("span", {}, delta(g.total, was, true), ` ${baseLabel}`)),
       kpi("ממוצע חודשי", money(Math.round(trend.avg)), el("span", { className: "delta flat", textContent: cur.expense ? `${Math.round((g.total / cur.expense) * 100)}% מההוצאות בתקופה` : "" })),
     ),
     el("h2", { textContent: `${catName(ctx, id)} לאורך זמן` }),
@@ -526,7 +526,7 @@ function catDetail(ctx: Ctx, baseLabel: string, partial: boolean): HTMLElement {
   );
 }
 
-function subDetail(ctx: Ctx, partial: boolean): HTMLElement {
+function subDetail(ctx: Ctx): HTMLElement {
   const id = ctx.ins.cat!, sub = ctx.ins.sub!;
   const value = (a: Agg) => a.groups.get(id)?.kids.get(sub) ?? 0;
   const cur = value(aggregate(ctx, ctx.period));
@@ -543,7 +543,7 @@ function subDetail(ctx: Ctx, partial: boolean): HTMLElement {
     el(
       "div",
       { className: "kpis" },
-      kpi(periodTitle(ctx.period), money(cur, "expense"), delta(cur, was, true, partial)),
+      kpi(periodTitle(ctx.period), money(cur, "expense"), delta(cur, was, true)),
       kpi("ממוצע חודשי", money(Math.round(trend.avg)), el("span", { className: "delta flat", textContent: trend.avg ? `${cur >= trend.avg ? "+" : ""}${Math.round(((cur - trend.avg) / trend.avg) * 100)}% מהממוצע` : "" })),
     ),
     el("h2", { textContent: `${catName(ctx, sub)} לאורך זמן` }),
@@ -632,7 +632,7 @@ const catPath = (ctx: Ctx, id: number | null) => {
   return p && c ? `${p.name} › ${c.name}` : catName(ctx, id);
 };
 
-const changes: Body = (ctx, baseLabel, partial) => {
+const changes: Body = (ctx, baseLabel) => {
   const cur = aggregate(ctx, ctx.period);
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
   interface Item { top: number | null; sub?: number; name: string; parent?: string; now: number; was: number }
@@ -658,7 +658,7 @@ const changes: Body = (ctx, baseLabel, partial) => {
   const net = cur.expense - wasTotal;
   const max = Math.max(1, ...up.map((i) => i.d), ...down.map((i) => -i.d));
   const row = (i: (typeof list)[number], grow: boolean) => {
-    const color = partial ? "var(--muted)" : grow ? "var(--expense)" : "var(--income)";
+    const color = grow ? "var(--expense)" : "var(--income)";
     const r = el(
       "div",
       { className: "row" },
@@ -676,7 +676,7 @@ const changes: Body = (ctx, baseLabel, partial) => {
       "div",
       { className: "card", style: "text-align:center" },
       el("div", { className: "muted small", textContent: `סך ההוצאות ${baseLabel}` }),
-      el("div", { className: "num", style: `font-size:1.5rem;font-weight:800;color:${partial ? "var(--muted)" : net > 0 ? "var(--expense)" : "var(--income)"}`, textContent: `${net > 0 ? "+" : "−"}${shekels(Math.abs(net))}` }),
+      el("div", { className: "num", style: `font-size:1.5rem;font-weight:800;color:${net > 0 ? "var(--expense)" : "var(--income)"}`, textContent: `${net > 0 ? "+" : "−"}${shekels(Math.abs(net))}` }),
       el("div", { className: "muted small", textContent: `${shekels(cur.expense)} לעומת ${shekels(wasTotal)}` }),
     ),
     el("h2", { textContent: "מה הגדיל את ההוצאות" }),
