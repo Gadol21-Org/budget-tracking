@@ -331,7 +331,7 @@ impl Storage for MySqlStorage {
     async fn requeue_skipped_sub_categories(&self) -> Result<usize> {
         let res = sqlx::query(
             "UPDATE transactions SET sync_state = 'pending'
-             WHERE sync_state = 'skipped' AND paamonim_line_id IS NULL AND category_id IN (
+             WHERE sync_state IN ('skipped', 'error') AND paamonim_line_id IS NULL AND category_id IN (
                SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
                WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
                  AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
