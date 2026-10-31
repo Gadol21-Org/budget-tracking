@@ -201,6 +201,10 @@ pub trait Storage: Send + Sync {
     async fn detach_mirror(&self, id: i64) -> anyhow::Result<()>;
     /// `error` -> `pending`/`modified`, for a manual retry. False if it wasn't in `error`.
     async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool>;
+    /// Put back in the queue rows skipped for having no Paamonim item although their category
+    /// is a sub-category of a Paamonim category, which can get one. Called at start, so rows
+    /// skipped by an earlier version that failed to make the item are sent. Returns how many.
+    async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize>;
     /// Lines to delete in Paamonim.
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>>;
     async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()>;
@@ -564,6 +568,17 @@ impl Storage for SqliteStorage {
             params![id],
         )?;
         Ok(n == 1)
+    }
+
+    async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize> {
+        Ok(self.0.lock().unwrap().execute(
+            "UPDATE transactions SET sync_state = 'pending'
+             WHERE sync_state = 'skipped' AND paamonim_line_id IS NULL AND category_id IN (
+               SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
+               WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
+                 AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
+            [],
+        )?)
     }
 
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {

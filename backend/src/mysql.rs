@@ -328,6 +328,19 @@ impl Storage for MySqlStorage {
         Ok(res.rows_affected() == 1)
     }
 
+    async fn requeue_skipped_sub_categories(&self) -> Result<usize> {
+        let res = sqlx::query(
+            "UPDATE transactions SET sync_state = 'pending'
+             WHERE sync_state = 'skipped' AND paamonim_line_id IS NULL AND category_id IN (
+               SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
+               WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
+                 AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() as usize)
+    }
+
     async fn pending_line_deletes(&self) -> Result<Vec<LineDelete>> {
         let rows = sqlx::query("SELECT line_id, date FROM mirror_deletes ORDER BY seq")
             .fetch_all(&self.pool)
