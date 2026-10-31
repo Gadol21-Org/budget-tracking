@@ -836,17 +836,34 @@ function openTransactionDialog(existing?: Transaction) {
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
   const kindCats = () => state.cats.filter((c) => c.is_income === isIncome);
   const kidsOf = (topId: string) => kindCats().filter((k) => String(k.parent_id) === topId);
-  /** The second list follows the first: empty and locked until a category with sub-categories is picked. */
+  /**
+   * The sub-category list follows the category: just its sub-categories once one is picked, otherwise every
+   * sub-category (named with its parent). It is only locked for a category that has none.
+   */
   const fillSubs = (keepSub = "") => {
-    const kids = kidsOf(topPick.value);
-    subPick.set(kids.map((k) => ({ value: String(k.id), label: k.name })), keepSub);
-    subPick.setDisabled(kids.length === 0, kids.length ? "חיפוש תת-קטגוריה…" : topPick.value ? "אין תתי-קטגוריות" : "קודם בוחרים קטגוריה");
-  };
-  topPick.input.addEventListener("change", () => fillSubs());
-  /** The category the transaction goes on: the sub-category when the category has any. */
-  const categoryId = (): number | null => {
     const top = topPick.value;
-    if (!top) return null;
+    const kids = top ? kidsOf(top) : kindCats().filter((k) => k.parent_id != null);
+    subPick.set(
+      kids.map((k) => ({ value: String(k.id), label: top ? k.name : catPath(k.id) })),
+      kids.some((k) => String(k.id) === keepSub) ? keepSub : "",
+    );
+    subPick.setDisabled(top !== "" && kids.length === 0, top && kids.length === 0 ? "אין תתי-קטגוריות" : "חיפוש תת-קטגוריה…");
+  };
+  topPick.input.addEventListener("change", () => ((err.textContent = ""), fillSubs()));
+  // Picking a sub-category first fills in its category.
+  subPick.input.addEventListener("change", () => {
+    err.textContent = "";
+    const sub = subPick.value;
+    const parent = catById(Number(sub))?.parent_id;
+    if (sub && parent != null && topPick.value !== String(parent)) {
+      topPick.pick(String(parent));
+      fillSubs(sub);
+    }
+  });
+  /** The category the transaction goes on: the sub-category when the category has any. Both are required. */
+  const categoryId = (): number => {
+    const top = topPick.value;
+    if (!top) throw new Error("יש לבחור קטגוריה");
     if (kidsOf(top).length === 0) return Number(top);
     if (subPick.value) return Number(subPick.value);
     // A transaction already on a parent keeps it; otherwise the sub-category is required.
@@ -868,7 +885,7 @@ function openTransactionDialog(existing?: Transaction) {
     firstFill = false;
     const tops = kindCats().filter((c) => c.parent_id == null);
     if (!tops.some((c) => String(c.id) === top)) (top = ""), (sub = "");
-    topPick.set([{ value: "", label: "ללא קטגוריה" }, ...tops.map((c) => ({ value: String(c.id), label: c.name }))], top);
+    topPick.set(tops.map((c) => ({ value: String(c.id), label: c.name })), top);
     fillSubs(sub);
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());
