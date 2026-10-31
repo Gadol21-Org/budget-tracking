@@ -1322,6 +1322,7 @@ mod tests {
                 name: "מאפייה".into(),
                 is_income: false,
                 parent_id: Some(food),
+                linked_to: None,
             })
             .await
             .unwrap();
@@ -1377,6 +1378,7 @@ mod tests {
                 name: "בונוס".into(),
                 is_income: true,
                 parent_id: Some(pay),
+                linked_to: None,
             })
             .await
             .unwrap();
@@ -1406,6 +1408,7 @@ mod tests {
                 name: "מאפייה".into(),
                 is_income: false,
                 parent_id: Some(food),
+                linked_to: None,
             })
             .await
             .unwrap();
@@ -1444,6 +1447,7 @@ mod tests {
                 name: "מאפייה".into(),
                 is_income: false,
                 parent_id: Some(food),
+                linked_to: None,
             })
             .await
             .unwrap();
@@ -1457,14 +1461,8 @@ mod tests {
         let s = with_parent().await;
         let mock = M::default();
         let c = serve(mock.clone()).await;
-        let mine = s
-            .create_category(&crate::storage::NewCategory {
-                name: "שלי".into(),
-                is_income: false,
-                parent_id: None,
-            })
-            .await
-            .unwrap();
+        // Made before top-level categories had to be linked to a Paamonim one.
+        let mine = s.insert_category("שלי", false, None).await.unwrap();
         let id = s.create_transaction(&tx(D, -2500, mine)).await.unwrap();
         run(&c, &s, &opts()).await.unwrap();
         assert_eq!(state_of(&s, id).await, "skipped");
@@ -1475,6 +1473,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
+    }
+
+    #[tokio::test]
+    async fn sub_categories_of_a_linked_category_go_under_its_paamonim_category() {
+        let s = with_parent().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let food = cat_id(&s.list_categories().await.unwrap(), "מזון");
+        let mine = s
+            .create_category(&crate::storage::NewCategory {
+                name: "שלי".into(),
+                is_income: false,
+                parent_id: None,
+                linked_to: Some(food),
+            })
+            .await
+            .unwrap();
+        let sub = |name: &str| crate::storage::NewCategory {
+            name: name.into(),
+            is_income: false,
+            parent_id: Some(mine),
+            linked_to: None,
+        };
+        // Same name as the Paamonim item under מזון: its lines go to that item.
+        let my_super = s.create_category(&sub("סופר")).await.unwrap();
+        // A new name: an item of its own is made under מזון.
+        let bakery = s.create_category(&sub("מאפייה")).await.unwrap();
+        let a = s.create_transaction(&tx(D, -2500, my_super)).await.unwrap();
+        let b = s.create_transaction(&tx(D, -1200, bakery)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.mirrored, sum.items_created), (2, 1));
+        assert_eq!(state_of(&s, a).await, "synced");
+        assert_eq!(state_of(&s, b).await, "synced");
+        let m = mock.lock().unwrap();
+        assert_eq!(m.custom.len(), 1);
+        assert_eq!(
+            (m.custom[0].1.as_str(), m.custom[0].2.as_str()),
+            ("מאפייה", "3")
+        );
+        let items: Vec<&str> = m.lines.iter().map(|l| l.item).collect();
+        assert_eq!(items, ["סופר", "מאפייה"]);
+    }
+
+    #[tokio::test]
+    async fn a_paamonim_item_moved_under_a_linked_category_keeps_mirroring_there() {
+        let s = with_parent().await;
+        let mock = M::default();
+        let c = serve(mock.clone()).await;
+        let cats = s.list_categories().await.unwrap();
+        let (food, item) = (cat_id(&cats, "מזון"), cat_id(&cats, "סופר"));
+        let mine = s
+            .create_category(&crate::storage::NewCategory {
+                name: "שלי".into(),
+                is_income: false,
+                parent_id: None,
+                linked_to: Some(food),
+            })
+            .await
+            .unwrap();
+        s.move_category(item, mine).await.unwrap();
+        let id = s.create_transaction(&tx(D, -2500, item)).await.unwrap();
+        assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
+        assert_eq!(state_of(&s, id).await, "synced");
+        assert_eq!(mock.lock().unwrap().lines[0].item, "סופר");
+        assert!(mock.lock().unwrap().custom.is_empty());
     }
 
     #[tokio::test]

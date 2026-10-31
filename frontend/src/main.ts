@@ -376,6 +376,18 @@ function openDialog(build: (close: () => void) => HTMLElement) {
   dlg.showModal();
 }
 
+/** Paamonim top-level categories of a kind: what a top-level category made here can stand in for. */
+const paamonimTops = (isIncome: boolean) => state.cats.filter((c) => c.parent_id == null && c.from_paamonim && c.is_income === isIncome);
+
+/** The Paamonim top-level category a top-level category's lines go under, if any. */
+const paamonimHome = (c: Category): number | null => (c.parent_id != null ? null : c.from_paamonim ? c.id : c.linked_to);
+
+function paamonimSelect(isIncome: boolean): HTMLSelectElement {
+  const sel = el("select");
+  sel.append(el("option", { value: "", textContent: "בחירת קטגוריה בפעמונים…" }), ...paamonimTops(isIncome).map((c) => el("option", { value: String(c.id), textContent: c.name })));
+  return sel;
+}
+
 function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
   openDialog((close) => {
     const name = el("input", { type: "text", required: true, maxLength: 100, autocomplete: "off" });
@@ -385,6 +397,26 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
       ...state.cats.filter((c) => c.parent_id == null && c.is_income === isIncome).map((c) => el("option", { value: String(c.id), textContent: `תת-קטגוריה של ${c.name}` })),
     );
     parent.value = parentId != null ? String(parentId) : "";
+    // Paamonim has no way to add a top-level category, so a new one stands in for one there.
+    const hasTops = paamonimTops(isIncome).length > 0;
+    const link = paamonimSelect(isIncome);
+    const linkRow = el("label", {}, "קטגוריה בפעמונים", link);
+    const note = el("div", { className: "note muted" });
+    const sync = () => {
+      const top = !parent.value;
+      linkRow.style.display = top && hasTops ? "" : "none";
+      link.required = top && hasTops;
+      const p = state.cats.find((c) => String(c.id) === parent.value);
+      note.textContent = top
+        ? hasTops
+          ? "פעמונים לא מאפשר קטגוריות ראשיות חדשות. תתי-הקטגוריות של קטגוריה זו יירשמו בפעמונים תחת הקטגוריה שנבחרה."
+          : "קטגוריה שנוספה כאן קיימת רק באפליקציה: תנועות עליה לא יועתקו לפעמונים."
+        : p && paamonimHome(p) != null
+          ? "תת-הקטגוריה תירשם בפעמונים כסעיף באותו שם (אם כבר יש סעיף בשם זה, הוא ישמש)."
+          : "קטגוריה שנוספה כאן קיימת רק באפליקציה: תנועות עליה לא יועתקו לפעמונים.";
+    };
+    parent.onchange = sync;
+    sync();
     const err = el("div", { className: "error" });
     const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
     cancel.onclick = close;
@@ -395,7 +427,8 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
       el("h2", { textContent: isIncome ? "הוספת קטגוריית הכנסה" : "הוספת קטגוריית הוצאה" }),
       el("label", {}, "שם", name),
       el("label", {}, "סוג", parent),
-      el("div", { className: "note muted", textContent: "קטגוריה שנוספה כאן קיימת רק באפליקציה: תנועות עליה לא יועתקו לפעמונים." }),
+      linkRow,
+      note,
       err,
       el("div", { className: "actions" }, cancel, save),
     );
@@ -403,7 +436,13 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
       e.preventDefault();
       try {
         save.disabled = true;
-        await api.addCategory({ name: name.value, is_income: isIncome, parent_id: parent.value ? Number(parent.value) : null });
+        const top = !parent.value;
+        await api.addCategory({
+          name: name.value,
+          is_income: isIncome,
+          parent_id: top ? null : Number(parent.value),
+          linked_to: top && link.value ? Number(link.value) : null,
+        });
         close();
         await load();
       } catch (e2) {
@@ -412,6 +451,87 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
       }
     };
     setTimeout(() => name.focus());
+    return form;
+  });
+}
+
+/** Choose which Paamonim category a top-level category made here stands in for. */
+function openLinkCategoryDialog(cat: Category) {
+  openDialog((close) => {
+    const link = paamonimSelect(cat.is_income);
+    link.required = true;
+    link.value = cat.linked_to != null ? String(cat.linked_to) : "";
+    const err = el("div", { className: "error" });
+    const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+    cancel.onclick = close;
+    const save = el("button", { type: "submit", className: "btn primary", textContent: "שמירה" });
+    const form = el(
+      "form",
+      { className: "add", method: "dialog" },
+      el("h2", { textContent: `"${cat.name}" בפעמונים` }),
+      el("label", {}, "קטגוריה בפעמונים", link),
+      el("div", { className: "note muted", textContent: "תתי-הקטגוריות של קטגוריה זו יירשמו בפעמונים תחת הקטגוריה שנבחרה." }),
+      err,
+      el("div", { className: "actions" }, cancel, save),
+    );
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        save.disabled = true;
+        await api.linkCategory(cat.id, Number(link.value));
+        close();
+        await load();
+      } catch (e2) {
+        err.textContent = e2 instanceof Error ? e2.message : String(e2);
+        save.disabled = false;
+      }
+    };
+    return form;
+  });
+}
+
+/** Move a sub-category, with its transactions and repeating rules, under another top-level category. */
+function openMoveCategoryDialog(cat: Category) {
+  openDialog((close) => {
+    const from = state.cats.find((c) => c.id === cat.parent_id);
+    const home = from ? paamonimHome(from) : null;
+    // An item in Paamonim stays where it is there, so it can only move within its Paamonim category.
+    const targets = state.cats.filter(
+      (c) => c.parent_id == null && c.is_income === cat.is_income && c.id !== cat.parent_id && (!cat.from_paamonim || paamonimHome(c) === home),
+    );
+    const lines = state.txs.filter((t) => t.category_id === cat.id && !t.upcoming).length;
+    const target = el("select");
+    target.required = true;
+    target.append(el("option", { value: "", textContent: "בחירת קטגוריה…" }), ...targets.map((c) => el("option", { value: String(c.id), textContent: c.name })));
+    const err = el("div", { className: "error" });
+    const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
+    cancel.onclick = close;
+    const save = el("button", { type: "submit", className: "btn primary", textContent: "העברה" });
+    const form = el(
+      "form",
+      { className: "add", method: "dialog" },
+      el("h2", { textContent: `העברת "${cat.name}"` }),
+      el("p", { className: "muted", textContent: `כרגע תחת "${from?.name ?? ""}". ${lines} התנועות שלה והתנועות החוזרות עוברות איתה.` }),
+      targets.length
+        ? el("label", {}, "העברה אל", target)
+        : el("p", { className: "muted", textContent: "אין קטגוריה ראשית אחרת שאפשר להעביר אליה." }),
+      cat.from_paamonim && el("div", { className: "note muted", textContent: "זהו סעיף בפעמונים, ולכן אפשר להעביר אותו רק לקטגוריות המקושרות לאותה קטגוריה בפעמונים. בפעמונים דבר לא משתנה." }),
+      err,
+      el("div", { className: "actions" }, cancel, save),
+    );
+    if (!targets.length) save.disabled = true;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        save.disabled = true;
+        await api.moveCategory(cat.id, Number(target.value));
+        close();
+        await load();
+      } catch (e2) {
+        err.textContent = e2 instanceof Error ? e2.message : String(e2);
+        save.disabled = false;
+      }
+    };
     return form;
   });
 }
@@ -495,12 +615,21 @@ function categoriesCard(): HTMLElement {
     b.onclick = on;
     return b;
   };
+  const linkedName = (c: Category) => state.cats.find((x) => x.id === c.linked_to)?.name;
   const row = (c: Category, sub: boolean) =>
     el(
       "div",
       { className: sub ? "row sub" : "row" },
-      el("div", { className: "grow" }, el("div", { className: "name", textContent: c.name })),
+      el(
+        "div",
+        { className: "grow" },
+        el("div", { className: "name", textContent: c.name }),
+        !sub && c.linked_to != null && el("div", { className: "muted", textContent: `בפעמונים: ${linkedName(c) ?? ""}` }),
+        !sub && !c.from_paamonim && c.linked_to == null && el("div", { className: "muted", textContent: "לא מקושרת לפעמונים" }),
+      ),
+      !sub && !c.from_paamonim && iconBtn("🔗", "קטגוריה בפעמונים", () => openLinkCategoryDialog(c)),
       !sub && iconBtn("+", "הוספת תת-קטגוריה", () => openAddCategoryDialog(c.is_income, c.id)),
+      sub && iconBtn("⇄", "העברה לקטגוריה אחרת", () => openMoveCategoryDialog(c)),
       iconBtn("🗑", "מחיקה", () => openDeleteCategoryDialog(c)),
     );
   const rows = ofKind
@@ -572,6 +701,8 @@ const LOG_KINDS: Record<string, [string, string]> = {
   transaction_delete: ["🗑", "תנועה נמחקה"],
   category_create: ["➕", "קטגוריה חדשה"],
   category_delete: ["🗑", "קטגוריה נמחקה"],
+  category_link: ["🔗", "קטגוריה קושרה לפעמונים"],
+  category_move: ["⇄", "תת-קטגוריה הועברה"],
   recurring_create: ["🔁", "הוצאה חוזרת חדשה"],
   recurring_update: ["🔁", "הוצאה חוזרת עודכנה"],
   recurring_cancel: ["⏹", "הוצאה חוזרת בוטלה"],
@@ -592,6 +723,7 @@ const LOG_FIELDS: Record<string, string> = {
   day: "יום בחודש",
   name: "שם",
   parent: "תחת",
+  linked_to: "בפעמונים",
   is_income: "סוג",
   subcategories: "תתי-קטגוריות",
   moved_to: "התנועות הועברו אל",
@@ -624,7 +756,7 @@ function logLines(e: LogEntry): HTMLElement[] {
     Object.entries(o ?? {})
       .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
       .map(([k, v]) => line(k, logValue(k, v)));
-  if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override"].includes(e.kind)) {
+  if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override", "category_link", "category_move"].includes(e.kind)) {
     const keys = Object.keys({ ...e.old, ...e.new }).filter((k) => JSON.stringify(e.old![k] ?? null) !== JSON.stringify(e.new![k] ?? null));
     return keys.map((k) => line(k, `${logValue(k, e.old![k])} ← ${logValue(k, e.new![k])}`));
   }

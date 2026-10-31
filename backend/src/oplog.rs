@@ -29,6 +29,10 @@ pub mod kind {
     pub const CATEGORY_CREATE: &str = "category_create";
     /// Also covers the move of its transactions and rules to another category.
     pub const CATEGORY_DELETE: &str = "category_delete";
+    /// A top-level category linked to another Paamonim category.
+    pub const CATEGORY_LINK: &str = "category_link";
+    /// A sub-category moved under another top-level category.
+    pub const CATEGORY_MOVE: &str = "category_move";
     pub const RECURRING_CREATE: &str = "recurring_create";
     pub const RECURRING_UPDATE: &str = "recurring_update";
     pub const RECURRING_CANCEL: &str = "recurring_cancel";
@@ -342,6 +346,50 @@ impl Storage for Logged {
         self.0.remove_categories(ids, move_to).await
     }
 
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        self.0.set_category_link(id, linked_to).await
+    }
+
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> anyhow::Result<()> {
+        self.0.set_category_parent(id, parent_id).await
+    }
+
+    async fn link_category_to(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        let cats = self.0.list_categories().await?;
+        self.0.link_category_to(id, linked_to).await?;
+        if let Some(cat) = cats.iter().find(|c| c.id == id) {
+            if cat.linked_to != linked_to {
+                self.log(
+                    kind::CATEGORY_LINK,
+                    Some(id),
+                    Some(json!({ "name": cat.name, "linked_to": category_path(&cats, cat.linked_to) })),
+                    Some(json!({ "name": cat.name, "linked_to": category_path(&cats, linked_to) })),
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn move_category(&self, id: i64, to: i64) -> anyhow::Result<()> {
+        let cats = self.0.list_categories().await?;
+        self.0.move_category(id, to).await?;
+        if let Some(cat) = cats.iter().find(|c| c.id == id) {
+            if cat.parent_id != Some(to) {
+                self.log(
+                    kind::CATEGORY_MOVE,
+                    Some(id),
+                    Some(
+                        json!({ "name": cat.name, "parent": category_path(&cats, cat.parent_id) }),
+                    ),
+                    Some(json!({ "name": cat.name, "parent": category_path(&cats, Some(to)) })),
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
     async fn create_category(&self, c: &NewCategory) -> anyhow::Result<i64> {
         let id = self.0.create_category(c).await?;
         if let Ok(cats) = self.0.list_categories().await {
@@ -350,6 +398,7 @@ impl Storage for Logged {
                     "name": made.name,
                     "is_income": made.is_income,
                     "parent": category_path(&cats, made.parent_id),
+                    "linked_to": category_path(&cats, made.linked_to),
                 });
                 self.log(kind::CATEGORY_CREATE, Some(id), None, Some(new))
                     .await;
@@ -506,6 +555,7 @@ mod tests {
             name: name.into(),
             is_income: false,
             parent_id: parent,
+            linked_to: None,
         }
     }
 

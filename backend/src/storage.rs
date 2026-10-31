@@ -45,6 +45,25 @@ pub struct Category {
     pub is_income: bool,
     /// Top-level categories have none; transactions are normally on the children.
     pub parent_id: Option<i64>,
+    /// Came from Paamonim (a Paamonim category, or an item there for a sub-category).
+    pub from_paamonim: bool,
+    /// On a top-level category made here: the Paamonim top-level category it stands in for.
+    /// Its sub-categories are mirrored as items under that one.
+    pub linked_to: Option<i64>,
+}
+
+impl Category {
+    /// The Paamonim top-level category this top-level category's lines go under, if any.
+    pub fn paamonim_home(&self) -> Option<i64> {
+        if self.parent_id.is_some() {
+            return None;
+        }
+        if self.from_paamonim {
+            Some(self.id)
+        } else {
+            self.linked_to
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,6 +73,10 @@ pub struct NewCategory {
     #[serde(default)]
     pub is_income: bool,
     pub parent_id: Option<i64>,
+    /// For a top-level category: the Paamonim top-level category it stands in for. Required
+    /// when there are Paamonim categories of its kind, since Paamonim can't take new ones.
+    #[serde(default)]
+    pub linked_to: Option<i64>,
 }
 
 /// Why a category change was refused; the API maps these to 4xx responses.
@@ -108,6 +131,7 @@ pub struct RawCategory {
     pub parent_id: Option<i64>,
     pub deleted: bool,
     pub merged_into: Option<i64>,
+    pub linked_to: Option<i64>,
 }
 
 pub struct RawPaymentMethod {
@@ -272,6 +296,136 @@ pub trait Storage: Send + Sync {
     /// re-import neither recreates them nor loses where their lines now belong; local-only
     /// ones are deleted outright. Use [`Storage::delete_category`], which validates.
     async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()>;
+    /// Raw: set the Paamonim category a top-level category made here stands in for. Use
+    /// [`Storage::create_category`] or [`Storage::link_category_to`], which validate.
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()>;
+    /// Raw: put a sub-category under another top-level category; its transactions and rules
+    /// stay on it. Use [`Storage::move_category`], which validates.
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> anyhow::Result<()>;
+
+    /// Check `linked_to` for a top-level category of kind `is_income` (other than `own`).
+    /// Required when there is a Paamonim top-level category of that kind to link to.
+    fn check_link(
+        &self,
+        all: &[Category],
+        own: Option<i64>,
+        is_income: bool,
+        linked_to: Option<i64>,
+    ) -> Result<(), CategoryError> {
+        let candidate = |c: &&Category| {
+            c.parent_id.is_none()
+                && c.from_paamonim
+                && c.is_income == is_income
+                && Some(c.id) != own
+        };
+        match linked_to {
+            Some(l) => {
+                if !all.iter().filter(candidate).any(|c| c.id == l) {
+                    return Err(CategoryError::Invalid(
+                        "link to a Paamonim top-level category of the same kind".into(),
+                    ));
+                }
+            }
+            None => {
+                if all.iter().any(|c| candidate(&c)) {
+                    return Err(CategoryError::Invalid(
+                        "choose the Paamonim category this category belongs to".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Change the Paamonim category a top-level category made here stands in for. Refused
+    /// while one of its sub-categories is an item in Paamonim, whose place there is fixed.
+    async fn link_category_to(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        let all = self.list_categories().await?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
+        if cat.parent_id.is_some() || cat.from_paamonim {
+            return Err(CategoryError::Invalid(
+                "only a top-level category made here can be linked".into(),
+            )
+            .into());
+        }
+        if cat.linked_to == linked_to {
+            return Ok(());
+        }
+        self.check_link(&all, Some(id), cat.is_income, linked_to)?;
+        if all
+            .iter()
+            .any(|c| c.parent_id == Some(id) && c.from_paamonim)
+        {
+            return Err(CategoryError::Invalid(
+                "a sub-category of this category is an item in Paamonim; move it out first".into(),
+            )
+            .into());
+        }
+        self.set_category_link(id, linked_to).await
+    }
+
+    /// Put sub-category `id` under top-level category `to`, with its transactions and rules.
+    /// A sub-category that is an item in Paamonim can only move to a category that goes under
+    /// the same Paamonim category, so nothing changes there.
+    async fn move_category(&self, id: i64, to: i64) -> anyhow::Result<()> {
+        let all = self.list_categories().await?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
+        let Some(from) = cat.parent_id.and_then(|p| all.iter().find(|c| c.id == p)) else {
+            return Err(CategoryError::Invalid("only a sub-category can be moved".into()).into());
+        };
+        let target = all.iter().find(|c| c.id == to).ok_or_else(|| {
+            CategoryError::Invalid("the category to move to was not found".into())
+        })?;
+        if target.parent_id.is_some() {
+            return Err(CategoryError::Invalid("move it under a top-level category".into()).into());
+        }
+        if target.is_income != cat.is_income {
+            return Err(CategoryError::Invalid(
+                "cannot move between income and expense categories".into(),
+            )
+            .into());
+        }
+        if target.id == from.id {
+            return Ok(());
+        }
+        if cat.from_paamonim && target.paamonim_home() != from.paamonim_home() {
+            return Err(CategoryError::Invalid(
+                "this sub-category is an item in Paamonim; it can only move to a category \
+                 linked to the same Paamonim category"
+                    .into(),
+            )
+            .into());
+        }
+        if target.paamonim_home() != from.paamonim_home()
+            && self.list_transactions().await?.iter().any(|t| {
+                t.category_id == Some(id)
+                    && matches!(t.sync_state.as_str(), "synced" | "modified" | "verifying")
+            })
+        {
+            return Err(CategoryError::Invalid(
+                "some of its lines are already in Paamonim under another category; it can only \
+                 move to a category linked to the same Paamonim category"
+                    .into(),
+            )
+            .into());
+        }
+        if all
+            .iter()
+            .any(|c| c.parent_id == Some(to) && c.name == cat.name)
+        {
+            return Err(CategoryError::Invalid(
+                "the target category already has a sub-category with this name".into(),
+            )
+            .into());
+        }
+        self.set_category_parent(id, to).await
+    }
 
     async fn create_category(&self, c: &NewCategory) -> anyhow::Result<i64> {
         let name = c.name.trim();
@@ -293,8 +447,17 @@ pub trait Storage: Send + Sync {
                 }
                 parent.is_income
             }
-            None => c.is_income,
+            None => {
+                self.check_link(&all, None, c.is_income, c.linked_to)?;
+                c.is_income
+            }
         };
+        if c.parent_id.is_some() && c.linked_to.is_some() {
+            return Err(CategoryError::Invalid(
+                "a sub-category takes its parent's Paamonim category".into(),
+            )
+            .into());
+        }
         if all
             .iter()
             .any(|o| o.parent_id == c.parent_id && o.is_income == is_income && o.name == name)
@@ -303,7 +466,11 @@ pub trait Storage: Send + Sync {
                 CategoryError::Invalid("a category with this name already exists".into()).into(),
             );
         }
-        self.insert_category(name, is_income, c.parent_id).await
+        let id = self.insert_category(name, is_income, c.parent_id).await?;
+        if c.linked_to.is_some() {
+            self.set_category_link(id, c.linked_to).await?;
+        }
+        Ok(id)
     }
 
     /// Delete a category together with its sub-categories. Their transactions go to
@@ -315,6 +482,18 @@ pub trait Storage: Send + Sync {
             .iter()
             .find(|c| c.id == id)
             .ok_or(CategoryError::NotFound)?;
+        let linking: Vec<&str> = all
+            .iter()
+            .filter(|c| c.linked_to == Some(id))
+            .map(|c| c.name.as_str())
+            .collect();
+        if !linking.is_empty() {
+            return Err(CategoryError::Invalid(format!(
+                "categories linked to this one in Paamonim: {}; link them elsewhere first",
+                linking.join(", ")
+            ))
+            .into());
+        }
         // Sub-categories first, so a parent is never removed while children point at it.
         let mut ids: Vec<i64> = all
             .iter()
@@ -456,6 +635,20 @@ pub struct SqliteStorage(Mutex<Connection>);
 
 /// Where lines of category `id` belong: itself, or what it was merged into when deleted
 /// (None if it was deleted without a replacement).
+/// See [`Storage::requeue_skipped_sub_categories`]. A category goes under a Paamonim category
+/// directly or through the category its parent is linked to.
+pub const REQUEUE_SKIPPED_SQL: &str = "UPDATE transactions SET sync_state = 'pending'
+     WHERE sync_state IN ('skipped', 'error') AND paamonim_line_id IS NULL AND category_id IN (
+       SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
+       LEFT JOIN categories lc ON lc.id = pc.linked_to AND lc.deleted = 0
+       WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
+         AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'
+              OR lc.paamonim_item_id LIKE 'ce:%' OR lc.paamonim_item_id LIKE 'ci:%'))";
+
+fn requeue_skipped(conn: &Connection) -> anyhow::Result<usize> {
+    Ok(conn.execute(REQUEUE_SKIPPED_SQL, [])?)
+}
+
 fn resolve_category(conn: &Connection, mut id: i64) -> anyhow::Result<Option<i64>> {
     for _ in 0..16 {
         let (deleted, into): (i64, Option<i64>) = conn.query_row(
@@ -499,12 +692,21 @@ impl Storage for SqliteStorage {
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note, c.paamonim_item_id,
-                    c.name, p.paamonim_id, t.paamonim_line_id, t.category_id, pc.paamonim_item_id,
+            "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note,
+                    COALESCE(c.paamonim_item_id, (SELECT s.paamonim_item_id FROM categories s
+                       JOIN categories sp ON sp.id = s.parent_id AND sp.deleted = 0
+                       WHERE s.deleted = 0 AND s.id <> c.id AND s.name = c.name
+                         AND s.is_income = c.is_income
+                         AND (s.paamonim_item_id LIKE 'e:%' OR s.paamonim_item_id LIKE 'i:%')
+                         AND COALESCE(sp.linked_to, sp.id) = COALESCE(pc.linked_to, pc.id)
+                       ORDER BY s.id LIMIT 1)),
+                    c.name, p.paamonim_id, t.paamonim_line_id, t.category_id,
+                    COALESCE(pc.paamonim_item_id, lc.paamonim_item_id),
                     COALESCE(c.is_income, 0)
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
              LEFT JOIN categories pc ON pc.id = c.parent_id AND pc.deleted = 0
+             LEFT JOIN categories lc ON lc.id = pc.linked_to AND lc.deleted = 0
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
              WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )?;
@@ -560,10 +762,19 @@ impl Storage for SqliteStorage {
     async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
-        let n = tx.execute(
-            "UPDATE categories SET paamonim_item_id = ?2 WHERE id = ?1 AND paamonim_item_id IS NULL",
-            params![id, key],
-        )?;
+        // An item another category already holds (one of the same name under a category
+        // linked to the same Paamonim category) stays with it; lines are still sent there.
+        let taken = tx
+            .prepare("SELECT 1 FROM categories WHERE paamonim_item_id = ?1")?
+            .exists(params![key])?;
+        let n = if taken {
+            0
+        } else {
+            tx.execute(
+                "UPDATE categories SET paamonim_item_id = ?2 WHERE id = ?1 AND paamonim_item_id IS NULL",
+                params![id, key],
+            )?
+        };
         if n == 1 {
             tx.execute(
                 "UPDATE transactions SET sync_state = 'pending'
@@ -604,21 +815,15 @@ impl Storage for SqliteStorage {
     }
 
     async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize> {
-        Ok(self.0.lock().unwrap().execute(
-            "UPDATE transactions SET sync_state = 'pending'
-             WHERE sync_state IN ('skipped', 'error') AND paamonim_line_id IS NULL AND category_id IN (
-               SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
-               WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
-                 AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'))",
-            [],
-        )?)
+        requeue_skipped(&self.0.lock().unwrap())
     }
 
     async fn raw_backup(&self) -> anyhow::Result<RawBackup> {
         let conn = self.0.lock().unwrap();
         let categories = conn
             .prepare(
-                "SELECT id, name, is_income, paamonim_item_id, parent_id, deleted, merged_into
+                "SELECT id, name, is_income, paamonim_item_id, parent_id, deleted, merged_into,
+                        linked_to
                  FROM categories ORDER BY id",
             )?
             .query_map([], |r| {
@@ -630,6 +835,7 @@ impl Storage for SqliteStorage {
                     parent_id: r.get(4)?,
                     deleted: r.get::<_, i64>(5)? != 0,
                     merged_into: r.get(6)?,
+                    linked_to: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -766,8 +972,13 @@ impl Storage for SqliteStorage {
                 // Deleted here: stays deleted, and its name/parent are not refreshed.
                 Some((id, true)) => id,
                 Some((id, false)) => {
+                    // A sub-category moved here under a category linked to its Paamonim
+                    // category keeps its place.
                     tx.execute(
-                        "UPDATE categories SET name = ?2, parent_id = ?3 WHERE id = ?1",
+                        "UPDATE categories SET name = ?2, parent_id = CASE WHEN ?3 IS NOT NULL
+                           AND parent_id IN (SELECT id FROM categories WHERE linked_to = ?3)
+                           THEN parent_id ELSE ?3 END
+                         WHERE id = ?1",
                         params![id, c.name, parent],
                     )?;
                     id
@@ -965,7 +1176,8 @@ impl Storage for SqliteStorage {
     async fn list_categories(&self) -> anyhow::Result<Vec<Category>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, is_income, parent_id FROM categories WHERE deleted = 0 ORDER BY name",
+            "SELECT id, name, is_income, parent_id, paamonim_item_id IS NOT NULL, linked_to
+             FROM categories WHERE deleted = 0 ORDER BY name",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -974,6 +1186,8 @@ impl Storage for SqliteStorage {
                     name: r.get(1)?,
                     is_income: r.get::<_, i64>(2)? != 0,
                     parent_id: r.get(3)?,
+                    from_paamonim: r.get::<_, i64>(4)? != 0,
+                    linked_to: r.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -992,6 +1206,30 @@ impl Storage for SqliteStorage {
             params![name, is_income, parent_id],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE categories SET linked_to = ?2 WHERE id = ?1",
+            params![id, linked_to],
+        )?;
+        requeue_skipped(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> anyhow::Result<()> {
+        let mut conn = self.0.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE categories SET parent_id = ?2 WHERE id = ?1",
+            params![id, parent_id],
+        )?;
+        requeue_skipped(&tx)?;
+        tx.commit()?;
+        Ok(())
     }
 
     async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()> {
@@ -1379,11 +1617,142 @@ mod tests {
         assert_eq!(s.monthly_totals().await.unwrap()[0].total_agorot, 2025);
     }
 
+    /// Paamonim income category `ci:1` with items משכורת (`i:7`) and בונוס (`i:8`).
+    async fn with_income() -> (SqliteStorage, i64, i64, i64) {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: name.into(),
+            is_income: true,
+            parent_key: parent.map(str::to_string),
+        };
+        let batch = ImportBatch {
+            categories: vec![
+                cat("ci:1", "הכנסות", None),
+                cat("i:7", "משכורת", Some("ci:1")),
+                cat("i:8", "בונוס", Some("ci:1")),
+            ],
+            ..Default::default()
+        };
+        s.import_paamonim(&batch).await.unwrap();
+        let cats = s.list_categories().await.unwrap();
+        let id = |n: &str| cats.iter().find(|c| c.name == n).unwrap().id;
+        (s, id("הכנסות"), id("משכורת"), id("בונוס"))
+    }
+
+    fn top(name: &str, linked_to: Option<i64>) -> NewCategory {
+        NewCategory {
+            name: name.into(),
+            is_income: true,
+            parent_id: None,
+            linked_to,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_top_level_category_must_be_linked_to_a_paamonim_one() {
+        let (s, income, salary, _) = with_income().await;
+        let err = s.create_category(&top("עומר", None)).await.unwrap_err();
+        assert!(err.to_string().contains("Paamonim category"));
+        // Not to a sub-category, and not across kinds.
+        assert!(s.create_category(&top("עומר", Some(salary))).await.is_err());
+        let exp = NewCategory {
+            is_income: false,
+            ..top("x", Some(income))
+        };
+        // No Paamonim expense categories: an expense top-level needs no link, and can't
+        // take an income one.
+        assert!(s.create_category(&exp).await.is_err());
+        let id = s.create_category(&top("עומר", Some(income))).await.unwrap();
+        let made = s.list_categories().await.unwrap();
+        let made = made.iter().find(|c| c.id == id).unwrap();
+        assert_eq!((made.linked_to, made.from_paamonim), (Some(income), false));
+        // Neither can be deleted from under the link.
+        assert!(s.delete_category(income, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_sub_category_moves_with_its_lines_and_keeps_its_place_on_reimport() {
+        let (s, income, salary, bonus) = with_income().await;
+        let omer = s.create_category(&top("עומר", Some(income))).await.unwrap();
+        let wife = s.create_category(&top("אשתי", Some(income))).await.unwrap();
+        let t = s
+            .create_transaction(&NewTransaction {
+                date: "2026-10-01".into(),
+                amount_agorot: 1_000_000,
+                category_id: Some(salary),
+                payment_method_id: None,
+                note: String::new(),
+            })
+            .await
+            .unwrap();
+        s.move_category(salary, wife).await.unwrap();
+        s.move_category(bonus, omer).await.unwrap();
+        let parent =
+            |cats: &[Category], id: i64| cats.iter().find(|c| c.id == id).unwrap().parent_id;
+        let cats = s.list_categories().await.unwrap();
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
+        let tx = s.list_transactions().await.unwrap();
+        assert_eq!(
+            tx.iter().find(|x| x.id == t).unwrap().category_id,
+            Some(salary)
+        );
+        // A re-import leaves them where they were moved.
+        let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: name.into(),
+            is_income: true,
+            parent_key: parent.map(str::to_string),
+        };
+        s.import_paamonim(&ImportBatch {
+            categories: vec![
+                cat("ci:1", "הכנסות", None),
+                cat("i:7", "משכורת", Some("ci:1")),
+                cat("i:8", "בונוס", Some("ci:1")),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let cats = s.list_categories().await.unwrap();
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
+        // Back under the Paamonim category is fine too.
+        s.move_category(bonus, income).await.unwrap();
+        // A Paamonim item can't move to a category that isn't linked to its Paamonim category.
+        let other = s
+            .create_category(&NewCategory {
+                is_income: false,
+                ..top("הוצאה", None)
+            })
+            .await
+            .unwrap();
+        assert!(s.move_category(salary, other).await.is_err());
+        // The link can't change while a Paamonim item sits under it.
+        assert!(s.link_category_to(wife, None).await.is_err());
+        // A name the target already has is refused.
+        let dup = s
+            .create_category(&NewCategory {
+                parent_id: Some(omer),
+                ..top("משכורת", None)
+            })
+            .await
+            .unwrap();
+        assert!(dup > 0);
+        assert!(s.move_category(salary, omer).await.is_err());
+    }
+
     fn new_cat(name: &str, parent_id: Option<i64>, is_income: bool) -> NewCategory {
         NewCategory {
             name: name.into(),
             is_income,
             parent_id,
+            linked_to: None,
         }
     }
 

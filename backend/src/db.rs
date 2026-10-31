@@ -13,7 +13,9 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              -- Deleted locally. Kept (when it has a Paamonim id) so re-imports skip it;
              -- its lines go to merged_into, if any.
              deleted INTEGER NOT NULL DEFAULT 0,
-             merged_into INTEGER REFERENCES categories(id)
+             merged_into INTEGER REFERENCES categories(id),
+             -- On a top-level category made here: the Paamonim top-level category it stands in for.
+             linked_to INTEGER REFERENCES categories(id)
          );
          CREATE TABLE IF NOT EXISTS payment_methods (
              id INTEGER PRIMARY KEY,
@@ -87,6 +89,16 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
         conn.execute_batch(
             "ALTER TABLE categories ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
              ALTER TABLE categories ADD COLUMN merged_into INTEGER REFERENCES categories(id);",
+        )?;
+    }
+    // Databases created before top-level categories could be linked to Paamonim ones.
+    let has_link = conn
+        .prepare("SELECT 1 FROM pragma_table_info('categories') WHERE name = 'linked_to'")?
+        .exists([])?;
+    if !has_link {
+        conn.execute(
+            "ALTER TABLE categories ADD COLUMN linked_to INTEGER REFERENCES categories(id)",
+            [],
         )?;
     }
     let has_series = conn

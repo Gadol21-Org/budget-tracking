@@ -43,6 +43,10 @@ export interface Category {
   name: string;
   is_income: boolean;
   parent_id: number | null;
+  /** Came from Paamonim: a Paamonim category, or an item there for a sub-category. */
+  from_paamonim: boolean;
+  /** On a top-level category made here: the Paamonim top-level category it stands in for. */
+  linked_to: number | null;
 }
 
 export interface MonthlyTotal {
@@ -102,8 +106,14 @@ export const api = {
     request<void>(`/api/recurring/${series}?from=${from}`, { method: "DELETE" }),
   importPaamonim: (from: string, to: string) =>
     request<ImportSummary>("/api/import/paamonim", { method: "POST", body: JSON.stringify({ from, to }) }),
-  addCategory: (c: { name: string; is_income: boolean; parent_id: number | null }) =>
+  addCategory: (c: { name: string; is_income: boolean; parent_id: number | null; linked_to?: number | null }) =>
     request<number>("/api/categories", { method: "POST", body: JSON.stringify(c) }),
+  /** Link a top-level category made here to a Paamonim top-level category. */
+  linkCategory: (id: number, linkedTo: number | null) =>
+    request<void>(`/api/categories/${id}/link`, { method: "PUT", body: JSON.stringify({ linked_to: linkedTo }) }),
+  /** Move a sub-category, with its transactions, under another top-level category. */
+  moveCategory: (id: number, parentId: number) =>
+    request<void>(`/api/categories/${id}/move`, { method: "POST", body: JSON.stringify({ parent_id: parentId }) }),
   /** Also deletes sub-categories; their transactions move to `moveTo` (required if there are any). */
   deleteCategory: (id: number, moveTo?: number) =>
     request<number>(`/api/categories/${id}${moveTo != null ? `?move_to=${moveTo}` : ""}`, { method: "DELETE" }),
