@@ -98,6 +98,10 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
   main { padding-inline: 8px; }
   .card { padding-inline: 12px; }
   .fab { inset-inline-start: 12px; }
+  /* Names get the room: smaller text, tighter gaps and smaller action buttons. */
+  .row { gap: 6px; }
+  .row .name { font-size: .9rem; line-height: 1.35; }
+  .row .del { padding: 6px 4px; }
 }
 
 /* Desktop: sidebar instead of bottom nav */
