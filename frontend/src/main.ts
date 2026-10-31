@@ -415,12 +415,17 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
           ? "תת-הקטגוריה תירשם בפעמונים כסעיף באותו שם (אם כבר יש סעיף בשם זה, הוא ישמש)."
           : "קטגוריה שנוספה כאן קיימת רק באפליקציה: תנועות עליה לא יועתקו לפעמונים.";
     };
-    parent.onchange = sync;
-    sync();
     const err = el("div", { className: "error" });
     const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
     cancel.onclick = close;
     const save = el("button", { type: "submit", className: "btn primary", textContent: "הוספה" });
+    // Greyed out until there is a name and, for a top-level category, its Paamonim category.
+    const syncSave = () => (save.disabled = !name.value.trim() || (!parent.value && hasTops && !link.value));
+    parent.onchange = () => (sync(), syncSave());
+    link.onchange = syncSave;
+    name.oninput = syncSave;
+    sync();
+    syncSave();
     const form = el(
       "form",
       { className: "add", method: "dialog" },
@@ -447,7 +452,7 @@ function openAddCategoryDialog(isIncome: boolean, parentId: number | null) {
         await load();
       } catch (e2) {
         err.textContent = e2 instanceof Error ? e2.message : String(e2);
-        save.disabled = false;
+        syncSave();
       }
     };
     setTimeout(() => name.focus());
@@ -465,6 +470,9 @@ function openLinkCategoryDialog(cat: Category) {
     const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
     cancel.onclick = close;
     const save = el("button", { type: "submit", className: "btn primary", textContent: "שמירה" });
+    const syncSave = () => (save.disabled = !link.value || link.value === String(cat.linked_to));
+    link.onchange = syncSave;
+    syncSave();
     const form = el(
       "form",
       { className: "add", method: "dialog" },
@@ -483,7 +491,7 @@ function openLinkCategoryDialog(cat: Category) {
         await load();
       } catch (e2) {
         err.textContent = e2 instanceof Error ? e2.message : String(e2);
-        save.disabled = false;
+        syncSave();
       }
     };
     return form;
@@ -519,7 +527,9 @@ function openMoveCategoryDialog(cat: Category) {
       err,
       el("div", { className: "actions" }, cancel, save),
     );
-    if (!targets.length) save.disabled = true;
+    const syncSave = () => (save.disabled = !target.value);
+    target.onchange = syncSave;
+    syncSave();
     form.onsubmit = async (e) => {
       e.preventDefault();
       try {
@@ -529,7 +539,7 @@ function openMoveCategoryDialog(cat: Category) {
         await load();
       } catch (e2) {
         err.textContent = e2 instanceof Error ? e2.message : String(e2);
-        save.disabled = false;
+        syncSave();
       }
     };
     return form;
