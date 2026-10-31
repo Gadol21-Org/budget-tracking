@@ -2,7 +2,7 @@ import "./style.css";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
-type View = "month" | "list" | "settings" | "log";
+type View = "month" | "list" | "settings" | "log" | "categories";
 
 const root = document.getElementById("app")!;
 const state = {
@@ -398,6 +398,24 @@ function openDeleteCategoryDialog(cat: Category) {
   });
 }
 
+function categoriesView(): HTMLElement {
+  const back = el("button", { className: "btn", textContent: "→ הגדרות", title: "חזרה להגדרות" });
+  back.onclick = () => {
+    state.view = "settings";
+    render();
+  };
+  return el("div", {}, el("div", { className: "actions", style: "justify-content:flex-start" }, back), el("h1", { textContent: "קטגוריות" }), categoriesCard());
+}
+
+function categoriesLinkCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "עריכת קטגוריות" });
+  open.onclick = () => {
+    state.view = "categories";
+    render();
+  };
+  return el("div", { className: "card" }, el("h2", { textContent: "קטגוריות" }), el("p", { className: "muted", textContent: "הוספה ומחיקה של קטגוריות ותתי-קטגוריות." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
+}
+
 function categoriesCard(): HTMLElement {
   const kinds = [
     [false, "הוצאות"],
@@ -429,7 +447,6 @@ function categoriesCard(): HTMLElement {
   return el(
     "div",
     { className: "card" },
-    el("h2", { textContent: "קטגוריות" }),
     el("div", { className: "seg" }, ...tabs),
     el("div", { className: "rows" }, ...(rows.length ? rows : [el("div", { className: "empty", textContent: "אין קטגוריות" })])),
     el("div", { className: "actions", style: "justify-content:flex-start" }, iconBtn("הוספת קטגוריה", "", () => openAddCategoryDialog(state.catKind, null))),
@@ -467,7 +484,7 @@ function settingsView(): HTMLElement {
     {},
     el("h1", { textContent: "הגדרות" }),
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
-    categoriesCard(),
+    categoriesLinkCard(),
     historyCard(),
   );
 }
@@ -807,7 +824,7 @@ function openTransactionDialog(existing?: Transaction) {
 function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view || (view === "settings" && state.view === "log")) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories"))) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       state.view = view;
       state.filter = undefined;
@@ -818,8 +835,12 @@ function nav(): HTMLElement {
   return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
 }
 
+let renderedView: View | undefined;
 function render() {
-  const view = state.view === "month" ? monthView() : state.view === "list" ? listView() : state.view === "log" ? logView() : settingsView();
+  const view = { month: monthView, list: listView, log: logView, categories: categoriesView, settings: settingsView }[state.view]();
+  // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
+  if (renderedView !== state.view) window.scrollTo(0, 0);
+  renderedView = state.view;
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
   root.replaceChildren(el("div", { className: "shell" }, nav(), el("main", {}, view)), fab);
