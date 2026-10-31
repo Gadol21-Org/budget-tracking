@@ -29,6 +29,51 @@ const state = {
   justSynced: new Map<number, number>(),
 };
 
+/** Browser history: every screen is a history entry, so the phone's back button/gesture goes to the previous screen (and closes a dialog first) instead of leaving the app. */
+type Screen = { view: View; filter?: { id: number | null }; dlg?: boolean; n: number };
+function screenState(extra: Partial<Screen> = {}): Screen {
+  return { view: state.view, filter: state.filter, n: history.state?.n ?? 0, ...extra };
+}
+history.replaceState(screenState({ n: 0 }), "");
+/** Go to a screen as a new history entry. */
+function go(view: View, filter?: { id: number | null }) {
+  if (view === state.view && filter?.id === state.filter?.id && (filter === undefined) === (state.filter === undefined)) return;
+  state.view = view;
+  state.filter = filter;
+  history.pushState(screenState({ n: (history.state?.n ?? 0) + 1 }), "");
+  render();
+}
+/** The in-app back buttons: the same as the phone's back, or a fresh step when there is nothing to go back to. */
+function goBack(view: View) {
+  if ((history.state?.n ?? 0) > 0 && !history.state?.dlg) history.back();
+  else {
+    state.view = view;
+    state.filter = undefined;
+    render();
+  }
+}
+/** A modal takes a history entry while open: back closes it, and closing it any other way drops the entry. */
+function trackDialog(dlg: HTMLDialogElement) {
+  history.pushState(screenState({ dlg: true }), "");
+  dlg.addEventListener("close", () => {
+    if (!dlg.dataset.viaBack && history.state?.dlg) history.back();
+  });
+}
+window.addEventListener("popstate", (e) => {
+  const open = [...document.querySelectorAll<HTMLDialogElement>("dialog[open]")];
+  const top = open[open.length - 1];
+  if (top) {
+    top.dataset.viaBack = "1";
+    top.close();
+    return;
+  }
+  const st = e.state as Screen | null;
+  if (st?.dlg) return;
+  state.view = st?.view ?? "month";
+  state.filter = st?.filter;
+  render();
+});
+
 /** States of a line whose change is on its way to Paamonim. */
 const IN_FLIGHT = new Set(["pending", "modified", "verifying"]);
 const SYNCED_SHOWN_MS = 2500;
@@ -93,9 +138,7 @@ function clickable<T extends HTMLElement>(node: T, onActivate: () => void): T {
 }
 
 function showCategory(id: number | null) {
-  state.filter = { id };
-  state.view = "list";
-  render();
+  go("list", { id });
 }
 
 function monthBar(): HTMLElement {
@@ -186,6 +229,7 @@ function openPeriodDialog() {
   dlg.append(form);
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
+  trackDialog(dlg);
   dlg.showModal();
 }
 
@@ -304,9 +348,7 @@ function listView(): HTMLElement {
   if (state.filter) {
     const back = el("button", { className: "btn", textContent: "→ סיכום", title: "חזרה לסיכום" });
     back.onclick = () => {
-      state.filter = undefined;
-      state.view = "month";
-      render();
+      goBack("month");
     };
     const total = txs.reduce((s, t) => s + t.amount_agorot, 0);
     header = el(
@@ -326,6 +368,7 @@ function openDialog(build: (close: () => void) => HTMLElement) {
   dlg.append(build(() => dlg.close()));
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
+  trackDialog(dlg);
   dlg.showModal();
 }
 
@@ -418,8 +461,7 @@ function openDeleteCategoryDialog(cat: Category) {
 function categoriesView(): HTMLElement {
   const back = el("button", { className: "btn", textContent: "→ הגדרות", title: "חזרה להגדרות" });
   back.onclick = () => {
-    state.view = "settings";
-    render();
+    goBack("settings");
   };
   return el("div", {}, el("div", { className: "actions", style: "justify-content:flex-start" }, back), el("h1", { textContent: "קטגוריות" }), categoriesCard());
 }
@@ -427,8 +469,7 @@ function categoriesView(): HTMLElement {
 function categoriesLinkCard(): HTMLElement {
   const open = el("button", { className: "btn", textContent: "עריכת קטגוריות" });
   open.onclick = () => {
-    state.view = "categories";
-    render();
+    go("categories");
   };
   return el("div", { className: "card" }, el("h2", { textContent: "קטגוריות" }), el("p", { className: "muted", textContent: "הוספה ומחיקה של קטגוריות ותתי-קטגוריות." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
 }
@@ -608,8 +649,7 @@ function logEntryRow(e: LogEntry): HTMLElement {
 function logView(): HTMLElement {
   const back = el("button", { className: "btn", textContent: "→ הגדרות", title: "חזרה להגדרות" });
   back.onclick = () => {
-    state.view = "settings";
-    render();
+    goBack("settings");
   };
   const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");
   const days = [...new Set(state.log.map((e) => localDay(e.at)))];
@@ -645,8 +685,7 @@ function logView(): HTMLElement {
 async function openLog() {
   state.log = await api.log(undefined, LOG_PAGE);
   state.logMore = state.log.length === LOG_PAGE;
-  state.view = "log";
-  render();
+  go("log");
 }
 
 /** A button that opens a small menu of choices above it. */
@@ -834,6 +873,7 @@ function openTransactionDialog(existing?: Transaction) {
   dlg.append(form);
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
+  trackDialog(dlg);
   dlg.showModal();
   amount.focus();
 }
@@ -843,9 +883,7 @@ function nav(): HTMLElement {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
     if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories"))) b.setAttribute("aria-current", "page");
     b.onclick = () => {
-      state.view = view;
-      state.filter = undefined;
-      render();
+      go(view);
     };
     return b;
   };
