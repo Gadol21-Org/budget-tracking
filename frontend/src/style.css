@@ -147,3 +147,10 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .ptr.ready .ptr-dot { border-top-color: var(--brand); border-right-color: var(--brand); }
 .ptr.spin .ptr-dot { animation: ptr-spin .8s linear infinite; }
 @keyframes ptr-spin { to { rotate: 360deg; } }
+
+/* Change log */
+.logentry { align-items: flex-start; }
+.logico { width: 1.6em; text-align: center; flex: none; }
+.logtitle { font-weight: 600; }
+.logline { font-size: .85rem; overflow-wrap: anywhere; }
+.logtime { font-size: .8rem; flex: none; }
