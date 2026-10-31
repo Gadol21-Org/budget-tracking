@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    Category, ImportBatch, ImportSummary, MonthlyTotal, NewCategory, NewTransaction, PaymentMethod,
-    PendingMirror, Storage, Transaction,
+    Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewCategory, NewTransaction,
+    PaymentMethod, PendingMirror, Storage, Transaction,
 };
 
 /// How long entries are kept.
@@ -220,22 +220,52 @@ impl Storage for Logged {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
         self.0.list_payment_methods().await
     }
+    // Mirroring only changes sync bookkeeping, not the user's data: forwarded, not logged.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         self.0.pending_mirrors().await
     }
-    async fn mark_mirrored(&self, id: i64, line_id: &str) -> anyhow::Result<()> {
-        self.0.mark_mirrored(id, line_id).await
+    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
+        self.0.set_mirror_state(id, state).await
     }
-    async fn mark_mirror_error(&self, id: i64) -> anyhow::Result<()> {
-        self.0.mark_mirror_error(id).await
+    async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {
+        self.0.mark_mirrored(posted, line_id).await
+    }
+    async fn link_category(&self, id: i64, key: &str) -> anyhow::Result<bool> {
+        self.0.link_category(id, key).await
+    }
+    async fn detach_mirror(&self, id: i64) -> anyhow::Result<()> {
+        self.0.detach_mirror(id).await
+    }
+    async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool> {
+        self.0.retry_mirror(id).await
+    }
+    async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
+        self.0.pending_line_deletes().await
+    }
+    async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()> {
+        self.0.queue_line_delete(line_id, date).await
+    }
+    async fn finish_line_delete(&self, line_id: &str) -> anyhow::Result<()> {
+        self.0.finish_line_delete(line_id).await
     }
     async fn known_line_ids(&self) -> anyhow::Result<Vec<String>> {
         self.0.known_line_ids().await
     }
+    async fn baseline_mirror(&self) -> anyhow::Result<usize> {
+        self.0.baseline_mirror().await
+    }
+    async fn clear_mirror_baseline(&self) -> anyhow::Result<()> {
+        self.0.clear_mirror_baseline().await
+    }
 
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary> {
         let sum = self.0.import_paamonim(batch).await?;
-        if sum.categories_added + sum.payment_methods_added + sum.transactions_added > 0 {
+        if sum.categories_added
+            + sum.payment_methods_added
+            + sum.transactions_added
+            + sum.transactions_adopted
+            > 0
+        {
             self.log(kind::IMPORT, None, None, serde_json::to_value(&sum).ok())
                 .await;
         }

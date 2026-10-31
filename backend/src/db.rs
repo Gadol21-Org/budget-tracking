@@ -28,9 +28,16 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              payment_method_id INTEGER REFERENCES payment_methods(id),
              note TEXT NOT NULL DEFAULT '',
              paamonim_line_id TEXT UNIQUE,       -- set once mirrored/imported
-             sync_state TEXT NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
-             recurring_series_id INTEGER          -- set on a settled repeating transaction
+             sync_state TEXT NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | skipped | local
+             recurring_series_id INTEGER,         -- set on a settled repeating transaction
+             mirror_date TEXT                     -- the line's date in Paamonim, when linked
          );
+         -- Lines to delete in Paamonim: their transaction was deleted or replaced here.
+         CREATE TABLE IF NOT EXISTS mirror_deletes (
+             line_id TEXT PRIMARY KEY,
+             date TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS mirror_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
          -- Months already turned into transactions, kept even if the transaction is deleted.
          CREATE TABLE IF NOT EXISTS recurring_settled (
              series_id INTEGER NOT NULL,
@@ -92,6 +99,12 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
             "ALTER TABLE transactions ADD COLUMN recurring_series_id INTEGER",
             [],
         )?;
+    }
+    let has_mirror_date = conn
+        .prepare("SELECT 1 FROM pragma_table_info('transactions') WHERE name = 'mirror_date'")?
+        .exists([])?;
+    if !has_mirror_date {
+        conn.execute("ALTER TABLE transactions ADD COLUMN mirror_date TEXT", [])?;
     }
     Ok(conn)
 }

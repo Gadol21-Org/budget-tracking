@@ -21,7 +21,28 @@ const state = {
   /** Change log entries loaded so far (newest first) and whether older ones remain. */
   log: [] as LogEntry[],
   logMore: false,
+  /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */
+  mirror: false,
+  /** sync_state of each transaction at the last load, to notice lines that just got saved. */
+  syncSeen: new Map<number, string>(),
+  /** Lines just saved in Paamonim, shown with ✅ until this time (ms). */
+  justSynced: new Map<number, number>(),
 };
+
+/** States of a line whose change is on its way to Paamonim. */
+const IN_FLIGHT = new Set(["pending", "modified", "verifying"]);
+const SYNCED_SHOWN_MS = 2500;
+
+/** Saving / saved / failed marker of a line in Paamonim; nothing when mirroring is off. */
+function syncMark(t: Transaction): HTMLElement | null {
+  if (!state.mirror || t.upcoming) return null;
+  if (IN_FLIGHT.has(t.sync_state)) return el("span", { className: "sync-ring", title: "שומר בפעמונים…", role: "status", ariaLabel: "שומר בפעמונים" });
+  if (t.sync_state === "error") return el("span", { className: "sync", title: "לא נשמר בפעמונים", textContent: "⚠️" });
+  // Can't go to Paamonim as it is (a top-level category made here, a zero amount, a refund on an expense item).
+  if (t.sync_state === "skipped") return el("span", { className: "sync", title: "לא נשלח לפעמונים: אין לו מקום שם", textContent: "⚠️" });
+  if ((state.justSynced.get(t.id) ?? 0) > Date.now()) return el("span", { className: "sync", title: "נשמר בפעמונים", textContent: "✅" });
+  return null;
+}
 
 type Child = Node | string | null | false;
 
@@ -256,10 +277,6 @@ function listView(): HTMLElement {
               };
             const edit = el("button", { className: "del", title: "עריכה", textContent: "✎" });
             edit.onclick = () => openTransactionDialog(t);
-            const badge: Record<string, string> = {
-              modified: "נערך – לא עודכן בפעמונים",
-              error: "לא נשלח לפעמונים",
-            };
             return el(
               "div",
               { className: t.upcoming ? "row upcoming" : "row" },
@@ -273,8 +290,8 @@ function listView(): HTMLElement {
                   catPath(t.category_id),
                 ),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
-                badge[t.sync_state] ? el("div", { className: "muted", style: "font-size:.8rem", textContent: badge[t.sync_state] }) : null,
               ),
+              syncMark(t),
               money(t.amount_agorot, t.amount_agorot < 0 ? "expense" : "income"),
               edit,
               del,
@@ -847,13 +864,16 @@ function render() {
 }
 
 async function load() {
-  const [cats, txs, recurring, occurrences, log] = await Promise.all([
+  const [cats, txs, recurring, occurrences, log, mirror] = await Promise.all([
     api.categories(),
     api.transactions(),
     api.recurring(),
     api.occurrences(),
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
+    api.mirrorStatus().catch(() => ({ enabled: false })),
   ]);
+  state.mirror = mirror.enabled;
+  trackSync(txs);
   if (log) {
     state.log = log;
     state.logMore = log.length >= LOG_PAGE;
@@ -874,6 +894,37 @@ async function load() {
   }));
   state.txs = [...txs, ...generated];
   render();
+}
+
+/** Note lines that went from in flight to saved (✅ for a moment), and keep checking while any
+ * line is still on its way to Paamonim, so the marks update without a manual refresh. */
+let syncTimer: ReturnType<typeof setTimeout> | undefined;
+let syncPolls = 0;
+function trackSync(txs: Transaction[]) {
+  const now = Date.now();
+  for (const t of txs) {
+    const before = state.syncSeen.get(t.id);
+    if (before && IN_FLIGHT.has(before) && t.sync_state === "synced") state.justSynced.set(t.id, now + SYNCED_SHOWN_MS);
+  }
+  state.syncSeen = new Map(txs.map((t) => [t.id, t.sync_state]));
+  clearTimeout(syncTimer);
+  const waiting = state.mirror && txs.some((t) => IN_FLIGHT.has(t.sync_state));
+  syncPolls = waiting ? syncPolls + 1 : 0;
+  if (waiting) {
+    // Quick at first, then slower if Paamonim takes a while (e.g. waiting for the next sweep).
+    const poll = async () => {
+      // A refresh is skipped while a dialog is open: try again shortly.
+      if (!(await refresh())) syncTimer = setTimeout(poll, 3000);
+    };
+    syncTimer = setTimeout(poll, syncPolls < 40 ? 1500 : 15000);
+  } else if ([...state.justSynced.values()].some((until) => until > now)) {
+    // Take the ✅ away once its moment is over.
+    const next = Math.min(...[...state.justSynced.values()].filter((u) => u > now));
+    syncTimer = setTimeout(() => {
+      for (const [id, until] of state.justSynced) if (until <= Date.now()) state.justSynced.delete(id);
+      render();
+    }, next - now + 50);
+  }
 }
 
 /** Reload everything without disturbing an open dialog; a failure keeps the data already shown. */

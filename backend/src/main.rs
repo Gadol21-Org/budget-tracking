@@ -35,17 +35,21 @@ fn today() -> chrono::NaiveDate {
 }
 
 /// Make charges that have come due real transactions before anything reads them.
-async fn settle(db: &dyn Storage) -> Result<(), (StatusCode, String)> {
-    recurring::settle_due(db, today())
+async fn settle(db: &Db) -> Result<(), (StatusCode, String)> {
+    let added = recurring::settle_due(db.as_ref(), today())
         .await
-        .map(|_| ())
-        .map_err(internal)
+        .map_err(internal)?;
+    // Newly settled charges are ordinary transactions waiting to be mirrored.
+    if added > 0 {
+        trigger_mirror(db);
+    }
+    Ok(())
 }
 
 async fn list_transactions(
     State(db): State<Db>,
 ) -> Result<Json<Vec<Transaction>>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     db.list_transactions().await.map(Json).map_err(internal)
 }
 
@@ -56,15 +60,7 @@ async fn create_transaction(
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     let id = db.create_transaction(&t).await.map_err(internal)?;
-    if mirroring_enabled() {
-        // Best effort in the background; failed lines stay visible via sync_state.
-        let db = db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = run_mirror(db.as_ref()).await {
-                tracing::warn!("paamonim mirror failed: {e}");
-            }
-        });
-    }
+    trigger_mirror(&db);
     Ok(Json(id))
 }
 
@@ -76,6 +72,7 @@ async fn update_transaction(
     chrono::NaiveDate::parse_from_str(&t.date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, "date must be YYYY-MM-DD".into()))?;
     db.update_transaction(id, &t).await.map_err(internal)?;
+    trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -84,6 +81,7 @@ async fn delete_transaction(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     db.delete_transaction(id).await.map_err(internal)?;
+    trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -153,7 +151,7 @@ async fn delete_category(
 async fn monthly_totals(
     State(db): State<Db>,
 ) -> Result<Json<Vec<MonthlyTotal>>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     let mut totals = db.monthly_totals().await.map_err(internal)?;
     let through = recurring::default_through(today());
     let ahead = recurring::upcoming_stored(db.as_ref(), &through, today())
@@ -192,7 +190,7 @@ async fn recurring_occurrences(
         Some(_) => return Err((StatusCode::BAD_REQUEST, "through must be YYYY-MM".into())),
         None => recurring::default_through(today()),
     };
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::upcoming_stored(db.as_ref(), &through, today())
         .await
         .map(Json)
@@ -216,7 +214,7 @@ async fn change_recurring(
     Path(series_id): Path<i64>,
     Json(r): Json<recurring::NewRecurring>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::change_from(db.as_ref(), series_id, &r, today())
         .await
         .map_err(recurring_error)?;
@@ -230,7 +228,7 @@ async fn settle_recurring_month(
     Path((series_id, month)): Path<(i64, String)>,
     Json(t): Json<NewTransaction>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::settle_month(db.as_ref(), series_id, &month, &t)
         .await
         .map_err(recurring_error)?;
@@ -242,7 +240,7 @@ async fn skip_recurring_month(
     State(db): State<Db>,
     Path((series_id, month)): Path<(i64, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::skip_month(db.as_ref(), series_id, &month)
         .await
         .map_err(recurring_error)?;
@@ -260,7 +258,7 @@ async fn cancel_recurring(
     Path(series_id): Path<i64>,
     Query(q): Query<CancelQuery>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     recurring::cancel_from(db.as_ref(), series_id, &q.from, today())
         .await
         .map_err(recurring_error)?;
@@ -278,24 +276,11 @@ async fn import_paamonim(
     State(db): State<Db>,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<storage::ImportSummary>, (StatusCode, String)> {
-    let base =
-        std::env::var("PAAMONIM_BASE_URL").unwrap_or_else(|_| "https://app.paamonim.org.il".into());
-    let user = std::env::var("PAAMONIM_USERNAME").map_err(|_| {
-        (
-            StatusCode::PRECONDITION_FAILED,
-            "PAAMONIM_USERNAME not set".into(),
-        )
+    let client = paamonim_session().await.map_err(|e| match e {
+        SessionError::NoCredentials(e) => e,
+        SessionError::Login(e) => internal(e),
     })?;
-    let pass = std::env::var("PAAMONIM_PASSWORD").map_err(|_| {
-        (
-            StatusCode::PRECONDITION_FAILED,
-            "PAAMONIM_PASSWORD not set".into(),
-        )
-    })?;
-    let client = paamonim::Client::login(&base, &user, &pass)
-        .await
-        .map_err(internal)?;
-    import::run(&client, db.as_ref(), &req.from, &req.to)
+    import::run(client, db.as_ref(), &req.from, &req.to)
         .await
         .map(Json)
         .map_err(|e| {
@@ -322,12 +307,31 @@ fn paamonim_credentials() -> Result<(String, String, String), (StatusCode, Strin
     Ok((base, user, pass))
 }
 
-/// Writing to Paamonim is opt-in: set PAAMONIM_MIRROR=1.
+enum SessionError {
+    NoCredentials((StatusCode, String)),
+    Login(anyhow::Error),
+}
+
+/// One Paamonim session for the whole server: logged in on first use and kept, so each change
+/// doesn't log in again. The client logs in again by itself when the session expires.
+async fn paamonim_session() -> Result<&'static paamonim::Client, SessionError> {
+    static SESSION: tokio::sync::OnceCell<paamonim::Client> = tokio::sync::OnceCell::const_new();
+    let (base, user, pass) = paamonim_credentials().map_err(SessionError::NoCredentials)?;
+    SESSION
+        .get_or_try_init(|| paamonim::Client::login(&base, &user, &pass))
+        .await
+        .map_err(SessionError::Login)
+}
+
+/// Writing to Paamonim is on whenever Paamonim credentials are set; `PAAMONIM_MIRROR=0` turns
+/// it off. Without credentials it is off, so nothing waits for a sync that can't happen.
 fn mirroring_enabled() -> bool {
-    matches!(
+    let off = matches!(
         std::env::var("PAAMONIM_MIRROR").as_deref(),
-        Ok("1") | Ok("true")
-    )
+        Ok("0") | Ok("false")
+    );
+    let has = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty());
+    !off && has("PAAMONIM_USERNAME") && has("PAAMONIM_PASSWORD")
 }
 
 /// Serialises mirror runs so overlapping triggers can't post the same line twice.
@@ -335,9 +339,57 @@ static MIRROR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn run_mirror(db: &dyn Storage) -> anyhow::Result<mirror::MirrorSummary> {
     let _guard = MIRROR_LOCK.lock().await;
-    let (base, user, pass) = paamonim_credentials().map_err(|e| anyhow::anyhow!(e.1))?;
-    let client = paamonim::Client::login(&base, &user, &pass).await?;
-    mirror::run(&client, db).await
+    // Nothing to do: don't log in to Paamonim at all.
+    if db.pending_mirrors().await?.is_empty() && db.pending_line_deletes().await?.is_empty() {
+        return Ok(mirror::MirrorSummary::default());
+    }
+    let client = paamonim_session().await.map_err(|e| match e {
+        SessionError::NoCredentials(e) => anyhow::anyhow!(e.1),
+        SessionError::Login(e) => e,
+    })?;
+    mirror::run(client, db, &mirror::Options::from_env()).await
+}
+
+/// After a local change: mirror it, in the background. Failures stay visible via `sync_state`
+/// and the log; nothing is retried blindly.
+fn trigger_mirror(db: &Db) {
+    if mirroring_enabled() {
+        let db = db.clone();
+        tokio::spawn(async move {
+            match run_mirror(db.as_ref()).await {
+                Ok(s) => {
+                    if let Some(why) = &s.stopped {
+                        tracing::warn!("paamonim mirror stopped: {why}");
+                    }
+                }
+                Err(e) => tracing::warn!("paamonim mirror failed: {e}"),
+            }
+        });
+    }
+}
+
+#[derive(serde::Serialize)]
+struct MirrorStatus {
+    /// Writing to Paamonim is on, so `pending`/`modified`/`verifying` lines are on their way.
+    enabled: bool,
+}
+
+async fn mirror_status() -> Json<MirrorStatus> {
+    Json(MirrorStatus {
+        enabled: mirroring_enabled(),
+    })
+}
+
+/// Put a transaction in `error` back in the queue (after checking Paamonim by hand).
+async fn retry_mirror(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if db.retry_mirror(id).await.map_err(internal)? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::CONFLICT, "transaction is not in error".into()))
+    }
 }
 
 async fn mirror_paamonim(
@@ -355,7 +407,7 @@ async fn mirror_paamonim(
 async fn export_sheets(
     State(db): State<Db>,
 ) -> Result<Json<sheets::ExportSummary>, (StatusCode, String)> {
-    settle(db.as_ref()).await?;
+    settle(&db).await?;
     sheets::export(db.as_ref())
         .await
         .map(Json)
@@ -444,6 +496,11 @@ fn router(db: Db) -> Router {
         .route("/api/import/paamonim", axum::routing::post(import_paamonim))
         .route("/api/export/sheets", axum::routing::post(export_sheets))
         .route("/api/mirror/paamonim", axum::routing::post(mirror_paamonim))
+        .route("/api/mirror/status", get(mirror_status))
+        .route(
+            "/api/mirror/paamonim/retry/:id",
+            axum::routing::post(retry_mirror),
+        )
         .with_state(db)
         .fallback(assets::static_handler)
 }
@@ -470,6 +527,41 @@ async fn main() -> anyhow::Result<()> {
 
     // Every change made through the app is recorded in the change log.
     let db: Db = Arc::new(oplog::Logged(db));
+
+    // Writing to Paamonim starts from now: whatever was unsent or edited while it was off is
+    // never replayed. Turning it off forgets the baseline so the next start is fresh again.
+    if mirroring_enabled() {
+        let n = db.baseline_mirror().await?;
+        if n > 0 {
+            tracing::info!("paamonim mirror: {n} earlier transactions set aside, not mirrored");
+        }
+        // Also sweeps up what no request triggered: settled repeating charges, category
+        // merges, and the rest of a run that hit its operation limit.
+        let mins: u64 = std::env::var("PAAMONIM_MIRROR_INTERVAL_MINUTES")
+            .ok()
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(10);
+        let db = db.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(mins.max(1) * 60));
+            loop {
+                tick.tick().await;
+                if let Err(e) = recurring::settle_due(db.as_ref(), today()).await {
+                    tracing::warn!("settling repeating charges failed: {e}");
+                }
+                match run_mirror(db.as_ref()).await {
+                    Ok(s) => {
+                        if let Some(why) = &s.stopped {
+                            tracing::warn!("paamonim mirror stopped: {why}");
+                        }
+                    }
+                    Err(e) => tracing::warn!("paamonim mirror failed: {e}"),
+                }
+            }
+        });
+    } else {
+        db.clear_mirror_baseline().await?;
+    }
 
     // Nightly (configurable) snapshot to Google Sheets, only when configured.
     if std::env::var("GOOGLE_SHEET_ID").is_ok() {

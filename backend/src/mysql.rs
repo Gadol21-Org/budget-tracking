@@ -16,11 +16,11 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    Category, ImportBatch, ImportSummary, MonthlyTotal, NewTransaction, PaymentMethod,
-    PendingMirror, Storage, Transaction,
+    rounds_to, Category, ImportBatch, ImportSummary, LineDelete, MonthlyTotal, NewTransaction,
+    PaymentMethod, PendingMirror, Storage, Transaction,
 };
 
-const SCHEMA: [&str; 6] = [
+const SCHEMA: [&str; 8] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -46,8 +46,9 @@ const SCHEMA: [&str; 6] = [
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
          paamonim_line_id VARCHAR(100) UNIQUE,   -- set once mirrored/imported
-         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | error | local
+         sync_state VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending | synced | modified | verifying | error | skipped | local
          recurring_series_id BIGINT NULL,        -- set on a settled repeating transaction
+         mirror_date VARCHAR(10) NULL,           -- the line's date in Paamonim, when linked
          INDEX idx_tx_date (date),
          INDEX idx_tx_category_date (category_id, date),
          FOREIGN KEY (category_id) REFERENCES categories(id),
@@ -72,6 +73,13 @@ const SCHEMA: [&str; 6] = [
          month VARCHAR(7) NOT NULL,
          PRIMARY KEY (series_id, month)
      )",
+    // Lines to delete in Paamonim: their transaction was deleted or replaced here.
+    "CREATE TABLE IF NOT EXISTS mirror_deletes (
+         seq BIGINT AUTO_INCREMENT PRIMARY KEY,
+         line_id VARCHAR(100) NOT NULL UNIQUE,
+         date VARCHAR(10) NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS mirror_meta (k VARCHAR(50) PRIMARY KEY, v VARCHAR(100) NOT NULL)",
     // What changed, with values before and after as JSON; pruned after a year.
     "CREATE TABLE IF NOT EXISTS change_log (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -134,6 +142,9 @@ impl MySqlStorage {
         let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN recurring_series_id BIGINT NULL")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN mirror_date VARCHAR(10) NULL")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
 }
@@ -189,12 +200,16 @@ impl Storage for MySqlStorage {
 
     async fn pending_mirrors(&self) -> Result<Vec<PendingMirror>> {
         let rows = sqlx::query(
-            "SELECT t.id, t.date, t.amount_agorot, t.note,
-                    c.paamonim_item_id AS item_key, p.paamonim_id AS payment_key
+            "SELECT t.id, t.sync_state, t.date, t.amount_agorot, t.note,
+                    c.paamonim_item_id AS item_key, c.name AS item_name,
+                    p.paamonim_id AS payment_key, t.paamonim_line_id AS line_id,
+                    t.category_id, pc.paamonim_item_id AS parent_key,
+                    CAST(COALESCE(c.is_income, 0) AS SIGNED) AS is_income
              FROM transactions t
              LEFT JOIN categories c ON c.id = t.category_id
+             LEFT JOIN categories pc ON pc.id = c.parent_id AND NOT pc.deleted
              LEFT JOIN payment_methods p ON p.id = t.payment_method_id
-             WHERE t.sync_state = 'pending' ORDER BY t.id",
+             WHERE t.sync_state IN ('pending', 'modified', 'verifying') ORDER BY t.id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -202,30 +217,143 @@ impl Storage for MySqlStorage {
             .map(|r| {
                 Ok(PendingMirror {
                     id: r.try_get("id")?,
+                    state: r.try_get("sync_state")?,
                     date: r.try_get("date")?,
                     amount_agorot: r.try_get("amount_agorot")?,
                     note: r.try_get("note")?,
                     item_key: r.try_get("item_key")?,
+                    item_name: r.try_get("item_name")?,
                     payment_key: r.try_get("payment_key")?,
+                    line_id: r.try_get("line_id")?,
+                    category_id: r.try_get("category_id")?,
+                    parent_key: r.try_get("parent_key")?,
+                    is_income: r.try_get::<i64, _>("is_income")? != 0,
                 })
             })
             .collect()
     }
 
-    async fn mark_mirrored(&self, id: i64, line_id: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE transactions SET sync_state = 'synced', paamonim_line_id = ? WHERE id = ?",
-        )
-        .bind(line_id)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+    async fn set_mirror_state(&self, id: i64, state: &str) -> Result<()> {
+        sqlx::query("UPDATE transactions SET sync_state = ? WHERE id = ?")
+            .bind(state)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn mark_mirror_error(&self, id: i64) -> Result<()> {
-        sqlx::query("UPDATE transactions SET sync_state = 'error' WHERE id = ?")
+    async fn mark_mirrored(&self, p: &PendingMirror, line_id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ? AND paamonim_line_id IS NOT NULL AND paamonim_line_id <> ?",
+        )
+        .bind(p.id)
+        .bind(line_id)
+        .execute(&mut *tx)
+        .await?;
+        let res = sqlx::query(
+            "UPDATE transactions SET paamonim_line_id = ?, mirror_date = ?,
+               sync_state = CASE WHEN date = ? AND amount_agorot = ? AND note = ?
+                            THEN 'synced' ELSE 'modified' END
+             WHERE id = ?",
+        )
+        .bind(line_id)
+        .bind(&p.date)
+        .bind(&p.date)
+        .bind(p.amount_agorot)
+        .bind(&p.note)
+        .bind(p.id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        // MySQL counts only changed rows; the line id always changes here.
+        Ok(res.rows_affected() == 1)
+    }
+
+    async fn link_category(&self, id: i64, key: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let n = sqlx::query(
+            "UPDATE categories SET paamonim_item_id = ? WHERE id = ? AND paamonim_item_id IS NULL",
+        )
+        .bind(key)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if n == 1 {
+            sqlx::query(
+                "UPDATE transactions SET sync_state = 'pending'
+                 WHERE category_id = ? AND sync_state = 'skipped'",
+            )
             .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(n == 1)
+    }
+
+    async fn detach_mirror(&self, id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ? AND paamonim_line_id IS NOT NULL",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE transactions SET paamonim_line_id = NULL, mirror_date = NULL,
+               sync_state = 'skipped' WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn retry_mirror(&self, id: i64) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE transactions SET sync_state =
+               CASE WHEN paamonim_line_id IS NULL THEN 'pending' ELSE 'modified' END
+             WHERE id = ? AND sync_state = 'error'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    async fn pending_line_deletes(&self) -> Result<Vec<LineDelete>> {
+        let rows = sqlx::query("SELECT line_id, date FROM mirror_deletes ORDER BY seq")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(LineDelete {
+                    line_id: r.try_get("line_id")?,
+                    date: r.try_get("date")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn queue_line_delete(&self, line_id: &str, date: &str) -> Result<()> {
+        sqlx::query("INSERT IGNORE INTO mirror_deletes (line_id, date) VALUES (?, ?)")
+            .bind(line_id)
+            .bind(date)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn finish_line_delete(&self, line_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM mirror_deletes WHERE line_id = ?")
+            .bind(line_id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -233,13 +361,57 @@ impl Storage for MySqlStorage {
 
     async fn known_line_ids(&self) -> Result<Vec<String>> {
         let rows = sqlx::query(
-            "SELECT paamonim_line_id FROM transactions WHERE paamonim_line_id IS NOT NULL",
+            "SELECT paamonim_line_id AS id FROM transactions WHERE paamonim_line_id IS NOT NULL
+             UNION SELECT line_id AS id FROM mirror_deletes",
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.iter()
-            .map(|r| Ok(r.try_get("paamonim_line_id")?))
-            .collect()
+        rows.iter().map(|r| Ok(r.try_get("id")?)).collect()
+    }
+
+    async fn baseline_mirror(&self) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        let done: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mirror_meta WHERE k = 'baseline'")
+            .fetch_one(&mut *tx)
+            .await?;
+        let mut n = 0;
+        if done == 0 {
+            // Imported lines keep their Paamonim day from here on.
+            sqlx::query(
+                "UPDATE transactions SET mirror_date = date
+                 WHERE paamonim_line_id IS NOT NULL AND mirror_date IS NULL AND sync_state = 'synced'",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE transactions SET sync_state = 'synced'
+                 WHERE sync_state = 'modified' AND paamonim_line_id IS NOT NULL",
+            )
+            .execute(&mut *tx)
+            .await?;
+            n = sqlx::query(
+                "UPDATE transactions SET sync_state = 'local'
+                 WHERE sync_state IN ('pending', 'modified', 'verifying', 'error', 'skipped')",
+            )
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
+            sqlx::query("DELETE FROM mirror_deletes")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO mirror_meta (k, v) VALUES ('baseline', '1')")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(n)
+    }
+
+    async fn clear_mirror_baseline(&self) -> Result<()> {
+        sqlx::query("DELETE FROM mirror_meta WHERE k = 'baseline'")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn import_paamonim(&self, batch: &ImportBatch) -> Result<ImportSummary> {
@@ -335,6 +507,11 @@ impl Storage for MySqlStorage {
         .await?
         .into_iter()
         .collect();
+        let queued: HashSet<String> = sqlx::query_scalar("SELECT line_id FROM mirror_deletes")
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
         for t in &batch.transactions {
             let cat = t
                 .category_key
@@ -343,6 +520,41 @@ impl Storage for MySqlStorage {
                 .copied()
                 .flatten();
             let pm = t.payment_key.as_ref().and_then(|k| pms.get(k)).copied();
+            // Deleted here and waiting to be deleted there: don't bring it back.
+            if queued.contains(&t.line_id) {
+                sum.transactions_skipped += 1;
+                continue;
+            }
+            if !known.contains(&t.line_id) {
+                // A line we posted whose id we never recorded: link it, keeping the exact
+                // local amount, rather than adding it a second time.
+                let candidates: Vec<(i64, i64)> = sqlx::query_as(
+                    "SELECT id, amount_agorot FROM transactions
+                     WHERE paamonim_line_id IS NULL AND sync_state IN ('verifying', 'error')
+                       AND date = ? AND category_id <=> ? ORDER BY id",
+                )
+                .bind(&t.date)
+                .bind(cat)
+                .fetch_all(&mut *tx)
+                .await?;
+                if let Some((id, _)) = candidates
+                    .into_iter()
+                    .find(|(_, a)| rounds_to(*a, t.amount_agorot))
+                {
+                    sqlx::query(
+                        "UPDATE transactions SET paamonim_line_id = ?, mirror_date = date,
+                           sync_state = 'synced', payment_method_id = COALESCE(payment_method_id, ?)
+                         WHERE id = ?",
+                    )
+                    .bind(&t.line_id)
+                    .bind(pm)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                    sum.transactions_adopted += 1;
+                    continue;
+                }
+            }
             if known.contains(&t.line_id) {
                 // Only fill in links that were missing; never overwrite local edits.
                 sqlx::query(
@@ -359,8 +571,9 @@ impl Storage for MySqlStorage {
             } else {
                 sqlx::query(
                     "INSERT INTO transactions
-                       (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id, sync_state)
-                     VALUES (?, ?, ?, ?, ?, ?, 'synced')",
+                       (date, amount_agorot, category_id, payment_method_id, note, paamonim_line_id,
+                        mirror_date, sync_state)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'synced')",
                 )
                 .bind(&t.date)
                 .bind(t.amount_agorot)
@@ -368,6 +581,7 @@ impl Storage for MySqlStorage {
                 .bind(pm)
                 .bind(&t.note)
                 .bind(&t.line_id)
+                .bind(&t.date)
                 .execute(&mut *tx)
                 .await?;
                 sum.transactions_added += 1;
@@ -405,9 +619,13 @@ impl Storage for MySqlStorage {
 
     async fn update_transaction(&self, id: i64, t: &NewTransaction) -> Result<()> {
         sqlx::query(
-            "UPDATE transactions SET date = ?, amount_agorot = ?, category_id = ?,
+            // mirror_date first: MySQL applies SET left to right, so it still sees the old date.
+            "UPDATE transactions SET mirror_date = CASE WHEN paamonim_line_id IS NULL THEN NULL
+                                                   ELSE COALESCE(mirror_date, date) END,
+               date = ?, amount_agorot = ?, category_id = ?,
                payment_method_id = ?, note = ?,
-               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+               sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
              WHERE id = ?",
         )
         .bind(&t.date)
@@ -422,10 +640,21 @@ impl Storage for MySqlStorage {
     }
 
     async fn delete_transaction(&self, id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Queue its Paamonim line (if any) for deletion there.
+        sqlx::query(
+            "INSERT IGNORE INTO mirror_deletes (line_id, date)
+             SELECT paamonim_line_id, COALESCE(mirror_date, date) FROM transactions
+             WHERE id = ? AND paamonim_line_id IS NOT NULL",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("DELETE FROM transactions WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -470,7 +699,8 @@ impl Storage for MySqlStorage {
                 // Like any local edit: a line already in Paamonim now differs from it.
                 sqlx::query(
                     "UPDATE transactions SET category_id = ?,
-                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified' ELSE sync_state END
+                       sync_state = CASE WHEN sync_state = 'synced' THEN 'modified'
+                                 WHEN sync_state = 'skipped' THEN 'pending' ELSE sync_state END
                      WHERE category_id = ?",
                 )
                 .bind(to)
@@ -613,7 +843,7 @@ impl Storage for MySqlStorage {
             sqlx::query(
                 "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                            note, sync_state, recurring_series_id)
-                 VALUES (?, ?, ?, ?, ?, 'local', ?)",
+                 VALUES (?, ?, ?, ?, ?, 'pending', ?)",
             )
             .bind(&t.date)
             .bind(t.amount_agorot)
@@ -644,7 +874,7 @@ impl Storage for MySqlStorage {
                 sqlx::query(
                     "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                                note, sync_state, recurring_series_id)
-                     VALUES (?, ?, ?, ?, ?, 'local', ?)",
+                     VALUES (?, ?, ?, ?, ?, 'pending', ?)",
                 )
                 .bind(&o.date)
                 .bind(o.amount_agorot)

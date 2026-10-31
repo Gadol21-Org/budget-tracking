@@ -111,6 +111,8 @@ export const api = {
   updateTransaction: (id: number, t: Omit<Transaction, "id" | "sync_state">) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
+  /** Whether changes are being written to Paamonim. */
+  mirrorStatus: () => request<{ enabled: boolean }>("/api/mirror/status"),
 };
 
 /** Parse a user-typed shekel amount ("12.5") into exact agorot. */
