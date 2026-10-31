@@ -36,8 +36,10 @@ const SYNCED_SHOWN_MS = 2500;
 /** Saving / saved / failed marker of a line in Paamonim; nothing when mirroring is off. */
 function syncMark(t: Transaction): HTMLElement | null {
   if (!state.mirror || t.upcoming) return null;
-  if (IN_FLIGHT.has(t.sync_state)) return el("span", { className: "sync spinning", title: "שומר בפעמונים…", textContent: "🔄" });
+  if (IN_FLIGHT.has(t.sync_state)) return el("span", { className: "sync spinning", title: "שומר בפעמונים…", textContent: "🌀" });
   if (t.sync_state === "error") return el("span", { className: "sync", title: "לא נשמר בפעמונים", textContent: "⚠️" });
+  // Can't go to Paamonim as it is (a top-level category made here, a zero amount, a refund on an expense item).
+  if (t.sync_state === "skipped") return el("span", { className: "sync", title: "לא נשלח לפעמונים: אין לו מקום שם", textContent: "⚠️" });
   if ((state.justSynced.get(t.id) ?? 0) > Date.now()) return el("span", { className: "sync", title: "נשמר בפעמונים", textContent: "✅" });
   return null;
 }
