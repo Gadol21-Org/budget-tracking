@@ -834,25 +834,57 @@ function openTransactionDialog(existing?: Transaction) {
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
   const kindCats = () => state.cats.filter((c) => c.is_income === isIncome);
   const kidsOf = (topId: string) => kindCats().filter((k) => String(k.parent_id) === topId);
-  /** The second list follows the first: empty and locked until a category with sub-categories is picked. */
+  /**
+   * The sub-category list follows the category: just its sub-categories once one is picked, otherwise every
+   * sub-category (named with its parent). It is only locked for a category that has none.
+   */
   const fillSubs = (keepSub = "") => {
-    const kids = kidsOf(topPick.value);
-    subPick.set(kids.map((k) => ({ value: String(k.id), label: k.name })), keepSub);
-    subPick.setDisabled(kids.length === 0, kids.length ? "חיפוש תת-קטגוריה…" : topPick.value ? "אין תתי-קטגוריות" : "קודם בוחרים קטגוריה");
-  };
-  topPick.input.addEventListener("change", () => fillSubs());
-  /** The category the transaction goes on: the sub-category when the category has any. */
-  const categoryId = (): number | null => {
     const top = topPick.value;
-    if (!top) return null;
-    if (kidsOf(top).length === 0) return Number(top);
+    const kids = top ? kidsOf(top) : kindCats().filter((k) => k.parent_id != null);
+    subPick.set(
+      kids.map((k) => ({ value: String(k.id), label: top ? k.name : catPath(k.id) })),
+      kids.some((k) => String(k.id) === keepSub) ? keepSub : "",
+    );
+    subPick.setDisabled(top !== "" && kids.length === 0, top && kids.length === 0 ? "אין תתי-קטגוריות" : "חיפוש תת-קטגוריה…");
+  };
+  topPick.input.addEventListener("change", () => ((err.textContent = ""), fillSubs()));
+  // Picking a sub-category first fills in its category.
+  subPick.input.addEventListener("change", () => {
+    err.textContent = "";
+    const sub = subPick.value;
+    const parent = catById(Number(sub))?.parent_id;
+    if (sub && parent != null && topPick.value !== String(parent)) {
+      topPick.pick(String(parent));
+      fillSubs(sub);
+    }
+  });
+  /** The category the transaction goes on: always a sub-category (top-level entries are not mirrored to Paamonim). */
+  const categoryId = (): number => {
+    const top = topPick.value;
+    if (!top) throw new Error("יש לבחור קטגוריה");
     if (subPick.value) return Number(subPick.value);
-    // A transaction already on a parent keeps it; otherwise the sub-category is required.
+    // Only a transaction already on a top-level category (from before sub-categories were required) keeps it.
     if (existing?.category_id === Number(top)) return Number(top);
     throw new Error("יש לבחור תת-קטגוריה");
   };
+  /** Saving stays greyed out until the category (and its sub-category, if it has any) is chosen. */
+  const categoryReady = () => {
+    try {
+      categoryId();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const syncSave = () => {
+    const ready = categoryReady();
+    save.disabled = !ready;
+    for (const b of dlg.querySelectorAll<HTMLButtonElement>(".needs-category")) b.disabled = !ready;
+  };
+  topPick.input.addEventListener("change", syncSave);
+  subPick.input.addEventListener("change", syncSave);
   let firstFill = true;
-  const fillCats = () => {
+  const fillCats = (sync = true) => {
     expBtn.setAttribute("aria-pressed", String(!isIncome));
     incBtn.setAttribute("aria-pressed", String(isIncome));
     // First time: the transaction's own category; after switching kind it no longer applies unless it fits.
@@ -864,14 +896,16 @@ function openTransactionDialog(existing?: Transaction) {
       sub = own?.parent_id != null ? String(own.id) : "";
     }
     firstFill = false;
-    const tops = kindCats().filter((c) => c.parent_id == null);
+    // A category without sub-categories cannot hold transactions, so it is not offered (unless one already sits on it).
+    const tops = kindCats().filter((c) => c.parent_id == null && (kidsOf(String(c.id)).length > 0 || c.id === existing?.category_id));
     if (!tops.some((c) => String(c.id) === top)) (top = ""), (sub = "");
-    topPick.set([{ value: "", label: "ללא קטגוריה" }, ...tops.map((c) => ({ value: String(c.id), label: c.name }))], top);
+    topPick.set(tops.map((c) => ({ value: String(c.id), label: c.name })), top);
     fillSubs(sub);
+    if (sync) syncSave();
   };
   expBtn.onclick = () => ((isIncome = false), fillCats());
   incBtn.onclick = () => ((isIncome = true), fillCats());
-  fillCats();
+  fillCats(false);
 
   const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
@@ -939,6 +973,10 @@ function openTransactionDialog(existing?: Transaction) {
         )
       : el("div", { className: "actions" }, cancel, save),
   );
+  // The update menu of a repeating charge is greyed out the same way.
+  form.querySelectorAll(".menuwrap > button.primary").forEach((b) => b.classList.add("needs-category"));
+  dlg.append(form);
+  syncSave();
   form.onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -978,7 +1016,6 @@ function openTransactionDialog(existing?: Transaction) {
       save.disabled = false;
     }
   };
-  dlg.append(form);
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
   trackDialog(dlg);
