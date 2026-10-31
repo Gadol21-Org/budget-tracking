@@ -788,12 +788,12 @@ const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.s
  * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
  * the series from that occurrence's month on; earlier months are left as they were.
  */
-function openTransactionDialog(existing?: Transaction) {
+function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const seriesId = existing?.upcoming ? existing.recurring_series_id! : undefined;
   const segment = state.recurring.find((s) => s.id === existing?.recurring_segment_id);
   /** The month of the occurrence being edited; the date field may move the charge out of it. */
   const month = existing?.date.slice(0, 7) ?? "";
-  let isIncome = existing ? existing.amount_agorot > 0 : false;
+  let isIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
   const dlg = el("dialog");
   const amount = el("input", {
     type: "text",
@@ -1230,8 +1230,18 @@ document.addEventListener("touchend", endPull);
 document.addEventListener("touchcancel", endPull);
 
 root.replaceChildren(el("main", {}, el("div", { className: "empty", textContent: "טוען…" })));
-load().catch((e) => {
-  root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));
-});
+load()
+  .then(openShortcutAction)
+  .catch((e) => {
+    root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));
+  });
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+/** App-icon shortcuts (see manifest.webmanifest) start the app at /?action=add-expense or /?action=add-income. */
+function openShortcutAction() {
+  const action = new URLSearchParams(location.search).get("action");
+  if (action !== "add-expense" && action !== "add-income") return;
+  history.replaceState(screenState({ n: 0 }), "", location.pathname);
+  openTransactionDialog(undefined, action === "add-income");
+}
