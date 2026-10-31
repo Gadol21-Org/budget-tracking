@@ -750,17 +750,20 @@ const fixed: Body = (ctx) => {
   const income = inP.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
   const free = income - fixedSum;
 
-  // One row per repeating series.
-  const bySeries = new Map<number, { name: string; sum: number; upcoming: boolean }>();
-  for (const t of fixedTx) {
+  // Each charge is listed once: what already went through (one row per repeating series) here,
+  // and what is still ahead further down. Together they add up to the fixed total above.
+  const bySeries = new Map<number, { name: string; sum: number }>();
+  for (const t of fixedTx.filter((t) => !t.upcoming)) {
     const k = t.recurring_series_id!;
-    const g = bySeries.get(k) ?? { name: t.note || catPath(ctx, t.category_id), sum: 0, upcoming: false };
+    const g = bySeries.get(k) ?? { name: t.note || catPath(ctx, t.category_id), sum: 0 };
     g.sum += -t.amount_agorot;
-    g.upcoming = g.upcoming || !!t.upcoming;
     bySeries.set(k, g);
   }
   const seriesRows = [...bySeries.values()].sort((a, b) => b.sum - a.sum);
+  const paidSum = seriesRows.reduce((s, r) => s + r.sum, 0);
   const upcoming = inP.filter((t) => t.upcoming).sort((a, b) => a.date.localeCompare(b.date));
+  const upcomingOut = -upcoming.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
+  const totalRow = (label: string, v: number) => el("div", { className: "row totalrow" }, el("div", { className: "grow" }, el("b", { textContent: label })), el("b", { className: "num", textContent: shekels(v) }));
 
   // Month-end forecast: variable spending continues at its pace so far; fixed and income are what is known.
   let forecast: HTMLElement | null = null;
@@ -808,14 +811,15 @@ const fixed: Body = (ctx) => {
       kpi("הכנסה", money(income, "income"), el("span", { className: "delta flat", textContent: `${pct(fixedSum, income)} מהן קבועות` })),
       kpi("נשאר אחרי קבועות", money(free, free < 0 ? "expense" : "income"), el("span", { className: "delta flat", textContent: "לחיים ולחיסכון" })),
     ),
-    el("h2", { textContent: "חיובים קבועים" }),
+    el("h2", { textContent: "חיובים קבועים ששולמו" }),
     seriesRows.length
       ? el(
           "div",
           { className: "card rows" },
-          ...seriesRows.map((r) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `${r.upcoming ? "⏳ " : "🔁 "}${r.name}` })), money(r.sum))),
+          ...seriesRows.map((r) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `🔁 ${r.name}` })), money(r.sum))),
+          seriesRows.length > 1 && totalRow("סה״כ ששולם", paidSum),
         )
-      : el("div", { className: "empty", textContent: "אין הוצאות חוזרות בתקופה. הוצאה שמוגדרת כחוזרת תיחשב כאן קבועה." }),
+      : el("div", { className: "empty", textContent: fixedTx.length ? "עוד לא שולמו חיובים קבועים בתקופה." : "אין הוצאות חוזרות בתקופה. הוצאה שמוגדרת כחוזרת תיחשב כאן קבועה." }),
     upcoming.length
       ? el(
           "div",
@@ -832,6 +836,7 @@ const fixed: Body = (ctx) => {
                 money(Math.abs(t.amount_agorot), t.amount_agorot < 0 ? "expense" : "income"),
               ),
             ),
+            upcomingOut > 0 && upcoming.length > 1 && totalRow("סה״כ חיובים צפויים", upcomingOut),
           ),
         )
       : null,
