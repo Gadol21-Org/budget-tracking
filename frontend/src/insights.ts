@@ -2,7 +2,7 @@ import { bounds, contains, shift, title as periodTitle, type Period } from "./pe
 import { type Category, type Transaction } from "./api";
 import { clickable, el, type Child } from "./ui";
 
-export type Dash = "overview" | "cats" | "trends";
+export type Dash = "overview" | "cats" | "trends" | "changes" | "fixed" | "rhythm";
 /** What the selected period is compared with. */
 export type Cmp = { kind: "prev" } | { kind: "avg"; n: number } | { kind: "yoy" } | { kind: "custom"; period: Period };
 /** Which insights screen is open: a dashboard, and inside "cats" optionally a category and a sub-category. */
@@ -34,6 +34,9 @@ const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
   ["cats", "🧩", "קטגוריות"],
   ["trends", "📈", "מגמות"],
+  ["changes", "🔀", "מה השתנה"],
+  ["fixed", "📌", "קבוע ומשתנה"],
+  ["rhythm", "📅", "קצב חודשי"],
 ];
 
 /** Categories are told apart by colour in the donut and the stacked chart. */
@@ -204,19 +207,22 @@ function barChart(o: BarOpts): string {
   return out + "</svg>";
 }
 
-function lineChart(values: number[], labels: string[], color: string): string {
+function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
   const W = 360, H = 90, padX = 10, top = 10;
-  const max = Math.max(0, ...values), min = Math.min(0, ...values), span = max - min || 1;
-  const x = (i: number) => padX + (i * (W - 2 * padX)) / Math.max(1, values.length - 1);
+  const all = [...values, ...(ghost ?? [])];
+  const max = Math.max(0, ...all), min = Math.min(0, ...all), span = max - min || 1;
+  const n = Math.max(values.length, ghost?.length ?? 0, labels.length);
+  const x = (i: number) => padX + (i * (W - 2 * padX)) / Math.max(1, n - 1);
   const y = (v: number) => top + ((max - v) / span) * H;
-  const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const poly = (vs: number[]) => vs.map((v, i) => `${x(i)},${y(v)}`).join(" ");
   const last = values.length - 1;
   return (
     `<svg viewBox="0 0 ${W} ${H + top + 18}" width="100%" role="img" style="direction:ltr">` +
     `<line x1="${padX}" x2="${W - padX}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>` +
-    `<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" points="${pts}"/>` +
+    (ghost ? `<polyline fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" stroke-linejoin="round" points="${poly(ghost)}"/>` : "") +
+    `<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" points="${poly(values)}"/>` +
     `<circle cx="${x(last)}" cy="${y(values[last])}" r="4" fill="${color}"/>` +
-    labels.map((l, i) => (i % 2 === 0 || i === last ? `<text x="${x(i)}" y="${top + H + 14}" font-size="9" text-anchor="middle" fill="var(--muted)">${esc(l)}</text>` : "")).join("") +
+    labels.map((l, i) => (i % labelEvery === 0 || i === labels.length - 1 ? `<text x="${x(i)}" y="${top + H + 14}" font-size="9" text-anchor="middle" fill="var(--muted)">${esc(l)}</text>` : "")).join("") +
     "</svg>"
   );
 }
@@ -250,12 +256,14 @@ export function insightsView(ctx: Ctx): HTMLElement {
       return b;
     }),
   );
+  // With six chips the open one can sit off-screen: bring it into view after the page is laid out.
+  requestAnimationFrame(() => chips.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ inline: "center", block: "nearest" }));
   const base = basePeriods(ctx.period, ctx.ins.cmp);
   const cmpBtn = el("button", { className: "cmpbtn", type: "button", textContent: `${base.label} ▾` });
   cmpBtn.onclick = () => openCompareDialog(ctx);
   const partial = isPartial(ctx.period);
-  const body = { overview, cats, trends }[ctx.ins.dash](ctx, base.label, partial);
-  const hasCompare = ctx.ins.dash !== "trends";
+  const body = { overview, cats, trends, changes, fixed, rhythm }[ctx.ins.dash](ctx, base.label, partial);
+  const hasCompare = ctx.ins.dash !== "trends" && ctx.ins.dash !== "fixed";
   return el(
     "div",
     {},
@@ -614,4 +622,263 @@ const trends: Body = (ctx) => {
     ),
     el("div", { className: "muted small pad", textContent: "הקשה על חודש בגרף בוחרת אותו כתקופה בכל המסכים." }),
   );
+};
+
+// ---- Dashboard: what changed ---------------------------------------------------------------------
+
+const catPath = (ctx: Ctx, id: number | null) => {
+  const c = ctx.cats.find((x) => x.id === id);
+  const p = c?.parent_id != null ? ctx.cats.find((x) => x.id === c.parent_id) : undefined;
+  return p && c ? `${p.name} › ${c.name}` : catName(ctx, id);
+};
+
+const changes: Body = (ctx, baseLabel, partial) => {
+  const cur = aggregate(ctx, ctx.period);
+  const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p));
+  interface Item { top: number | null; sub?: number; name: string; parent?: string; now: number; was: number }
+  const items = new Map<string, Item>();
+  const put = (a: Agg, weight: number, isNow: boolean) => {
+    for (const [top, g] of a.groups) {
+      const add = (key: string, sub: number | undefined, name: string, parent: string | undefined, v: number) => {
+        const it = items.get(key) ?? { top, sub, name, parent, now: 0, was: 0 };
+        if (isNow) it.now += v;
+        else it.was += v * weight;
+        items.set(key, it);
+      };
+      for (const [kid, v] of g.kids) add(`${top}:${kid}`, kid, catName(ctx, kid), catName(ctx, top), v);
+      if (g.direct > 0) add(`${top}:`, undefined, catName(ctx, top), undefined, g.direct);
+    }
+  };
+  put(cur, 1, true);
+  for (const b of bases) put(b, 1 / bases.length, false);
+  const list = [...items.values()].map((i) => ({ ...i, d: i.now - i.was }));
+  const up = list.filter((i) => i.d > 0).sort((a, b) => b.d - a.d).slice(0, 6);
+  const down = list.filter((i) => i.d < 0).sort((a, b) => a.d - b.d).slice(0, 6);
+  const wasTotal = bases.reduce((s, b) => s + b.expense, 0) / bases.length;
+  const net = cur.expense - wasTotal;
+  const max = Math.max(1, ...up.map((i) => i.d), ...down.map((i) => -i.d));
+  const row = (i: (typeof list)[number], grow: boolean) => {
+    const color = partial ? "var(--muted)" : grow ? "var(--expense)" : "var(--income)";
+    const r = el(
+      "div",
+      { className: "row" },
+      el("div", { className: "grow" }, el("div", { className: "name", textContent: i.name }), i.parent ? el("div", { className: "muted small", textContent: i.parent }) : null),
+      el("div", { className: "changebar" }, el("span", { style: `width:${Math.max(4, (Math.abs(i.d) / max) * 100)}%;background:${color}` })),
+      el("div", { className: "amt" }, el("span", { className: "num", style: `color:${color}`, textContent: `${grow ? "+" : "−"}${shekels(Math.abs(i.d))}` }), i.was === 0 && el("div", { className: "delta flat", textContent: "חדש" })),
+      el("span", { className: "chev muted", textContent: "‹" }),
+    );
+    return clickable(r, () => ctx.navigate({ dash: "cats", cat: i.top, sub: i.sub }, "push"));
+  };
+  return el(
+    "div",
+    {},
+    el(
+      "div",
+      { className: "card", style: "text-align:center" },
+      el("div", { className: "muted small", textContent: `סך ההוצאות ${baseLabel}` }),
+      el("div", { className: "num", style: `font-size:1.5rem;font-weight:800;color:${partial ? "var(--muted)" : net > 0 ? "var(--expense)" : "var(--income)"}`, textContent: `${net > 0 ? "+" : "−"}${shekels(Math.abs(net))}` }),
+      el("div", { className: "muted small", textContent: `${shekels(cur.expense)} לעומת ${shekels(wasTotal)}` }),
+    ),
+    el("h2", { textContent: "מה הגדיל את ההוצאות" }),
+    up.length ? el("div", { className: "card rows" }, ...up.map((i) => row(i, true))) : el("div", { className: "empty", textContent: "שום דבר לא עלה" }),
+    el("h2", { textContent: "מה הקטין את ההוצאות" }),
+    down.length ? el("div", { className: "card rows" }, ...down.map((i) => row(i, false))) : el("div", { className: "empty", textContent: "שום דבר לא ירד" }),
+    el("div", { className: "muted small pad", textContent: "הקשה על שורה פותחת אותה בפירוט הקטגוריות." }),
+  );
+};
+
+// ---- Dashboard: fixed vs variable ----------------------------------------------------------------
+
+/** Fixed = charges that come from a repeating series set up in the app (rent, subscriptions…), settled or still ahead. */
+const isFixed = (t: Transaction) => t.recurring_series_id != null;
+const daysInMonth = (month: string) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+
+const fixed: Body = (ctx) => {
+  const inP = ctx.txs.filter((t) => contains(ctx.period, t.date));
+  const expenses = inP.filter((t) => t.amount_agorot < 0);
+  const fixedTx = expenses.filter(isFixed);
+  const fixedSum = -fixedTx.reduce((s, t) => s + t.amount_agorot, 0);
+  const total = -expenses.reduce((s, t) => s + t.amount_agorot, 0);
+  const variable = total - fixedSum;
+  const income = inP.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
+  const free = income - fixedSum;
+
+  // One row per repeating series.
+  const bySeries = new Map<number, { name: string; sum: number; upcoming: boolean }>();
+  for (const t of fixedTx) {
+    const k = t.recurring_series_id!;
+    const g = bySeries.get(k) ?? { name: t.note || catPath(ctx, t.category_id), sum: 0, upcoming: false };
+    g.sum += -t.amount_agorot;
+    g.upcoming = g.upcoming || !!t.upcoming;
+    bySeries.set(k, g);
+  }
+  const seriesRows = [...bySeries.values()].sort((a, b) => b.sum - a.sum);
+  const upcoming = inP.filter((t) => t.upcoming).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Month-end forecast: variable spending continues at its pace so far; fixed and income are what is known.
+  let forecast: HTMLElement | null = null;
+  if (ctx.period.kind === "month" && isPartial(ctx.period)) {
+    const day = new Date().getDate(), n = daysInMonth(ctx.period.month);
+    const varSoFar = -expenses.filter((t) => !isFixed(t)).reduce((s, t) => s + t.amount_agorot, 0);
+    const projVar = (varSoFar / day) * n;
+    const bal = income - fixedSum - projVar;
+    forecast = el(
+      "div",
+      {},
+      el("h2", { textContent: "תחזית לסוף החודש" }),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "rows" },
+          el("div", { className: "row" }, el("div", { className: "grow", textContent: `הוצאה משתנה עד היום (${day} מתוך ${n} ימים)` }), money(varSoFar)),
+          el("div", { className: "row" }, el("div", { className: "grow", textContent: "בקצב הזה, עד סוף החודש" }), money(Math.round(projVar))),
+          el("div", { className: "row" }, el("div", { className: "grow" }, el("b", { textContent: "💡 יתרה צפויה בסוף החודש" })), el("b", { className: `num ${bal < 0 ? "expense" : "income"}`, textContent: shekels(Math.round(bal)) })),
+        ),
+        day < 7 && el("div", { className: "muted small", textContent: "מוקדם בחודש: התחזית גסה וצפויה להשתפר ככל שהחודש מתקדם." }),
+        el("div", { className: "muted small", textContent: "מבוססת על קצב ההוצאה המשתנה עד היום, החיובים החוזרים וההכנסות שידועים." }),
+      ),
+    );
+  }
+  const pct = (v: number, of: number) => (of > 0 ? `${Math.round((v / of) * 100)}%` : "–");
+  return el(
+    "div",
+    {},
+    el(
+      "div",
+      { className: "card" },
+      el("div", { className: "muted small", textContent: "מתוך ההוצאות בתקופה" }),
+      el("div", { className: "splitbar" }, el("div", { style: `width:${total ? (fixedSum / total) * 100 : 0}%;background:#4f46e5` }), el("div", { style: "flex:1;background:color-mix(in srgb, var(--brand) 35%, transparent)" })),
+      el(
+        "div",
+        { className: "splitlegend" },
+        el("span", {}, el("i", { style: "background:#4f46e5" }), "קבוע ", el("b", { className: "num", textContent: shekels(fixedSum) }), ` (${pct(fixedSum, total)})`),
+        el("span", {}, el("i", { style: "background:color-mix(in srgb, var(--brand) 35%, transparent)" }), "משתנה ", el("b", { className: "num", textContent: shekels(variable) })),
+      ),
+    ),
+    el(
+      "div",
+      { className: "kpis" },
+      kpi("הכנסה", money(income, "income"), el("span", { className: "delta flat", textContent: `${pct(fixedSum, income)} מהן קבועות` })),
+      kpi("נשאר אחרי קבועות", money(free, free < 0 ? "expense" : "income"), el("span", { className: "delta flat", textContent: "לחיים ולחיסכון" })),
+    ),
+    el("h2", { textContent: "חיובים קבועים" }),
+    seriesRows.length
+      ? el(
+          "div",
+          { className: "card rows" },
+          ...seriesRows.map((r) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `${r.upcoming ? "⏳ " : "🔁 "}${r.name}` })), money(r.sum))),
+        )
+      : el("div", { className: "empty", textContent: "אין הוצאות חוזרות בתקופה. הוצאה שמוגדרת כחוזרת תיחשב כאן קבועה." }),
+    upcoming.length
+      ? el(
+          "div",
+          {},
+          el("h2", { textContent: "צפוי עוד בתקופה" }),
+          el(
+            "div",
+            { className: "card rows" },
+            ...upcoming.map((t) =>
+              el(
+                "div",
+                { className: "row upcoming" },
+                el("div", { className: "grow" }, el("div", { className: "name", textContent: `⏳ ${t.note || catPath(ctx, t.category_id)}` }), el("div", { className: "muted small", textContent: new Date(`${t.date}T00:00:00`).toLocaleDateString("he-IL", { day: "numeric", month: "long" }) })),
+                money(Math.abs(t.amount_agorot), t.amount_agorot < 0 ? "expense" : "income"),
+              ),
+            ),
+          ),
+        )
+      : null,
+    forecast,
+  );
+};
+
+// ---- Dashboard: monthly rhythm -------------------------------------------------------------------
+
+const WEEKDAYS = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
+const dayOfWeek = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+
+/** Variable (non-repeating) spending per day of a month, in agorot; index 0 = the 1st. */
+function dayTotals(ctx: Ctx, month: string): number[] {
+  const out = Array<number>(daysInMonth(month)).fill(0);
+  for (const t of ctx.txs) if (t.amount_agorot < 0 && !isFixed(t) && t.date.startsWith(month)) out[Number(t.date.slice(8)) - 1] += -t.amount_agorot;
+  return out;
+}
+
+const rhythm: Body = (ctx) => {
+  const p = ctx.period;
+  const { from, to } = bounds(p);
+  const today = todayIso();
+  const end = to < today ? to : today;
+  const parts: Child[] = [];
+
+  if (p.kind === "month") {
+    const days = dayTotals(ctx, p.month);
+    const elapsed = isPartial(p) ? new Date().getDate() : days.length;
+    const shown = days.slice(0, elapsed);
+    const nz = shown.filter((v) => v > 0).sort((a, b) => a - b);
+    const scale = nz.length ? nz[Math.min(nz.length - 1, Math.floor(nz.length * 0.9))] : 1;
+    const lead = dayOfWeek(`${p.month}-01`); // grid starts on Sunday
+    const cells: Child[] = [
+      ...WEEKDAYS.map((d) => el("div", { className: "hmhead", textContent: d })),
+      ...Array.from({ length: lead }, () => el("div", { className: "hmgap" })),
+      ...days.map((v, i) => {
+        const future = i >= elapsed;
+        const t = future ? 0 : Math.min(1, v / scale);
+        const c = el("div", { className: `hmcell${future ? " future" : ""}`, title: `${i + 1}: ${shekels(v)}`, textContent: String(i + 1) });
+        if (!future && v > 0) {
+          c.style.background = `color-mix(in srgb, var(--expense) ${Math.round(12 + t * 78)}%, transparent)`;
+          if (t > 0.55) c.style.color = "#fff";
+        }
+        return c;
+      }),
+    ];
+    const peak = shown.reduce((m, v, i) => (v > shown[m] ? i : m), 0);
+    parts.push(
+      el("h2", { textContent: "הוצאה יומית" }),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "hm" }, ...cells),
+        el("div", { className: "muted small", style: "margin-top:8px", textContent: "כהה יותר = יותר הוצאה באותו יום. ללא חיובים חוזרים, כדי שהרגלים יבלטו." }),
+        shown[peak] > 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "🛒" }), el("div", {}, "היום עם ההוצאה הגדולה ביותר: ה-", el("b", { textContent: String(peak + 1) }), " (", money(shown[peak]), ").")),
+      ),
+    );
+
+    // Cumulative spending through the month, against the comparison.
+    const cum = (vs: number[]) => vs.reduce<number[]>((a, v, i) => (a.push((a[i - 1] ?? 0) + v), a), []);
+    const bases = basePeriods(p, ctx.ins.cmp).periods.filter((b): b is { kind: "month"; month: string } => b.kind === "month");
+    let ghost: number[] | undefined;
+    if (bases.length) {
+      const per = bases.map((b) => cum(dayTotals(ctx, b.month)));
+      ghost = Array.from({ length: days.length }, (_, i) => per.reduce((s, c) => s + (c[Math.min(i, c.length - 1)] ?? 0), 0) / per.length);
+    }
+    parts.push(
+      el("h2", { textContent: "הוצאה מצטברת במהלך החודש" }),
+      el(
+        "div",
+        { className: "card" },
+        svgBox(lineChart(cum(shown), days.map((_, i) => String(i + 1)), "var(--expense)", ghost, 5)),
+        ghost ? el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "החודש"), el("span", {}, el("i", { style: "background:var(--muted)" }), basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, ""))) : null,
+      ),
+    );
+  } else {
+    parts.push(el("div", { className: "muted small pad", textContent: "מפת החום היומית זמינה כשבוחרים חודש בודד. להלן ממוצע לפי יום בשבוע לתקופה שנבחרה." }));
+  }
+
+  // Average spending per weekday over the days of the period that have passed.
+  const sums = Array<number>(7).fill(0), counts = Array<number>(7).fill(0);
+  for (let d = from; d <= end; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) counts[dayOfWeek(d)]++;
+  for (const t of ctx.txs) if (t.amount_agorot < 0 && !isFixed(t) && t.date >= from && t.date <= end) sums[dayOfWeek(t.date)] += -t.amount_agorot;
+  const avg = sums.map((s, i) => (counts[i] ? s / counts[i] : 0));
+  const peakDay = avg.reduce((m, v, i) => (v > avg[m] ? i : m), 0);
+  parts.push(
+    el("h2", { textContent: "ממוצע לפי יום בשבוע" }),
+    el(
+      "div",
+      { className: "card" },
+      svgBox(barChart({ labels: WEEKDAYS, tips: WEEKDAYS.map((d, i) => `${d}: ${shekels(avg[i])}`), series: [avg], colors: ["var(--expense)"], highlight: new Set([peakDay]), height: 90 })),
+      avg[peakDay] > 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "📅" }), el("div", {}, "יום ", el("b", { textContent: WEEKDAYS[peakDay] }), " הוא היום היקר ביותר: ", money(Math.round(avg[peakDay])), " בממוצע.")),
+    ),
+  );
+  return el("div", {}, ...parts);
 };

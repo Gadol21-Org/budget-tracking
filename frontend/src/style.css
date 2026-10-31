@@ -223,3 +223,13 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .chart + .small { margin-top: 8px; }
 form.add label[hidden] { display: none; }
 .card + .btn, .rows + .btn { margin-top: 10px; width: 100%; }
+
+.changebar { width: 34%; flex: none; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.changebar > span { display: block; height: 100%; }
+.splitbar { display: flex; height: 22px; border-radius: 11px; overflow: hidden; margin: 8px 0; }
+.splitlegend { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: .85rem; }
+.splitlegend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; }
+.hm { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.hmhead { text-align: center; font-size: .75rem; color: var(--muted); }
+.hmcell { aspect-ratio: 1; border-radius: 6px; font-size: .72rem; display: flex; align-items: flex-end; justify-content: flex-start; padding: 2px 4px; background: var(--line); color: var(--muted); }
+.hmcell.future { background: transparent; border: 1px dashed var(--line); }
