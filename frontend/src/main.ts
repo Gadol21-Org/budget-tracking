@@ -251,20 +251,18 @@ function businessCard(): HTMLElement | null {
   if (!state.biz.businesses.length) return null;
   const { total, per } = summaryFigures({ txs: state.txs, cats: state.cats, biz: state.biz, period: state.period });
   if (!state.txs.some((t) => businessOf(state.biz, state.cats, t) != null)) return null;
-  const open = (scope: "all" | number) => {
-    state.bizView = { tab: "overview", scope };
+  // Always opens the whole business; a single business is picked from there.
+  const open = () => {
+    state.bizView = { tab: "overview", scope: "all" };
     go("business");
   };
   const card = el(
     "div",
     { className: "card bizcard", style: "margin-top:10px" },
     el("div", { className: "head" }, el("div", { className: "grow" }, el("div", { className: "bizname", textContent: "מתוכם העסקים" }), el("div", { className: "muted small", textContent: "כלול בסכומים למעלה" })), el("b", {}, el("span", { textContent: "רווח " }), money(total.profit, total.profit < 0 ? "expense" : "income")), el("span", { className: "muted", textContent: "›" })),
-    ...per.map(({ b, f }) => {
-      const row = el("div", { className: "row sub" }, el("div", { className: "grow", textContent: b.is_general ? `${b.name} (משותף)` : b.name }), money(f.profit, f.profit < 0 ? "expense" : "income"));
-      return b.is_general ? row : clickable(row, () => open(b.id));
-    }),
+    ...per.map(({ b, f }) => el("div", { className: "row sub" }, el("div", { className: "grow", textContent: b.is_general ? `${b.name} (משותף)` : b.name }), money(f.profit, f.profit < 0 ? "expense" : "income"))),
   );
-  return clickable(card, () => open("all"));
+  return clickable(card, open);
 }
 
 function monthView(): HTMLElement {
