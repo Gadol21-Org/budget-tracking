@@ -1069,7 +1069,9 @@ function render() {
   renderedView = state.view;
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
-  root.replaceChildren(el("div", { className: "shell" }, nav(), el("main", {}, view)), fab);
+  const main = el("main", {}, view);
+  main.dataset.view = state.view;
+  root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);
 }
 
 async function load() {
