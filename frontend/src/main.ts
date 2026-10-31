@@ -1,5 +1,5 @@
 import "./style.css";
-import { clickable, el, type Child } from "./ui";
+import { clickable, dateField, el, fmtDate, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
@@ -197,7 +197,7 @@ function openPeriodDialog() {
         ? [labelled("חודש", monthSel), labelled("שנה", monthYear)]
         : kind === "year"
           ? [labelled("שנה", yearOnly)]
-          : [labelled("מתאריך", from), labelled("עד תאריך", to)]),
+          : [labelled("מתאריך", dateField(from)), labelled("עד תאריך", dateField(to))]),
     );
   };
   draw();
@@ -741,7 +741,7 @@ const monthLabel = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
 function logValue(key: string, v: unknown): string {
   if (v == null || v === "" || (Array.isArray(v) && !v.length)) return key === "end_month" ? "ללא סיום" : "—";
   if (key === "amount_agorot") return formatShekels(v as number);
-  if (key === "date") return new Date(`${v}T00:00:00`).toLocaleDateString("he-IL");
+  if (key === "date") return fmtDate(String(v));
   if (key.endsWith("_month")) return monthLabel(v as string);
   if (key === "is_income") return v ? "הכנסה" : "הוצאה";
   if (Array.isArray(v)) return v.join(", ");
@@ -1100,7 +1100,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     el("label", {}, "סכום (₪)", amount),
     el("label", {}, "קטגוריה", topPick.root),
     el("label", {}, "תת-קטגוריה", subPick.root),
-    el("label", {}, "תאריך", date),
+    el("label", {}, "תאריך", dateField(date)),
     el("label", {}, "הערה", note),
     !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
     repeatBox,
