@@ -175,3 +175,18 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .logtitle { font-weight: 600; }
 .logline { font-size: .85rem; overflow-wrap: anywhere; }
 .logtime { font-size: .8rem; flex: none; }
+
+/* Searchable pick list (category / sub-category). */
+.combo { position: relative; display: flex; flex-direction: column; }
+.combo input { width: 100%; }
+.combo input:disabled { opacity: .55; }
+.combo-list {
+  position: absolute; inset-inline: 0; top: calc(100% + 4px); z-index: 10; max-height: 220px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / .15); color: var(--text);
+}
+.combo-list[hidden] { display: none; }
+.combo-list button { display: block; width: 100%; border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
+.combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
+.combo-list button[aria-selected="true"] { font-weight: 700; }
+.combo-empty { padding: 10px 12px; color: var(--muted); }
