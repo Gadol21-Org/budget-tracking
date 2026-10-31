@@ -362,32 +362,35 @@ async fn ensure_item(
         return Ok(Ok(None));
     }
     let name = squash(name);
-    let find = |items: &[paamonim::CustomItem]| {
-        items.iter().find(|i| i.name == name).map(|i| {
-            (i.category_id.as_deref() == Some(pid)).then(|| format!("{tag}:{}", i.item_id))
-        })
-    };
-    let key = match find(&client.custom_items(item_type).await?) {
+    let find = |items: Vec<paamonim::CustomItem>| items.into_iter().find(|i| i.name == name);
+    let placed = |i: &paamonim::CustomItem| i.category_id.as_deref() == Some(pid);
+    let key = match find(client.custom_items(item_type).await?) {
+        Some(i) if placed(&i) => format!("{tag}:{}", i.item_id),
         // Same name under another category: leave it alone.
-        Some(None) => return Ok(Ok(None)),
-        Some(Some(key)) => key,
-        None => {
+        Some(i) if i.category_id.is_some() => return Ok(Ok(None)),
+        // No item yet, or one with this name that has no category (as an earlier version of
+        // this app left them): create it, or file it, under the category.
+        found => {
+            let what = if found.is_some() { "file" } else { "create" };
             if opts.dry_run {
                 sum.planned
-                    .push(format!("create item \"{name}\" under category {pid}"));
+                    .push(format!("{what} item \"{name}\" under category {pid}"));
                 return Ok(Ok(None));
             }
             *ops += 1;
-            if let Err(e) = client.add_custom_item(&name, item_type, pid).await {
+            if let Err(e) = client
+                .save_custom_item(&name, item_type, pid, found.as_ref())
+                .await
+            {
                 return Ok(Err(format!(
-                    "creating item \"{name}\" in Paamonim failed: {e}"
+                    "saving item \"{name}\" in Paamonim failed: {e}"
                 )));
             }
-            match find(&client.custom_items(item_type).await?) {
-                Some(Some(key)) => key,
+            match find(client.custom_items(item_type).await?) {
+                Some(i) if placed(&i) => format!("{tag}:{}", i.item_id),
                 _ => {
                     return Ok(Err(format!(
-                        "item \"{name}\" was sent but did not appear in Paamonim"
+                        "item \"{name}\" was sent but is not under category {pid} in Paamonim"
                     )))
                 }
             }
@@ -773,13 +776,23 @@ mod tests {
         ) -> StatusCode {
             let mut m = m.lock().unwrap();
             assert_eq!(q["authenticity_token"], "tok");
-            let id = 500 + m.custom.len() as i64;
-            m.custom.push((
-                id,
+            // Like the site: the category comes from the `budget_category` select.
+            let cat = q.get("budget_category").cloned().unwrap_or_default();
+            let item = (
                 q["new_budget_item_name"].clone(),
-                q["budget_category_id"].clone(),
+                cat,
                 q["item_type"] == "income",
-            ));
+            );
+            if let Some(c) = m
+                .custom
+                .iter_mut()
+                .find(|c| c.0.to_string() == q["custom_item_id"])
+            {
+                (c.1, c.2, c.3) = item;
+            } else {
+                let id = 500 + m.custom.len() as i64;
+                m.custom.push((id, item.0, item.1, item.2));
+            }
             StatusCode::OK
         }
         async fn page() -> &'static str {
@@ -1375,6 +1388,41 @@ mod tests {
             vec![(500, "בונוס".to_string(), "17".to_string(), true)]
         );
         assert_eq!(state_of(&s, a).await, "synced");
+    }
+
+    #[tokio::test]
+    async fn an_item_left_without_a_category_is_filed_under_it_and_skipped_rows_are_sent() {
+        let s = with_parent().await;
+        let mock = M::default();
+        // An earlier version created the item, but Paamonim filed it under no category.
+        mock.lock()
+            .unwrap()
+            .custom
+            .push((600, "מאפייה".into(), String::new(), false));
+        let c = serve(mock.clone()).await;
+        let food = cat_id(&s.list_categories().await.unwrap(), "מזון");
+        let bakery = s
+            .create_category(&crate::storage::NewCategory {
+                name: "מאפייה".into(),
+                is_income: false,
+                parent_id: Some(food),
+            })
+            .await
+            .unwrap();
+        let a = s.create_transaction(&tx(D, -2500, bakery)).await.unwrap();
+        s.set_mirror_state(a, "skipped").await.unwrap();
+        assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 1);
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.items_created, sum.mirrored), (1, 1), "{sum:?}");
+        {
+            let m = mock.lock().unwrap();
+            assert_eq!(
+                m.custom,
+                vec![(600, "מאפייה".to_string(), "3".to_string(), false)]
+            );
+        }
+        assert_eq!(state_of(&s, a).await, "synced");
+        assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 0);
     }
 
     #[tokio::test]

@@ -535,6 +535,10 @@ async fn main() -> anyhow::Result<()> {
         if n > 0 {
             tracing::info!("paamonim mirror: {n} earlier transactions set aside, not mirrored");
         }
+        let n = db.requeue_skipped_sub_categories().await?;
+        if n > 0 {
+            tracing::info!("paamonim mirror: {n} skipped transactions queued again");
+        }
         // Also sweeps up what no request triggered: settled repeating charges, category
         // merges, and the rest of a run that hit its operation limit.
         let mins: u64 = std::env::var("PAAMONIM_MIRROR_INTERVAL_MINUTES")

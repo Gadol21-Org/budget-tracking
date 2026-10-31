@@ -239,13 +239,15 @@ impl Client {
     }
 
     /// Add an item of the family's own (`item_type` `expense` / `income`) under Paamonim
-    /// category `category_id`, as the site's "add item" form does. Returns nothing; read the
-    /// items again to get its id.
-    pub async fn add_custom_item(
+    /// category `category_id`, as the site's "add item" form does; with `existing`, move that
+    /// item there instead (the form's edit mode). Returns nothing; read the items again to get
+    /// its id.
+    pub async fn save_custom_item(
         &self,
         name: &str,
         item_type: &str,
         category_id: &str,
+        existing: Option<&crate::paamonim::CustomItem>,
     ) -> Result<()> {
         let (_, page) = self.get_raw("/rishumit", &[]).await?;
         let token = {
@@ -269,10 +271,22 @@ impl Client {
                     .form(&[
                         ("utf8", "\u{2713}"),
                         ("authenticity_token", token.as_str()),
+                        // The category the site files the item under is the form's
+                        // `budget_category` select; `budget_category_id` only carries the
+                        // edited item's current category, to preselect it.
+                        ("budget_category", category_id),
                         ("new_budget_item_name", name),
                         ("item_type", item_type),
-                        ("custom_item_id", ""),
-                        ("budget_category_id", category_id),
+                        (
+                            "custom_item_id",
+                            existing.map_or("", |i| i.item_id.as_str()),
+                        ),
+                        (
+                            "budget_category_id",
+                            existing
+                                .and_then(|i| i.category_id.as_deref())
+                                .unwrap_or(""),
+                        ),
                     ])
             })
             .await?;

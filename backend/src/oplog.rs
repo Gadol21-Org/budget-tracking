@@ -239,6 +239,9 @@ impl Storage for Logged {
     async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool> {
         self.0.retry_mirror(id).await
     }
+    async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize> {
+        self.0.requeue_skipped_sub_categories().await
+    }
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
         self.0.pending_line_deletes().await
     }
