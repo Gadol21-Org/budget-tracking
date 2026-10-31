@@ -186,6 +186,8 @@ interface BarOpts {
   highlight: Set<number>;
   avg?: number;
   height?: number;
+  /** Slot the user tapped to read its values (does not change the active period). */
+  peek?: number | null;
 }
 
 /** Bar chart as inline SVG; every slot is tappable (data-i). Drawn right to left in time (RTL): the first slot is on the right, so the previous/next arrows match. */
@@ -201,6 +203,19 @@ function barChart(o: BarOpts): string {
     const x0 = padX + (n - 1 - i) * slot;
     const hot = o.highlight.size === 0 || o.highlight.has(i);
     const op = hot ? 1 : 0.45;
+    if (o.peek === i && !(o.highlight.has(i) && o.highlight.size < n)) {
+      const fmt = (v: number) => Math.round(v / 100).toLocaleString("he-IL");
+      if (mode === "grouped") {
+        // One figure above each bar of the pair; the taller one is lifted so the two never overlap.
+        const bw = (slot * 0.8) / o.series.length;
+        const ys = o.series.map((sr) => top + H - y(sr[i]) - 4);
+        const order = o.series.map((_, j) => j).sort((a, b) => o.series[b][i] - o.series[a][i]);
+        order.forEach((j, rank) => {
+          const yy = ys[j] - (rank === 0 && o.series.length > 1 && Math.abs(ys[0] - ys[1]) < 10 ? 10 : 0);
+          out += `<text x="${x0 + slot * 0.1 + j * bw + bw / 2}" y="${yy}" font-size="8" font-weight="700" text-anchor="middle" fill="${o.colors[j]}">${fmt(o.series[j][i])}</text>`;
+        });
+      } else out += `<text x="${x0 + slot / 2}" y="${top + H - y(totals[i]) - 4}" font-size="9" font-weight="700" text-anchor="middle" fill="currentColor">${fmt(totals[i])}</text>`;
+    }
     if (mode === "grouped") {
       const bw = (slot * 0.8) / o.series.length;
       o.series.forEach((s, j) => {
@@ -221,6 +236,25 @@ function barChart(o: BarOpts): string {
   });
   if (o.avg) out += `<line x1="${padX}" x2="${W - padX}" y1="${top + H - y(o.avg)}" y2="${top + H - y(o.avg)}" stroke="#d97706" stroke-dasharray="4 3" stroke-width="1.5"/>`;
   return out + "</svg>";
+}
+
+/**
+ * A month bar chart whose taps only print that month's totals above its bars (nothing else opens).
+ * The active period is left alone; tapping the same month again hides them.
+ */
+function peekChart(o: BarOpts): HTMLElement {
+  let peek: number | null = null;
+  const box = el("div", { className: "chart" });
+  const draw = () => (box.innerHTML = barChart({ ...o, peek }));
+  box.addEventListener("click", (e) => {
+    const hit = (e.target as Element).closest("[data-i]");
+    if (!hit) return;
+    const i = Number((hit as HTMLElement).dataset.i);
+    peek = peek === i ? null : i;
+    draw();
+  });
+  draw();
+  return box;
 }
 
 function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
@@ -346,9 +380,6 @@ type Body = (ctx: Ctx, baseLabel: string) => HTMLElement;
 
 const catName = (ctx: Ctx, id: number | null) => ctx.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
 
-function monthTapper(ctx: Ctx, months: string[]) {
-  return (i: number) => ctx.setPeriod({ kind: "month", month: months[i] });
-}
 function highlightSet(ctx: Ctx, months: string[]): Set<number> {
   return new Set(months.flatMap((m, i) => (contains(ctx.period, `${m}-15`) ? [i] : [])));
 }
@@ -405,11 +436,8 @@ const overview: Body = (ctx, baseLabel) => {
     el(
       "div",
       { className: "card" },
-      svgBox(
-        barChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }),
-        monthTapper(ctx, months),
-      ),
-      el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות"), avg != null && el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו"), el("span", { textContent: "הקשה על עמודה בוחרת את החודש" })),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }),
+      el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות"), avg != null && el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו"), el("span", { textContent: "הקשה על עמודה מציגה את הסכום מעליה" })),
     ),
   );
 };
@@ -501,10 +529,7 @@ function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: 
     node: el(
       "div",
       { className: "card" },
-      svgBox(
-        barChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }),
-        monthTapper(ctx, months),
-      ),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו")),
     ),
   };
@@ -624,7 +649,6 @@ const trends: Body = (ctx) => {
   const labels = months.map(shortMonth);
   const tips = months.map((m, i) => `${longMonth(m)}: הכנסות ${shekels(income[i])}, הוצאות ${shekels(expense[i])}`);
   const hi = highlightSet(ctx, months);
-  const tap = monthTapper(ctx, months);
 
   // Averages count only months that have ended and hold data.
   const thisMonth = todayIso().slice(0, 7);
@@ -656,7 +680,7 @@ const trends: Body = (ctx) => {
     el(
       "div",
       { className: "card" },
-      svgBox(barChart({ labels, tips, series: [income, expense], colors: ["var(--income)", "var(--expense)"], mode: "grouped", highlight: hi }), tap),
+      peekChart({ labels, tips, series: [income, expense], colors: ["var(--income)", "var(--expense)"], mode: "grouped", highlight: hi }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--income)" }), "הכנסות"), el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות")),
     ),
     el("h2", { textContent: "חיסכון מצטבר" }),
@@ -665,10 +689,10 @@ const trends: Body = (ctx) => {
     el(
       "div",
       { className: "card" },
-      svgBox(barChart({ labels, tips, series: stackSeries, colors: stackColors, mode: "stacked", highlight: hi, height: 140 }), tap),
+      peekChart({ labels, tips, series: stackSeries, colors: stackColors, mode: "stacked", highlight: hi, height: 140 }),
       el("div", { className: "legend wrap" }, ...shown.map((id, i) => el("span", {}, el("i", { style: `background:${stackColors[i]}` }), catName(ctx, id))), stackSeries.at(-1)!.some((v) => v > 0) && el("span", {}, el("i", { style: `background:${OTHER_COLOR}` }), "אחר")),
     ),
-    el("div", { className: "muted small pad", textContent: "הקשה על חודש בגרף בוחרת אותו כתקופה בכל המסכים." }),
+    el("div", { className: "muted small pad", textContent: "הקשה על חודש בגרף מציגה את הסכום מעליו, בלי לשנות את התקופה הנבחרת." }),
   );
 };
 
