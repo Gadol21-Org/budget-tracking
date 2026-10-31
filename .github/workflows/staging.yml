@@ -1,0 +1,82 @@
+# Deploys any branch to the STAGING container on the Oracle VM (port 8083), with made-up
+# sample data only. Run it from Actions > Staging > Run workflow and pick the branch, or
+# trigger it from a thread (see deploy/STAGING.md). It never touches production: separate
+# container and volume, SQLite, and no MySQL / Google Sheets / Paamonim settings.
+name: Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: Wipe the staging data and reseed the sample data
+        type: boolean
+        default: false
+
+# One staging at a time; a newer run waits for the current one.
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    if: vars.ORACLE_HOST != ''
+    # A native arm64 runner for the arm64 VM; set BUILD_RUNNER=ubuntu-24.04 for an AMD VM.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TARGET: ${{ vars.ORACLE_USER || 'ubuntu' }}@${{ vars.ORACLE_HOST }}
+    steps:
+      - name: Set image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          push: true
+          tags: ${{ env.IMAGE }}:staging-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "${{ vars.ORACLE_HOST }}" > ~/.ssh/known_hosts
+          fi
+      - name: Deploy staging
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESET: ${{ inputs.reset && 'reset' || '' }}
+        run: |
+          ssh="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes $TARGET"
+          $ssh mkdir -p '~/budget-staging'
+          scp -i "$HOME/.ssh/id_deploy" -o BatchMode=yes \
+            deploy/deploy-staging.sh deploy/seed-staging.sh "$TARGET:budget-staging/"
+          printf '%s' "$TOKEN" | $ssh docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          status=0
+          $ssh bash '~/budget-staging/deploy-staging.sh' "$IMAGE:staging-${{ github.sha }}" "$RESET" || status=$?
+          $ssh docker logout ghcr.io
+          exit $status
+      - name: Summary
+        run: |
+          {
+            echo "### Staging deployed"
+            echo "- Branch: \`${{ github.ref_name }}\` at \`${GITHUB_SHA::7}\`"
+            echo "- URL: http://${{ vars.ORACLE_HOST }}:8083"
+            echo "- Data: sample data only (reset: ${{ inputs.reset }})"
+          } >> "$GITHUB_STEP_SUMMARY"
