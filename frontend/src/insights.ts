@@ -203,7 +203,19 @@ function barChart(o: BarOpts): string {
     const x0 = padX + (n - 1 - i) * slot;
     const hot = o.highlight.size === 0 || o.highlight.has(i);
     const op = hot ? 1 : 0.45;
-    if (o.peek === i) out += `<rect x="${x0 + 1}" y="2" width="${slot - 2}" height="${H + top + 14}" rx="6" fill="var(--brand)" opacity="0.14"/>`;
+    if (o.peek === i && !(o.highlight.has(i) && o.highlight.size < n)) {
+      const fmt = (v: number) => Math.round(v / 100).toLocaleString("he-IL");
+      if (mode === "grouped") {
+        // One figure above each bar of the pair; the taller one is lifted so the two never overlap.
+        const bw = (slot * 0.8) / o.series.length;
+        const ys = o.series.map((sr) => top + H - y(sr[i]) - 4);
+        const order = o.series.map((_, j) => j).sort((a, b) => o.series[b][i] - o.series[a][i]);
+        order.forEach((j, rank) => {
+          const yy = ys[j] - (rank === 0 && o.series.length > 1 && Math.abs(ys[0] - ys[1]) < 10 ? 10 : 0);
+          out += `<text x="${x0 + slot * 0.1 + j * bw + bw / 2}" y="${yy}" font-size="8" font-weight="700" text-anchor="middle" fill="${o.colors[j]}">${fmt(o.series[j][i])}</text>`;
+        });
+      } else out += `<text x="${x0 + slot / 2}" y="${top + H - y(totals[i]) - 4}" font-size="9" font-weight="700" text-anchor="middle" fill="currentColor">${fmt(totals[i])}</text>`;
+    }
     if (mode === "grouped") {
       const bw = (slot * 0.8) / o.series.length;
       o.series.forEach((s, j) => {
@@ -227,18 +239,13 @@ function barChart(o: BarOpts): string {
 }
 
 /**
- * A month bar chart whose taps only show that month's figures in a readout under the chart.
- * The active period is left alone; tapping the same month again hides the readout.
+ * A month bar chart whose taps only print that month's totals above its bars (nothing else opens).
+ * The active period is left alone; tapping the same month again hides them.
  */
-function peekChart(o: BarOpts, readout: (i: number) => Child[]): HTMLElement {
+function peekChart(o: BarOpts): HTMLElement {
   let peek: number | null = null;
   const box = el("div", { className: "chart" });
-  const info = el("div", { className: "peek", hidden: true });
-  const draw = () => {
-    box.innerHTML = barChart({ ...o, peek });
-    info.hidden = peek == null;
-    info.replaceChildren(...(peek == null ? [] : (readout(peek).map((c) => (typeof c === "string" ? document.createTextNode(c) : c)).filter(Boolean) as Node[])));
-  };
+  const draw = () => (box.innerHTML = barChart({ ...o, peek }));
   box.addEventListener("click", (e) => {
     const hit = (e.target as Element).closest("[data-i]");
     if (!hit) return;
@@ -247,11 +254,7 @@ function peekChart(o: BarOpts, readout: (i: number) => Child[]): HTMLElement {
     draw();
   });
   draw();
-  return el("div", {}, box, info);
-}
-
-function peekRow(label: string, value: number, cls?: string, dot?: string): HTMLElement {
-  return el("div", { className: "row" }, ...(dot ? [el("i", { className: "dot", style: `background:${dot}` })] : []), el("div", { className: "grow", textContent: label }), el("b", { className: `num ${cls ?? ""}`, textContent: shekels(value) }));
+  return box;
 }
 
 function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
@@ -433,8 +436,8 @@ const overview: Body = (ctx, baseLabel) => {
     el(
       "div",
       { className: "card" },
-      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }, (i) => [el("b", { textContent: longMonth(months[i]) }), peekRow("הוצאות", series[i], "expense")]),
-      el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות"), avg != null && el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו"), el("span", { textContent: "הקשה על עמודה מציגה את ערכי החודש" })),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }),
+      el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות"), avg != null && el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו"), el("span", { textContent: "הקשה על עמודה מציגה את הסכום מעליה" })),
     ),
   );
 };
@@ -526,7 +529,7 @@ function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: 
     node: el(
       "div",
       { className: "card" },
-      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }, (i) => [el("b", { textContent: longMonth(months[i]) }), peekRow(SIDES[sideOf(ctx)].title, series[i], SIDES[sideOf(ctx)].cls)]),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו")),
     ),
   };
@@ -677,7 +680,7 @@ const trends: Body = (ctx) => {
     el(
       "div",
       { className: "card" },
-      peekChart({ labels, tips, series: [income, expense], colors: ["var(--income)", "var(--expense)"], mode: "grouped", highlight: hi }, (i) => [el("b", { textContent: longMonth(months[i]) }), peekRow("הכנסות", income[i], "income"), peekRow("הוצאות", expense[i], "expense"), peekRow("יתרה", income[i] - expense[i], income[i] - expense[i] < 0 ? "expense" : "income")]),
+      peekChart({ labels, tips, series: [income, expense], colors: ["var(--income)", "var(--expense)"], mode: "grouped", highlight: hi }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--income)" }), "הכנסות"), el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות")),
     ),
     el("h2", { textContent: "חיסכון מצטבר" }),
@@ -686,14 +689,10 @@ const trends: Body = (ctx) => {
     el(
       "div",
       { className: "card" },
-      peekChart({ labels, tips, series: stackSeries, colors: stackColors, mode: "stacked", highlight: hi, height: 140 }, (i) => [
-        el("b", { textContent: longMonth(months[i]) }),
-        ...stackSeries.flatMap((s, j) => (s[i] > 0 ? [peekRow(j < shown.length ? catName(ctx, shown[j]) : "אחר", s[i], undefined, stackColors[j])] : [])),
-        peekRow("סה״כ", stackSeries.reduce((a, s) => a + s[i], 0)),
-      ]),
+      peekChart({ labels, tips, series: stackSeries, colors: stackColors, mode: "stacked", highlight: hi, height: 140 }),
       el("div", { className: "legend wrap" }, ...shown.map((id, i) => el("span", {}, el("i", { style: `background:${stackColors[i]}` }), catName(ctx, id))), stackSeries.at(-1)!.some((v) => v > 0) && el("span", {}, el("i", { style: `background:${OTHER_COLOR}` }), "אחר")),
     ),
-    el("div", { className: "muted small pad", textContent: "הקשה על חודש בגרף מציגה את ערכיו, בלי לשנות את התקופה הנבחרת." }),
+    el("div", { className: "muted small pad", textContent: "הקשה על חודש בגרף מציגה את הסכום מעליו, בלי לשנות את התקופה הנבחרת." }),
   );
 };
 
