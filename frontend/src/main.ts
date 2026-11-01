@@ -968,7 +968,6 @@ function combo(placeholder: string) {
   const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
   const close = () => {
     list.hidden = true;
-    root.closest("dialog")?.style.removeProperty("padding-bottom");
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
     document.removeEventListener("click", outside, true);
@@ -1005,18 +1004,10 @@ function combo(placeholder: string) {
   const reveal = () => {
     // Align the field's label (מטבע / קטגוריה) to the top, not the bare field, so the header stays visible.
     const top = root.closest("label") ?? root;
-    const dlg = root.closest("dialog");
-    const go = () => {
-      if (list.hidden) return;
-      if (!dlg) return top.scrollIntoView({ block: "start", behavior: "smooth" });
-      // Add only the space under the form that this scroll needs (the dialog may be too short to scroll that far).
-      const delta = top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop;
-      const missing = dlg.scrollTop + delta - (dlg.scrollHeight - dlg.clientHeight);
-      if (missing > 0) dlg.style.paddingBottom = `${missing}px`;
-      dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
-    };
+    const go = () => !list.hidden && top.scrollIntoView({ block: "start", behavior: "smooth" });
     go();
     setTimeout(go, 350);
+    setTimeout(go, 800);
     // The keyboard resizes the visible area a moment after the field is focused: scroll again once it has.
     const vv = window.visualViewport;
     if (vv) {
