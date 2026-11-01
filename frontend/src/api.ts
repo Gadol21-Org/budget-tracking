@@ -63,10 +63,11 @@ export interface BusinessData {
 }
 
 /** Currencies a transaction can be entered in; the shekel is the default and the stored one. */
-export type Currency = "ILS" | "USD" | "JPY";
+export type Currency = "ILS" | "USD" | "EUR" | "JPY";
 export const CURRENCIES: { code: Currency; symbol: string; name: string }[] = [
   { code: "ILS", symbol: "₪", name: "שקל" },
   { code: "USD", symbol: "$", name: "דולר" },
+  { code: "EUR", symbol: "€", name: "יורו" },
   { code: "JPY", symbol: "¥", name: "ין" },
 ];
 export const currencySymbol = (c: Currency) => CURRENCIES.find((x) => x.code === c)!.symbol;

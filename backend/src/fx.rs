@@ -1,4 +1,4 @@
-//! Foreign-currency transactions (USD, JPY). The shekel is always the stored/reporting
+//! Foreign-currency transactions (USD, EUR, JPY). The shekel is always the stored/reporting
 //! currency: a foreign entry keeps its original amount and the rate used (`TxFx`), and
 //! `amount_agorot` is the shekel value, so totals, Paamonim mirroring and the Sheets backup
 //! keep working on shekels only.
@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::storage::{Storage, TxFx};
 
-pub const CURRENCIES: [&str; 2] = ["USD", "JPY"];
+pub const CURRENCIES: [&str; 3] = ["USD", "EUR", "JPY"];
 
 /// Decimal places of the currency's minor unit (cents; the yen has none).
 pub fn decimals(currency: &str) -> u32 {
