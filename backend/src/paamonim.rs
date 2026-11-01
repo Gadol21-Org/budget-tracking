@@ -376,11 +376,22 @@ fn parse_amount(text: &str) -> Option<i64> {
 /// changes, so a line inherits the most recent one; lines before any date row are dropped, as
 /// are lines whose amount cannot be parsed.
 pub fn parse_history(html: &str) -> Vec<HistoryEntry> {
+    parse_history_from(html, None)
+}
+
+/// Like [`parse_history`], for a response to a single-day query (`start == end`) of `day`.
+/// Paamonim omits the date row of a first line dated after today, so leading lines with no
+/// date row get `day`. A date row naming another day is not rewritten.
+pub fn parse_day_history(html: &str, day: &str) -> Vec<HistoryEntry> {
+    parse_history_from(html, NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+}
+
+fn parse_history_from(html: &str, leading_date: Option<NaiveDate>) -> Vec<HistoryEntry> {
     let doc = Html::parse_fragment(html);
     let rows = Selector::parse(".date-row, .historyLine").unwrap();
     let amount_sel = Selector::parse(".budgetMinus, .budgetPlus").unwrap();
     let small_sel = Selector::parse("small").unwrap();
-    let mut date = None;
+    let mut date = leading_date;
     let mut out = Vec::new();
     for row in doc.select(&rows) {
         if row
@@ -578,6 +589,19 @@ mod tests {
 			<div><small></small></div><div><small></small></div>
 		</div>
 	</div></div>"#;
+
+    #[test]
+    fn day_history_gives_a_headerless_leading_line_the_queried_day() {
+        let line = r#"<div class="historyLine" line_id="9"><div>x <span class="budgetPlus">180</span></div></div>"#;
+        assert!(parse_history(line).is_empty());
+        let got = parse_day_history(line, "2026-11-02");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].date, NaiveDate::from_ymd_opt(2026, 11, 2).unwrap());
+        // A date row naming another day is not overridden.
+        let other = format!(r#"<div class="date-row">שני, 3 בנובמבר 2026</div>{line}"#);
+        let got = parse_day_history(&other, "2026-11-02");
+        assert_eq!(got[0].date, NaiveDate::from_ymd_opt(2026, 11, 3).unwrap());
+    }
 
     #[test]
     fn parses_lines_with_inherited_dates() {
