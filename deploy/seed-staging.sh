@@ -79,5 +79,7 @@ add 4 20   400 "$gifts" "מתנת יום הולדת"
 add 0 3    250 "$gifts" "החזר כספי"
 
 post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":28,\"amount_agorot\":-4900,\"category_id\":$utilities,\"note\":\"אינטרנט\"}" >/dev/null
+# A subscription in dollars: each month is priced at that day's rate (needs the rate service; skipped if it is unreachable).
+post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":20,\"amount_agorot\":-1,\"currency\":\"USD\",\"orig_minor\":-1500,\"category_id\":$movies,\"note\":\"מנוי סטרימינג\"}" >/dev/null || echo "skipped the dollar subscription"
 
 echo "seeded sample data"

@@ -67,6 +67,8 @@ const SCHEMA: [&str; 14] = [
          category_id BIGINT NULL,
          payment_method_id BIGINT NULL,
          note TEXT NOT NULL,
+         currency VARCHAR(8) NULL,               -- foreign-currency rule: USD, EUR, JPY
+         orig_minor BIGINT NULL,                 -- its signed amount in cents / whole yen
          INDEX idx_recurring_series (series_id),
          FOREIGN KEY (category_id) REFERENCES categories(id),
          FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
@@ -182,8 +184,39 @@ impl MySqlStorage {
         let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN mirror_date VARCHAR(10) NULL")
             .execute(&pool)
             .await;
+        // Rules created before they could be in a foreign currency; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE recurring ADD COLUMN currency VARCHAR(8) NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE recurring ADD COLUMN orig_minor BIGINT NULL")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
+}
+
+/// Keep the foreign-currency details with a transaction that was just inserted.
+async fn insert_tx_fx(
+    conn: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    id: i64,
+    f: &TxFx,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO transaction_fx
+           (transaction_id, currency, orig_minor, rate, rate_date, estimated)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE currency = VALUES(currency), orig_minor = VALUES(orig_minor),
+           rate = VALUES(rate), rate_date = VALUES(rate_date), estimated = VALUES(estimated)",
+    )
+    .bind(id)
+    .bind(&f.currency)
+    .bind(f.orig_minor)
+    .bind(f.rate)
+    .bind(&f.rate_date)
+    .bind(f.estimated)
+    .execute(&mut **conn)
+    .await?;
+    Ok(())
 }
 
 /// Where lines of category `id` belong: itself, or what it was merged into when deleted
@@ -1122,7 +1155,7 @@ impl Storage for MySqlStorage {
     async fn list_recurring(&self) -> Result<Vec<RecurringSegment>> {
         let rows = sqlx::query(
             "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
-                    payment_method_id, note
+                    payment_method_id, note, currency, orig_minor
              FROM recurring ORDER BY series_id, start_month",
         )
         .fetch_all(&self.pool)
@@ -1139,6 +1172,8 @@ impl Storage for MySqlStorage {
                     category_id: r.try_get("category_id")?,
                     payment_method_id: r.try_get("payment_method_id")?,
                     note: r.try_get("note")?,
+                    currency: r.try_get("currency")?,
+                    orig_minor: r.try_get("orig_minor")?,
                 })
             })
             .collect()
@@ -1148,8 +1183,8 @@ impl Storage for MySqlStorage {
         let mut tx = self.pool.begin().await?;
         let res = sqlx::query(
             "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
-                                    category_id, payment_method_id, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                    category_id, payment_method_id, note, currency, orig_minor)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(series_id.unwrap_or(0))
         .bind(&r.start_month)
@@ -1159,6 +1194,8 @@ impl Storage for MySqlStorage {
         .bind(r.category_id)
         .bind(r.payment_method_id)
         .bind(&r.note)
+        .bind(&r.currency)
+        .bind(r.orig_minor)
         .execute(&mut *tx)
         .await?;
         let id = res.last_insert_id() as i64;
@@ -1175,7 +1212,7 @@ impl Storage for MySqlStorage {
     async fn update_recurring(&self, id: i64, r: &NewRecurring) -> Result<()> {
         sqlx::query(
             "UPDATE recurring SET start_month = ?, end_month = ?, day = ?, amount_agorot = ?,
-               category_id = ?, payment_method_id = ?, note = ?
+               category_id = ?, payment_method_id = ?, note = ?, currency = ?, orig_minor = ?
              WHERE id = ?",
         )
         .bind(&r.start_month)
@@ -1185,6 +1222,8 @@ impl Storage for MySqlStorage {
         .bind(r.category_id)
         .bind(r.payment_method_id)
         .bind(&r.note)
+        .bind(&r.currency)
+        .bind(r.orig_minor)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -1213,6 +1252,7 @@ impl Storage for MySqlStorage {
         series_id: i64,
         month: &str,
         t: Option<&NewTransaction>,
+        fx: Option<&TxFx>,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let new =
@@ -1223,7 +1263,7 @@ impl Storage for MySqlStorage {
                 .await?
                 .rows_affected();
         if let (1, Some(t)) = (new, t) {
-            sqlx::query(
+            let res = sqlx::query(
                 "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                            note, sync_state, recurring_series_id)
                  VALUES (?, ?, ?, ?, ?, 'pending', ?)",
@@ -1236,6 +1276,9 @@ impl Storage for MySqlStorage {
             .bind(series_id)
             .execute(&mut *tx)
             .await?;
+            if let Some(f) = fx {
+                insert_tx_fx(&mut tx, res.last_insert_id() as i64, f).await?;
+            }
         }
         tx.commit().await?;
         Ok(new == 1)
@@ -1254,7 +1297,7 @@ impl Storage for MySqlStorage {
             .await?
             .rows_affected();
             if new == 1 {
-                sqlx::query(
+                let res = sqlx::query(
                     "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id,
                                                note, sync_state, recurring_series_id)
                      VALUES (?, ?, ?, ?, ?, 'pending', ?)",
@@ -1267,6 +1310,9 @@ impl Storage for MySqlStorage {
                 .bind(o.series_id)
                 .execute(&mut *tx)
                 .await?;
+                if let Some(f) = &o.fx {
+                    insert_tx_fx(&mut tx, res.last_insert_id() as i64, f).await?;
+                }
                 added += 1;
             }
         }

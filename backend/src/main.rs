@@ -543,8 +543,11 @@ async fn recurring_occurrences(
 /// Start a series; returns its id.
 async fn create_recurring(
     State(db): State<Db>,
-    Json(r): Json<recurring::NewRecurring>,
+    Json(mut r): Json<recurring::NewRecurring>,
 ) -> Result<Json<i64>, (StatusCode, String)> {
+    recurring::price_rule(db.as_ref(), &mut r, today())
+        .await
+        .map_err(recurring_error)?;
     recurring::create(db.as_ref(), &r)
         .await
         .map(Json)
@@ -555,9 +558,12 @@ async fn create_recurring(
 async fn change_recurring(
     State(db): State<Db>,
     Path(series_id): Path<i64>,
-    Json(r): Json<recurring::NewRecurring>,
+    Json(mut r): Json<recurring::NewRecurring>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     settle(&db).await?;
+    recurring::price_rule(db.as_ref(), &mut r, today())
+        .await
+        .map_err(recurring_error)?;
     recurring::change_from(db.as_ref(), series_id, &r, today())
         .await
         .map_err(recurring_error)?;
@@ -569,10 +575,12 @@ async fn change_recurring(
 async fn settle_recurring_month(
     State(db): State<Db>,
     Path((series_id, month)): Path<(i64, String)>,
-    Json(t): Json<NewTransaction>,
+    Json(b): Json<TxBody>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     settle(&db).await?;
-    recurring::settle_month(db.as_ref(), series_id, &month, &t)
+    // A foreign month is priced like any foreign transaction: at its own day's rate.
+    let (t, fx) = resolve_body(&db, None, b).await?;
+    recurring::settle_month(db.as_ref(), series_id, &month, &t, fx.as_ref())
         .await
         .map_err(recurring_error)?;
     Ok(StatusCode::NO_CONTENT)

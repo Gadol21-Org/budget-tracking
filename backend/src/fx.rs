@@ -16,6 +16,10 @@ use serde_json::Value;
 
 use crate::storage::{Storage, TxFx};
 
+/// Tests that set `FX_FAKE_RATES` (a process-wide variable) take turns.
+#[cfg(test)]
+pub static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub const CURRENCIES: [&str; 3] = ["USD", "EUR", "JPY"];
 
 /// Decimal places of the currency's minor unit (cents; the yen has none).
@@ -244,8 +248,7 @@ mod tests {
     use crate::storage::{NewTransaction, SqliteStorage};
     use serde_json::json;
 
-    /// The tests set a process-wide variable, so they take turns.
-    static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    use super::ENV_LOCK as ENV;
 
     #[test]
     fn converts_with_the_currencys_minor_unit() {

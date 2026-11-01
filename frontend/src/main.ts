@@ -127,7 +127,14 @@ function syncMark(t: Transaction): HTMLElement | null {
 }
 
 /** The foreign-currency details of a line, if it was entered in USD or JPY. */
-const fxOf = (t: Transaction): Fx | undefined => (t.upcoming ? undefined : state.fx.get(t.id));
+const fxOf = (t: Transaction): Fx | undefined => {
+  if (!t.upcoming) return state.fx.get(t.id);
+  // A foreign repeating charge not yet made: priced at the newest rate until its day comes.
+  const u = t.upcoming_fx;
+  if (!u) return undefined;
+  const units = Math.abs(u.orig_minor) / 10 ** decimals(u.currency);
+  return { transaction_id: 0, currency: u.currency, orig_minor: u.orig_minor, rate: Math.abs(t.amount_agorot) / 100 / units, rate_date: t.date, estimated: true };
+};
 /** Under the category: what the line was entered as, and the rate that gave its shekel amount. */
 function fxLine(t: Transaction): HTMLElement | null {
   const f = fxOf(t);
@@ -1095,14 +1102,16 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const dlg = el("dialog", { className: "fullpage" });
   // The shekel is the default currency, always; a line already entered in USD or JPY opens in that one.
   const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
-  let currency: Currency = startFx?.currency ?? "ILS";
+  // A repeating charge in a foreign currency opens in that currency, with its original amount.
+  const ruleFx = existing?.upcoming && segment?.currency && segment.orig_minor != null ? { currency: segment.currency, orig_minor: segment.orig_minor } : undefined;
+  let currency: Currency = startFx?.currency ?? ruleFx?.currency ?? "ILS";
   const amount = el("input", {
     type: "text",
     inputMode: "decimal",
     placeholder: "0.00",
     required: true,
     autocomplete: "off",
-    value: startFx ? String(Math.abs(startFx.orig_minor) / 10 ** decimals(startFx.currency)) : existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
+    value: startFx ? String(Math.abs(startFx.orig_minor) / 10 ** decimals(startFx.currency)) : ruleFx ? String(Math.abs(ruleFx.orig_minor) / 10 ** decimals(ruleFx.currency)) : existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
   });
   const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
   const topPick = combo("חיפוש קטגוריה…");
@@ -1157,8 +1166,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   showRepeat();
 
   // Foreign currency (USD, JPY): the shekel amount follows the rate for the transaction's day.
-  /** The currency in force: repeating charges are in shekels only. */
-  const cur = (): Currency => (repeat.checked ? "ILS" : currency);
+  /** The currency in force: the same picker serves single and repeating charges. */
+  const cur = (): Currency => currency;
   const amountLbl = el("span", { textContent: "סכום (₪)" });
   const curPick = combo("חיפוש מטבע…");
   curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} ${c.code}` })), currency);
@@ -1172,7 +1181,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
   const fxNote = el("div", { className: "fxnote muted" });
   const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
-  const fxBox = el("div", { className: "fxbox" }, el("div", { className: "field" }, el("span", { textContent: "סכום בשקלים (₪)" }), ils), fxNote, startFx ? refreshBtn : null);
+  const ilsField = el("div", { className: "field" }, el("span", { textContent: "סכום בשקלים (₪)" }), ils);
+  const fxBox = el("div", { className: "fxbox" }, ilsField, fxNote, startFx ? refreshBtn : null);
   /** The rate for the chosen day (null: unknown, e.g. offline: the server converts when the line is sent). */
   let quote: { rate: number; date: string; estimated: boolean } | null = startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null;
   let quoteSeq = 0;
@@ -1197,11 +1207,14 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
       fxNote.textContent = "אין שער זמין כרגע: השער ייקבע כשהתנועה תישלח";
       return;
     }
-    if (!ilsTouched) {
+    // A repeating charge is always priced by the rate of each month's day, so no shekel amount is typed for it.
+    const manual = ilsTouched && !repeat.checked;
+    if (!manual) {
       const minor = origMinor();
       ils.value = minor ? ((minor / 10 ** decimals(cur())) * quote.rate).toFixed(2) : "";
     }
-    fxNote.textContent = ilsTouched ? `סכום החיוב הוזן ידנית · השער יחושב ממנו` : `שער: 1 ${sym} = ₪${formatRate(quote.rate)} · ${fmtDate(quote.date)}${quote.estimated ? " · זמני, יתעדכן אוטומטית כשהיום יסתיים" : ""}`;
+    const rateText = `שער: 1 ${sym} = ₪${formatRate(quote.rate)} · ${fmtDate(quote.date)}${quote.estimated ? " · זמני, יתעדכן אוטומטית כשהיום יסתיים" : ""}`;
+    fxNote.textContent = manual ? `סכום החיוב הוזן ידנית · השער יחושב ממנו` : repeat.checked ? `כל חודש יחושב לפי השער של יום החיוב · ${rateText}` : rateText;
   };
   const refreshQuote = async () => {
     if (cur() === "ILS") return;
@@ -1219,8 +1232,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const syncFx = () => {
     const c = cur();
     if (curPick.value !== c) curPick.pick(c);
-    curSeg.style.display = repeat.checked ? "none" : "";
     fxBox.style.display = c === "ILS" ? "none" : "";
+    ilsField.style.display = repeat.checked ? "none" : "";
     amountLbl.textContent = `סכום (${currencySymbol(c)})`;
     if (c !== "ILS") recalc();
   };
@@ -1329,18 +1342,30 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const cancel = el("button", { type: "button", className: "btn", textContent: seriesId !== undefined ? "סגירה" : "ביטול" });
   cancel.onclick = () => dlg.close();
   const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
+  /** The line as the server takes it, for a single transaction and for one month of a series. */
+  const buildBody = (): TxInput => {
+    const abs = Math.abs(parseAgorot(amount.value));
+    if (abs === 0) throw new Error("יש להזין סכום");
+    const sign = isIncome ? 1 : -1;
+    const body: TxInput = { date: date.value, amount_agorot: sign * abs, category_id: categoryId(), payment_method_id: existing?.payment_method_id ?? null, note: note.value };
+    if (cur() !== "ILS") {
+      // Foreign: send the original amount; the server converts it at the rate for the day unless
+      // the shekel amount was typed in, or the saved line is unchanged (then its rate is kept).
+      delete body.amount_agorot;
+      body.currency = cur();
+      body.orig_minor = sign * origMinor();
+      if (ilsTouched && !repeat.checked) {
+        const a = Math.abs(parseAgorot(ils.value));
+        if (a === 0) throw new Error("יש להזין סכום בשקלים");
+        body.amount_agorot = sign * a;
+      } else if (!forceLookup && fxUnchanged()) body.amount_agorot = existing!.amount_agorot;
+    }
+    return body;
+  };
   // Only this month: becomes a transaction with these values; later months are unchanged.
   const updateOnce = async () => {
     try {
-      const abs = Math.abs(parseAgorot(amount.value));
-      if (abs === 0) throw new Error("יש להזין סכום");
-      await api.settleRecurringMonth(seriesId!, month, {
-        date: date.value,
-        amount_agorot: isIncome ? abs : -abs,
-        category_id: categoryId(),
-        payment_method_id: existing?.payment_method_id ?? null,
-        note: note.value,
-      });
+      await api.settleRecurringMonth(seriesId!, month, buildBody());
       showPeriodFor(date.value);
       dlg.close();
       await load();
@@ -1404,24 +1429,9 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   form.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const abs = Math.abs(parseAgorot(amount.value));
-      if (abs === 0) throw new Error("יש להזין סכום");
-      save.disabled = true;
-      const sign = isIncome ? 1 : -1;
+      const body = buildBody();
       const catId = categoryId();
-      const body: TxInput = { date: date.value, amount_agorot: sign * abs, category_id: catId, payment_method_id: existing?.payment_method_id ?? null, note: note.value };
-      if (cur() !== "ILS") {
-        // Foreign: send the original amount; the server converts it at the rate for the day unless
-        // the shekel amount was typed in, or the saved line is unchanged (then its rate is kept).
-        delete body.amount_agorot;
-        body.currency = cur();
-        body.orig_minor = sign * origMinor();
-        if (ilsTouched) {
-          const a = Math.abs(parseAgorot(ils.value));
-          if (a === 0) throw new Error("יש להזין סכום בשקלים");
-          body.amount_agorot = sign * a;
-        } else if (!forceLookup && fxUnchanged()) body.amount_agorot = existing!.amount_agorot;
-      }
+      save.disabled = true;
       if (repeat.checked) {
         const n = Number(months.value);
         if (forever.value === "months" && !(Number.isInteger(n) && n >= 1)) throw new Error("מספר החודשים אינו תקין");
@@ -1431,7 +1441,10 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
           start_month: start,
           end_month: forever.value === "months" ? addMonths(start, n - 1) : null,
           day: seriesId !== undefined && date.value.slice(0, 7) !== month ? (segment?.day ?? 1) : Number(date.value.slice(8)),
-          amount_agorot: sign * abs,
+          // A foreign rule keeps its original amount; the server estimates the shekels and prices each month at its day's rate.
+          amount_agorot: body.amount_agorot ?? (body.orig_minor! < 0 ? -1 : 1),
+          currency: body.currency ?? null,
+          orig_minor: body.orig_minor ?? null,
           category_id: catId,
           payment_method_id: body.payment_method_id,
           note: body.note,
@@ -1619,6 +1632,7 @@ async function load() {
     sync_state: "synced",
     recurring_series_id: o.series_id,
     recurring_segment_id: o.segment_id,
+    upcoming_fx: o.currency && o.orig_minor != null ? { currency: o.currency, orig_minor: o.orig_minor } : undefined,
     upcoming: true,
   }));
   state.txs = [...txs, ...generated];

@@ -56,7 +56,9 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              amount_agorot INTEGER NOT NULL,
              category_id INTEGER REFERENCES categories(id),
              payment_method_id INTEGER REFERENCES payment_methods(id),
-             note TEXT NOT NULL DEFAULT ''
+             note TEXT NOT NULL DEFAULT '',
+             currency TEXT,                      -- foreign-currency rule: USD, EUR, JPY
+             orig_minor INTEGER                  -- its signed amount in cents / whole yen
          );
          -- What changed, with values before and after as JSON; pruned after a year.
          CREATE TABLE IF NOT EXISTS change_log (
@@ -153,6 +155,15 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
         .exists([])?;
     if !has_mirror_date {
         conn.execute("ALTER TABLE transactions ADD COLUMN mirror_date TEXT", [])?;
+    }
+    let has_rule_currency = conn
+        .prepare("SELECT 1 FROM pragma_table_info('recurring') WHERE name = 'currency'")?
+        .exists([])?;
+    if !has_rule_currency {
+        conn.execute_batch(
+            "ALTER TABLE recurring ADD COLUMN currency TEXT;
+             ALTER TABLE recurring ADD COLUMN orig_minor INTEGER;",
+        )?;
     }
     Ok(conn)
 }
