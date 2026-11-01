@@ -969,8 +969,11 @@ function revealField(input: HTMLElement) {
     } else {
       for (const p of props) dlg.style.removeProperty(p);
     }
-    const delta = top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop;
-    dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
+    const d = dlg.getBoundingClientRect();
+    const t = top.getBoundingClientRect();
+    // A pick list needs room below its field: put the label at the top. Any other field only scrolls if it would be hidden.
+    const delta = input.getAttribute("role") === "combobox" ? t.top - d.top - dlg.clientTop : t.top < d.top ? t.top - d.top : Math.max(0, t.bottom - (d.bottom - 12));
+    if (delta) dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
   };
   unfitDialog();
   go();
@@ -1471,8 +1474,11 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
   trackDialog(dlg);
+  // Do not put the cursor (and the keyboard) on a field when the dialog opens.
+  dlg.tabIndex = -1;
+  dlg.setAttribute("autofocus", "");
   dlg.showModal();
-  amount.focus();
+  if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
 }
 
 function nav(): HTMLElement {
