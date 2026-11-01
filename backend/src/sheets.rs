@@ -309,7 +309,40 @@ async fn check(resp: reqwest::Response) -> Result<Value> {
     Ok(body)
 }
 
+/// Sheet titles are case-insensitive in Google Sheets and may carry stray spaces.
+fn same_title(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+/// Rows per write request, so a huge change log never becomes one giant body.
+const CHUNK_ROWS: usize = 5000;
+
+async fn list_sheets(http: &reqwest::Client, token: &str, base: &str) -> Result<Vec<(i64, String)>> {
+    let meta = check(
+        http.get(format!("{base}?fields=sheets.properties(sheetId,title)"))
+            .bearer_auth(token)
+            .send()
+            .await?,
+    )
+    .await?;
+    Ok(meta["sheets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            Some((
+                s["properties"]["sheetId"].as_i64()?,
+                s["properties"]["title"].as_str()?.to_string(),
+            ))
+        })
+        .collect())
+}
+
+/// Serializes exports: the nightly job and a manual click must not race on creating tabs.
+static EXPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
+    let _guard = EXPORT_LOCK.lock().await;
     let sa = parse_service_account(
         &std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
             .or_else(|_| std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON"))
@@ -318,67 +351,77 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
     let sheet_id = std::env::var("GOOGLE_SHEET_ID").context("GOOGLE_SHEET_ID not set")?;
     let tabs = build_tabs(storage).await?;
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
     let token = access_token(&http, &sa).await?;
     let base = format!("{SHEETS}/{sheet_id}");
 
-    // Create the tabs that are missing; drop the old `Monthly` tab, which is no longer written.
-    let meta = check(
-        http.get(format!("{base}?fields=sheets.properties.title"))
+    // Create the tabs that are missing (matched case-insensitively, so an existing
+    // "transactions" tab is reused and overwritten); drop the old `Monthly` tab.
+    // A tab created by a concurrent or half-finished earlier run is tolerated: on an
+    // "already exists" error we re-read the sheet and try again.
+    let mut attempt = 0;
+    loop {
+        let existing = list_sheets(&http, &token, &base).await?;
+        let mut requests: Vec<Value> = tabs
+            .iter()
+            .filter(|(t, _)| !existing.iter().any(|(_, e)| same_title(e, t)))
+            .map(|(t, _)| json!({"addSheet": {"properties": {"title": t}}}))
+            .collect();
+        if let Some((id, _)) = existing.iter().find(|(_, t)| same_title(t, "Monthly")) {
+            requests.push(json!({"deleteSheet": {"sheetId": id}}));
+        }
+        if requests.is_empty() {
+            break;
+        }
+        let resp = http
+            .post(format!("{base}:batchUpdate"))
             .bearer_auth(&token)
+            .json(&json!({"requests": requests}))
+            .send()
+            .await?;
+        match check(resp).await {
+            Ok(_) => break,
+            Err(e) if attempt < 2 && e.to_string().contains("already exists") => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Use the sheet's real titles for the ranges (they may differ in case from ours).
+    let existing = list_sheets(&http, &token, &base).await?;
+    let real = |t: &str| -> String {
+        existing
+            .iter()
+            .find(|(_, e)| same_title(e, t))
+            .map(|(_, e)| e.clone())
+            .unwrap_or_else(|| t.to_string())
+    };
+    let quoted = |t: &str| format!("'{}'", real(t).replace('\'', "''"));
+
+    let ranges: Vec<String> = tabs.iter().map(|(t, _)| quoted(t)).collect();
+    check(
+        http.post(format!("{base}/values:batchClear"))
+            .bearer_auth(&token)
+            .json(&json!({"ranges": ranges}))
             .send()
             .await?,
     )
     .await?;
-    let sheets_meta: Vec<(i64, &str)> = meta["sheets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|s| {
-            Some((
-                s["properties"]["sheetId"].as_i64()?,
-                s["properties"]["title"].as_str()?,
-            ))
-        })
-        .collect();
-    let mut requests: Vec<Value> = tabs
-        .iter()
-        .filter(|(t, _)| !sheets_meta.iter().any(|(_, e)| e == t))
-        .map(|(t, _)| json!({"addSheet": {"properties": {"title": t}}}))
-        .collect();
-    // Only if another tab remains, since a spreadsheet can't have zero.
-    if let Some((id, _)) = sheets_meta.iter().find(|(_, t)| *t == "Monthly") {
-        requests.push(json!({"deleteSheet": {"sheetId": id}}));
-    }
-    if !requests.is_empty() {
-        check(
-            http.post(format!("{base}:batchUpdate"))
-                .bearer_auth(&token)
-                .json(&json!({"requests": requests}))
-                .send()
-                .await?,
-        )
-        .await?;
-    }
-
     for (tab, rows) in &tabs {
-        let range = format!("'{tab}'");
-        check(
-            http.post(format!("{base}/values/{range}:clear"))
-                .bearer_auth(&token)
-                .json(&json!({}))
-                .send()
-                .await?,
-        )
-        .await?;
-        check(
-            http.put(format!("{base}/values/{range}!A1?valueInputOption=RAW"))
-                .bearer_auth(&token)
-                .json(&json!({"range": format!("{range}!A1"), "majorDimension": "ROWS", "values": rows}))
-                .send()
-                .await?,
-        )
-        .await?;
+        let q = quoted(tab);
+        for (i, chunk) in rows.chunks(CHUNK_ROWS).enumerate() {
+            let start = i * CHUNK_ROWS + 1;
+            let range = format!("{q}!A{start}");
+            check(
+                http.put(format!("{base}/values/{range}?valueInputOption=RAW"))
+                    .bearer_auth(&token)
+                    .json(&json!({"range": range, "majorDimension": "ROWS", "values": chunk}))
+                    .send()
+                    .await?,
+            )
+            .await?;
+        }
     }
     Ok(ExportSummary {
         transactions: tabs[0].1.len() - 1,
@@ -390,6 +433,12 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
 mod tests {
     use super::*;
     use crate::storage::{NewTransaction, SqliteStorage};
+
+    #[test]
+    fn titles_match_ignoring_case_and_spaces() {
+        assert!(same_title("transactions ", "Transactions"));
+        assert!(!same_title("Transactions 2", "Transactions"));
+    }
 
     #[test]
     fn accepts_raw_json_and_base64() {

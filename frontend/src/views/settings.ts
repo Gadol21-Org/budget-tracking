@@ -15,7 +15,10 @@ export function settingsView(): HTMLElement {
       await load();
     } catch (e) {
       out.className = "note error";
-      out.textContent = `שגיאה: ${e instanceof Error ? e.message : e}`;
+      out.textContent =
+        e instanceof TypeError
+          ? "שגיאה: החיבור לשרת נותק לפני סיום הפעולה. ייתכן שהיא עדיין רצה ברקע; נסו שוב בעוד דקה."
+          : `שגיאה: ${e instanceof Error ? e.message : e}`;
     } finally {
       btn.disabled = false;
     }
