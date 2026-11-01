@@ -949,37 +949,42 @@ function menuButton(label: string, items: [string, () => void][], className = "b
 
 
 /**
- * When a pick list (category, sub-category, currency) opens with the keyboard up, scroll its label to the top of the page
- * so the list under the field is not hidden behind the keyboard. The page only gets room for that scroll (the keyboard's
- * height, as the browser reports it) while the list is open; plain fields (amount, note, date) are left to the browser.
+ * When a pick list (category, sub-category, currency) opens with the keyboard up, make the page as tall as the visible area
+ * above the keyboard (as the browser reports it) and scroll the field's label to the top, so the list under the field is
+ * not hidden behind the keyboard. Nothing is added to the page; plain fields (amount, note, date) are left to the browser.
  */
-let releaseRoom = () => {};
+let restorePage = () => {};
 function revealField(input: HTMLElement) {
   const dlg = input.closest("dialog");
-  const form = dlg?.querySelector<HTMLElement>("form");
   const vv = window.visualViewport;
-  if (!dlg || !form) return;
+  if (!dlg) return;
   const top = input.closest("label") ?? input;
   const go = () => {
-    // The keyboard's height: what the browser says it takes off the visible area (zero when the page itself shrinks for it).
-    const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-    form.style.paddingBottom = keyboard > 100 ? `${keyboard}px` : "";
+    // Where the browser does not shrink the page for the keyboard, the visible area is smaller than the window.
+    if (vv && vv.height < window.innerHeight - 100) {
+      dlg.style.height = `${vv.height}px`;
+      dlg.style.top = `${vv.offsetTop}px`;
+    } else {
+      dlg.style.removeProperty("height");
+      dlg.style.removeProperty("top");
+    }
     dlg.scrollTo({ top: dlg.scrollTop + top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop, behavior: "smooth" });
   };
-  releaseRoom();
+  restorePage();
   go();
   const timer = setTimeout(go, 350);
   vv?.addEventListener("resize", go);
-  releaseRoom = () => {
+  restorePage = () => {
     clearTimeout(timer);
     vv?.removeEventListener("resize", go);
-    form.style.paddingBottom = "";
-    releaseRoom = () => {};
+    dlg.style.removeProperty("height");
+    dlg.style.removeProperty("top");
+    restorePage = () => {};
   };
 }
 const isPick = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "combobox" && !!t.closest("dialog");
 document.addEventListener("focusin", (e) => isPick(e.target) && revealField(e.target));
-document.addEventListener("focusout", () => setTimeout(() => !isPick(document.activeElement) && releaseRoom(), 50));
+document.addEventListener("focusout", () => setTimeout(() => !isPick(document.activeElement) && restorePage(), 50));
 
 interface ComboItem {
   value: string;
