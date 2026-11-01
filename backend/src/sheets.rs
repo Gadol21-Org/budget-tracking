@@ -317,7 +317,11 @@ fn same_title(a: &str, b: &str) -> bool {
 /// Rows per write request, so a huge change log never becomes one giant body.
 const CHUNK_ROWS: usize = 5000;
 
-async fn list_sheets(http: &reqwest::Client, token: &str, base: &str) -> Result<Vec<(i64, String)>> {
+async fn list_sheets(
+    http: &reqwest::Client,
+    token: &str,
+    base: &str,
+) -> Result<Vec<(i64, String)>> {
     let meta = check(
         http.get(format!("{base}?fields=sheets.properties(sheetId,title)"))
             .bearer_auth(token)
