@@ -992,6 +992,24 @@ const isPickField = (t: EventTarget | null): t is HTMLElement => t instanceof HT
 document.addEventListener("focusin", (e) => isPickField(e.target) && revealField(e.target));
 document.addEventListener("focusout", () => setTimeout(() => !isPickField(document.activeElement) && unfitDialog(), 50));
 
+
+// TEMPORARY (remove before merge): with ?debug in the address, show the visible-area numbers on screen.
+if (location.search.includes("debug")) {
+  const box = document.createElement("pre");
+  box.style.cssText = "position:fixed;left:0;top:60px;z-index:2147483647;margin:0;padding:4px 6px;background:#000c;color:#0f0;font:10px/1.2 monospace;pointer-events:none;white-space:pre";
+  document.body.append(box);
+  const show = () => {
+    const vv = window.visualViewport;
+    const d = document.querySelector("dialog[open]");
+    const r = d?.getBoundingClientRect();
+    box.textContent = [
+      `inner ${innerWidth}x${innerHeight}  vv ${Math.round(vv?.width ?? 0)}x${Math.round(vv?.height ?? 0)}  vvTop ${Math.round(vv?.offsetTop ?? 0)}  scrollY ${Math.round(scrollY)}`,
+      d ? `dlg top ${Math.round(r!.top)} bottom ${Math.round(r!.bottom)} h ${Math.round(r!.height)} scrollTop ${Math.round(d.scrollTop)} scrollH ${d.scrollHeight}` : "no dialog",
+      `active ${document.activeElement?.tagName}`,
+    ].join("\n");
+  };
+  setInterval(show, 300);
+}
 interface ComboItem {
   value: string;
   label: string;
