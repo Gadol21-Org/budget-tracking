@@ -302,7 +302,7 @@ mod tests {
         assert!(rate_for(&s, "JPY", "2026-10-09", "2026-10-05")
             .await
             .is_err());
-        assert!(rate_for(&s, "EUR", "2026-10-01", "2026-10-05")
+        assert!(rate_for(&s, "GBP", "2026-10-01", "2026-10-05")
             .await
             .is_err());
         std::env::remove_var("FX_FAKE_RATES");
