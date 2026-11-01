@@ -1002,8 +1002,10 @@ function combo(placeholder: string) {
   };
   /** Bring the field to the top of the dialog so the list under it is not behind the keyboard (which opens a moment later). */
   const reveal = () => {
-    input.scrollIntoView({ block: "start", behavior: "smooth" });
-    setTimeout(() => !list.hidden && input.scrollIntoView({ block: "start", behavior: "smooth" }), 350);
+    // Align the field's label (מטבע / קטגוריה) to the top, not the bare field, so the header stays visible.
+    const top = root.closest("label") ?? root;
+    top.scrollIntoView({ block: "start", behavior: "smooth" });
+    setTimeout(() => !list.hidden && top.scrollIntoView({ block: "start", behavior: "smooth" }), 350);
   };
   const justPicked = () => Date.now() - pickedAt <= 500;
   input.onfocus = () => {

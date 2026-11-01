@@ -227,8 +227,6 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
   box-shadow: 0 6px 20px rgb(0 0 0 / .15); color: var(--text);
 }
 .combo-list[hidden] { display: none; }
-/* Room under the field while a list is open, so the dialog can scroll it to the top above the keyboard. */
-dialog:has(.combo-list:not([hidden])) { padding-bottom: 45vh; }
 .combo-list button { display: block; width: 100%; border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
 .combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
 .combo-list button[aria-selected="true"] { font-weight: 700; }
