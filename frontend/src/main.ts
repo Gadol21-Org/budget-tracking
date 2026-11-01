@@ -970,10 +970,10 @@ function combo(placeholder: string) {
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
-    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("click", outside, true);
   };
-  /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not. */
-  const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("pointerdown", outside, true));
+  /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not, and neither must scrolling (a scroll gesture fires pointerdown but no click). */
+  const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("click", outside, true));
   /** When the last item was picked: the tap's own click may land on the field once the layout shifts, and must not reopen the list. */
   let pickedAt = 0;
   const pick = (v: string) => {
@@ -998,10 +998,25 @@ function combo(placeholder: string) {
     );
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
-    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("click", outside, true);
   };
-  input.onfocus = () => (input.select(), Date.now() - pickedAt > 500 && show(""));
-  input.onclick = () => list.hidden && Date.now() - pickedAt > 500 && show("");
+  /** Bring the field to the top of the dialog so the list under it is not behind the keyboard (which opens a moment later). */
+  const reveal = () => {
+    input.scrollIntoView({ block: "start", behavior: "smooth" });
+    setTimeout(() => !list.hidden && input.scrollIntoView({ block: "start", behavior: "smooth" }), 350);
+  };
+  const justPicked = () => Date.now() - pickedAt <= 500;
+  input.onfocus = () => {
+    // The layout can shift after a pick (the shekel box hides) so the tap's click lands on the field: stay closed.
+    if (justPicked()) return input.blur();
+    input.select();
+    show("");
+    reveal();
+  };
+  input.onclick = () => {
+    if (justPicked()) return input.blur();
+    if (list.hidden) (show(""), reveal());
+  };
   input.oninput = () => show(input.value);
   input.onkeydown = (e) => {
     if (e.key === "Tab" && !list.hidden) close();
