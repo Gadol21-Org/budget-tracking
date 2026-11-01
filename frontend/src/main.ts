@@ -1001,6 +1001,9 @@ if (location.search.includes("debug")) {
   const show = () => {
     const vv = window.visualViewport;
     const d = document.querySelector("dialog[open]");
+    // An open dialog is on the top layer, above everything else: put the readout inside it so it is visible.
+    const host = d ?? document.body;
+    if (box.parentElement !== host) host.append(box);
     const r = d?.getBoundingClientRect();
     box.textContent = [
       `inner ${innerWidth}x${innerHeight}  vv ${Math.round(vv?.width ?? 0)}x${Math.round(vv?.height ?? 0)}  vvTop ${Math.round(vv?.offsetTop ?? 0)}  scrollY ${Math.round(scrollY)}`,
