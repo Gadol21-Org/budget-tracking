@@ -953,8 +953,6 @@ function menuButton(label: string, items: [string, () => void][], className = "b
  * (iPhone Safari does not shrink the page for it, so the dialog would otherwise sit partly behind it) and scroll the
  * field's label (מטבע / קטגוריה / הערה) to the top of the dialog, so the field and any list under it are in view.
  */
-/** iPhone Safari reports a visible height that stops about this much (in px) above the real top of the keyboard's ^ v ✓ bar. */
-const KEYBOARD_BAR = 44;
 let unfitDialog = () => {};
 function revealField(input: HTMLElement) {
   const dlg = input.closest("dialog");
@@ -964,7 +962,7 @@ function revealField(input: HTMLElement) {
   const props = ["max-height", "top", "bottom", "margin-block"];
   const go = () => {
     if (vv && vv.height < window.innerHeight - 100) {
-      dlg.style.maxHeight = `${vv.height + KEYBOARD_BAR - 16}px`;
+      dlg.style.maxHeight = `${vv.height - 16}px`;
       dlg.style.top = `${vv.offsetTop + 8}px`;
       dlg.style.bottom = "auto";
       dlg.style.marginBlock = "0";
@@ -995,26 +993,6 @@ document.addEventListener("focusin", (e) => isTextField(e.target) && revealField
 document.addEventListener("focusout", () => setTimeout(() => !isTextField(document.activeElement) && unfitDialog(), 50));
 
 
-// TEMPORARY (remove before merge): with ?debug in the address, show the visible-area numbers on screen.
-if (location.search.includes("debug")) {
-  const box = document.createElement("pre");
-  box.style.cssText = "position:fixed;left:0;top:60px;z-index:2147483647;margin:0;padding:4px 6px;background:#000c;color:#0f0;font:10px/1.2 monospace;pointer-events:none;white-space:pre";
-  document.body.append(box);
-  const show = () => {
-    const vv = window.visualViewport;
-    const d = document.querySelector("dialog[open]");
-    // An open dialog is on the top layer, above everything else: put the readout inside it so it is visible.
-    const host = d ?? document.body;
-    if (box.parentElement !== host) host.append(box);
-    const r = d?.getBoundingClientRect();
-    box.textContent = [
-      `inner ${innerWidth}x${innerHeight}  vv ${Math.round(vv?.width ?? 0)}x${Math.round(vv?.height ?? 0)}  vvTop ${Math.round(vv?.offsetTop ?? 0)}  scrollY ${Math.round(scrollY)}`,
-      d ? `dlg top ${Math.round(r!.top)} bottom ${Math.round(r!.bottom)} h ${Math.round(r!.height)} scrollTop ${Math.round(d.scrollTop)} scrollH ${d.scrollHeight}` : "no dialog",
-      `active ${document.activeElement?.tagName}`,
-    ].join("\n");
-  };
-  setInterval(show, 300);
-}
 interface ComboItem {
   value: string;
   label: string;
