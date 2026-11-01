@@ -19,7 +19,7 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use storage::{
     Business, BusinessLinks, Category, CategoryError, MonthlyTotal, NewCategory, NewTransaction,
     SqliteStorage, Storage, Transaction,
@@ -201,6 +201,39 @@ async fn fx_rate(
     Ok(Json(
         serde_json::json!({ "rate": r.rate, "date": r.date, "estimated": r.estimated }),
     ))
+}
+
+#[derive(Serialize, Deserialize)]
+struct EnabledCurrencies {
+    enabled: Vec<String>,
+    /// Every code that can be added (read only).
+    #[serde(default, skip_deserializing)]
+    supported: Vec<&'static str>,
+}
+
+/// The currencies added in settings, in picker order (the shekel is always available).
+async fn get_currency_settings(
+    State(db): State<Db>,
+) -> Result<Json<EnabledCurrencies>, (StatusCode, String)> {
+    Ok(Json(EnabledCurrencies {
+        enabled: fx::enabled_currencies(db.as_ref())
+            .await
+            .map_err(internal)?,
+        supported: fx::CURRENCIES.to_vec(),
+    }))
+}
+
+async fn put_currency_settings(
+    State(db): State<Db>,
+    Json(b): Json<EnabledCurrencies>,
+) -> Result<Json<EnabledCurrencies>, (StatusCode, String)> {
+    let enabled = fx::save_enabled_currencies(db.as_ref(), &b.enabled)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(EnabledCurrencies {
+        enabled,
+        supported: fx::CURRENCIES.to_vec(),
+    }))
 }
 
 /// The foreign-currency details of transactions. Rates that were stand-ins and whose day
@@ -825,6 +858,10 @@ fn router(db: Db) -> Router {
         )
         .route("/api/fx/rate", get(fx_rate))
         .route("/api/foreign", get(list_foreign))
+        .route(
+            "/api/settings/currencies",
+            get(get_currency_settings).put(put_currency_settings),
+        )
         .route(
             "/api/transactions/:id/refresh-rate",
             axum::routing::post(refresh_rate),

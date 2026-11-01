@@ -4,9 +4,10 @@ import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
-import { api, CURRENCIES, currencySymbol, decimals, formatMinor, formatRate, formatShekels, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
+import { currenciesView, LRM, loadEnabledCurrencies, pickerCurrencies } from "./currencies";
+import { api, currencyInfo, currencySymbol, decimals, formatMinor, formatRate, formatShekels, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
 
-type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
+type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies";
 
 const root = document.getElementById("app")!;
 const state = {
@@ -693,6 +694,12 @@ function businessesLinkCard(): HTMLElement {
   return el("div", { className: "card" }, el("h2", { textContent: "עסקים" }), el("p", { className: "muted", textContent: "עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
 }
 
+function currenciesLinkCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "ניהול מטבעות" });
+  open.onclick = () => go("currencies");
+  return el("div", { className: "card" }, el("h2", { textContent: "מטבעות" }), el("p", { className: "muted", textContent: "בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
+}
+
 function categoriesCard(): HTMLElement {
   const kinds = [
     [false, "הוצאות"],
@@ -774,6 +781,7 @@ function settingsView(): HTMLElement {
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
     categoriesLinkCard(),
     businessesLinkCard(),
+    currenciesLinkCard(),
     historyCard(),
   );
 }
@@ -1150,7 +1158,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const cur = (): Currency => currency;
   const amountLbl = el("span", { textContent: "סכום (₪)" });
   const curPick = combo("חיפוש מטבע…");
-  curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} ${c.code}` })), currency);
+  // Only the currencies added in settings (in their order); a line already in a removed one keeps its own.
+  curPick.set(pickerCurrencies(currency).map((code) => { const c = currencyInfo(code); return { value: c.code, label: c.symbol === c.code ? `${c.name} ${c.code}` : `${LRM}${c.symbol}${LRM} ${c.name} ${c.code}` }; }), currency);
   curPick.input.addEventListener("change", () => {
     currency = (curPick.value || "ILS") as Currency;
     syncFx();
@@ -1472,7 +1481,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
 function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses" || state.view === "currencies")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       if (view === "insights") {
         if (state.view === "insights") {
@@ -1519,7 +1528,7 @@ function businessScreen(): HTMLElement {
 
 let renderedView: View | undefined;
 function render() {
-  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()) }[state.view]();
+  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()), currencies: () => currenciesView({ back: () => goBack("settings") }) }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   const entering = renderedView !== state.view;
   if (entering) window.scrollTo(0, 0);
@@ -1584,6 +1593,7 @@ async function load() {
   } catch {
     /* keep what we had */
   }
+  await loadEnabledCurrencies();
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();

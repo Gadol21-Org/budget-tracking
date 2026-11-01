@@ -69,17 +69,38 @@ export interface BusinessData {
   links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
-/** Currencies a transaction can be entered in; the shekel is the default and the stored one. */
-export type Currency = "ILS" | "USD" | "EUR" | "JPY";
-export const CURRENCIES: { code: Currency; symbol: string; name: string }[] = [
-  { code: "ILS", symbol: "₪", name: "שקל" },
-  { code: "USD", symbol: "$", name: "דולר" },
-  { code: "EUR", symbol: "€", name: "יורו" },
-  { code: "JPY", symbol: "¥", name: "ין" },
-];
-export const currencySymbol = (c: Currency) => CURRENCIES.find((x) => x.code === c)!.symbol;
-/** Decimal places of a currency's minor unit (cents; the yen has none). */
-export const decimals = (c: Currency) => (c === "JPY" ? 0 : 2);
+/** A currency code: "ILS" or one the server supports (`CURRENCIES` in backend/src/fx.rs). */
+export type Currency = string;
+export interface CurrencyInfo {
+  code: Currency;
+  symbol: string;
+  name: string;
+}
+const infoCache = new Map<Currency, CurrencyInfo>();
+let names: Intl.DisplayNames | undefined;
+/** Hebrew name and symbol of a currency, from the browser's own data (so any code displays, even one this build never heard of). */
+export function currencyInfo(code: Currency): CurrencyInfo {
+  let info = infoCache.get(code);
+  if (!info) {
+    let symbol = code;
+    let name = code;
+    try {
+      names ??= new Intl.DisplayNames("he", { type: "currency" });
+      name = code === "ILS" ? "שקל" : names.of(code) ?? code;
+      symbol = new Intl.NumberFormat("he", { style: "currency", currency: code, currencyDisplay: "symbol" }).formatToParts(1).find((p) => p.type === "currency")?.value ?? code;
+    } catch {
+      /* unknown code: show it as is */
+    }
+    info = { code, symbol, name };
+    infoCache.set(code, info);
+  }
+  return info;
+}
+export const currencySymbol = (c: Currency) => currencyInfo(c).symbol;
+/** Decimal places of a currency's minor unit (ISO 4217; mirrors `decimals` in backend/src/fx.rs). */
+export const decimals = (c: Currency) => (ZERO_DEC.has(c) ? 0 : THREE_DEC.has(c) ? 3 : 2);
+const ZERO_DEC = new Set("BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX VND VUV XAF XOF XPF".split(" "));
+const THREE_DEC = new Set("BHD IQD JOD KWD LYD OMR TND".split(" "));
 
 /** What a foreign-currency transaction was entered as; its `amount_agorot` is the shekel value. */
 export interface Fx {
@@ -198,6 +219,10 @@ export const api = {
   updateTransaction: (id: number, t: TxInput) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
+  /** The currencies added in settings, in picker order (the shekel is always available). */
+  currencySettings: () => request<{ enabled: Currency[]; supported: Currency[] }>("/api/settings/currencies"),
+  saveCurrencySettings: (enabled: Currency[]) =>
+    request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
   /** Whether changes are being written to Paamonim. */
   mirrorStatus: () => request<{ enabled: boolean }>("/api/mirror/status"),
 };
@@ -219,7 +244,8 @@ export function parseMinor(input: string, c: Currency): number {
 /** An amount in a currency's minor unit, e.g. ¥3,000 or $12.50. */
 export function formatMinor(minor: number, c: Currency): string {
   const d = decimals(c);
-  return `${currencySymbol(c)}${(minor / 10 ** d).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}`;
+  const sym = currencySymbol(c);
+  return `${sym}${/^[A-Za-z]{2,}$/.test(sym) ? " " : ""}${(minor / 10 ** d).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 
 /** A rate in shekels per unit, with enough digits for the yen (₪0.0245). */

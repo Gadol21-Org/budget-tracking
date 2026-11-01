@@ -105,7 +105,12 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              rate REAL NOT NULL,
              PRIMARY KEY (currency, date)
          );
-         CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
+         -- App-wide settings shared by every device (e.g. the enabled currencies).
+        CREATE TABLE IF NOT EXISTS app_settings (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",
     )?;
