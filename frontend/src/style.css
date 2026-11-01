@@ -89,8 +89,6 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 /* The add/edit transaction dialog fills the screen like its own page; the page behind is not shown. */
 dialog.fullpage { padding-top: env(safe-area-inset-top); width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; margin: 0; border-radius: 0; overflow-y: auto; }
 dialog.fullpage::backdrop { background: var(--bg); }
-/* Empty room under the form, so a pick list near the bottom can be scrolled up above the keyboard. */
-dialog.fullpage form.add { padding-bottom: 55vh; }
 dialog.fullpage .actions { justify-content: center; }
 form.add { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 form.add label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--muted); }

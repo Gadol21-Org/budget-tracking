@@ -949,18 +949,37 @@ function menuButton(label: string, items: [string, () => void][], className = "b
 
 
 /**
- * When a pick list (category, sub-category, currency) opens, scroll its label to the top of the dialog so the list under
- * the field is not hidden. Plain fields (amount, note, date) are left to the browser.
+ * When a pick list (category, sub-category, currency) opens with the keyboard up, scroll its label to the top of the page
+ * so the list under the field is not hidden behind the keyboard. The page only gets room for that scroll (the keyboard's
+ * height, as the browser reports it) while the list is open; plain fields (amount, note, date) are left to the browser.
  */
+let releaseRoom = () => {};
 function revealField(input: HTMLElement) {
   const dlg = input.closest("dialog");
+  const form = dlg?.querySelector<HTMLElement>("form");
+  const vv = window.visualViewport;
+  if (!dlg || !form) return;
   const top = input.closest("label") ?? input;
-  const go = () => dlg && dlg.scrollTo({ top: dlg.scrollTop + top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop, behavior: "smooth" });
+  const go = () => {
+    // The keyboard's height: what the browser says it takes off the visible area (zero when the page itself shrinks for it).
+    const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    form.style.paddingBottom = keyboard > 100 ? `${keyboard}px` : "";
+    dlg.scrollTo({ top: dlg.scrollTop + top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop, behavior: "smooth" });
+  };
+  releaseRoom();
   go();
-  // The keyboard opens a moment after the field is focused: scroll again once it has.
-  setTimeout(go, 350);
+  const timer = setTimeout(go, 350);
+  vv?.addEventListener("resize", go);
+  releaseRoom = () => {
+    clearTimeout(timer);
+    vv?.removeEventListener("resize", go);
+    form.style.paddingBottom = "";
+    releaseRoom = () => {};
+  };
 }
-document.addEventListener("focusin", (e) => e.target instanceof HTMLElement && e.target.getAttribute("role") === "combobox" && e.target.closest("dialog") && revealField(e.target));
+const isPick = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "combobox" && !!t.closest("dialog");
+document.addEventListener("focusin", (e) => isPick(e.target) && revealField(e.target));
+document.addEventListener("focusout", () => setTimeout(() => !isPick(document.activeElement) && releaseRoom(), 50));
 
 interface ComboItem {
   value: string;
