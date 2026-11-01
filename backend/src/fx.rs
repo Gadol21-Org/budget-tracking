@@ -323,12 +323,19 @@ mod tests {
         assert_eq!(enabled_currencies(&s).await.unwrap(), ["USD", "EUR", "JPY"]);
         let list = ["GBP", "ILS", "USD"].map(String::from);
         // The shekel is implicit and dropped; the saved order is kept.
-        assert_eq!(save_enabled_currencies(&s, &list).await.unwrap(), ["GBP", "USD"]);
+        assert_eq!(
+            save_enabled_currencies(&s, &list).await.unwrap(),
+            ["GBP", "USD"]
+        );
         assert_eq!(enabled_currencies(&s).await.unwrap(), ["GBP", "USD"]);
-        assert!(save_enabled_currencies(&s, &["XXX".to_string()]).await.is_err());
-        assert!(save_enabled_currencies(&s, &["USD".to_string(), "USD".to_string()])
+        assert!(save_enabled_currencies(&s, &["XXX".to_string()])
             .await
             .is_err());
+        assert!(
+            save_enabled_currencies(&s, &["USD".to_string(), "USD".to_string()])
+                .await
+                .is_err()
+        );
         // Everything may be removed.
         assert!(save_enabled_currencies(&s, &[]).await.unwrap().is_empty());
         assert!(enabled_currencies(&s).await.unwrap().is_empty());

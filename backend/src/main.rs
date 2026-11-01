@@ -213,7 +213,9 @@ async fn get_currency_settings(
     State(db): State<Db>,
 ) -> Result<Json<EnabledCurrencies>, (StatusCode, String)> {
     Ok(Json(EnabledCurrencies {
-        enabled: fx::enabled_currencies(db.as_ref()).await.map_err(internal)?,
+        enabled: fx::enabled_currencies(db.as_ref())
+            .await
+            .map_err(internal)?,
     }))
 }
 
