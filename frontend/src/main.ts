@@ -359,7 +359,7 @@ function listView(): HTMLElement {
     el(
       "div",
       d === nowDay ? { id: "now-anchor", className: "now-anchor" } : {},
-      d === nowDay && days[0] !== d ? el("div", { className: "upcoming-divider", textContent: "▲ למעלה: תנועות עתידיות · מכאן: מה שכבר קרה" }) : null,
+      d === nowDay && days[0] !== d ? el("div", { className: "upcoming-divider", textContent: "▲ למעלה: תנועות עתידיות" }) : null,
       el("div", { className: "daylabel", textContent: dayTitle(d) }),
       el(
         "div",
@@ -1485,7 +1485,7 @@ function nav(): HTMLElement {
     };
     return b;
   };
-  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("insights", "📈", "תובנות"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
+  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("insights", "📈", "תובנות"), item("settings", "⚙️", "הגדרות"));
 }
 
 function insightsScreen(): HTMLElement {
