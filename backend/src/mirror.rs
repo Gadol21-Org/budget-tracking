@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::money::to_paamonim_shekels;
 use crate::paamonim::{self, Client, HistoryEntry, Kind};
-use crate::storage::{PendingMirror, Storage};
+use crate::storage::{PendingMirror, Storage, SyncState};
 
 /// Paamonim's remark field is limited to 35 characters.
 const REMARK_MAX: usize = 35;
@@ -234,7 +234,7 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
     let pending = storage.pending_mirrors().await?;
     let verifying_per_sig = {
         let mut m: HashMap<String, usize> = HashMap::new();
-        for p in pending.iter().filter(|p| p.state == "verifying") {
+        for p in pending.iter().filter(|p| p.state == SyncState::Verifying) {
             *m.entry(sig(p)).or_default() += 1;
         }
         m
@@ -245,7 +245,7 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
 
     for p in &pending {
         let mut p = p.clone();
-        if p.item_key.is_none() && p.state != "verifying" {
+        if p.item_key.is_none() && p.state != SyncState::Verifying {
             if let Some(cat) = p.category_id {
                 let key = match linked.get(&cat) {
                     Some(k) => k.clone(),
@@ -255,7 +255,7 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
                         {
                             Ok(k) => k,
                             Err(why) => {
-                                storage.set_mirror_state(p.id, "error").await?;
+                                storage.set_mirror_state(p.id, SyncState::Error).await?;
                                 sum.failed += 1;
                                 sum.stopped = Some(why);
                                 return Ok(sum);
@@ -273,7 +273,7 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
             sum.stopped = Some("operation limit reached; run again to continue".into());
             return Ok(sum);
         }
-        let step = if p.state == "verifying" {
+        let step = if p.state == SyncState::Verifying {
             let n = verifying_per_sig[&sig(p)];
             let rank = *claimed.entry(sig(p)).and_modify(|c| *c += 1).or_insert(1) - 1;
             resolve(client, storage, p, n, rank, &mut sum).await?
@@ -419,7 +419,7 @@ async fn push(
             if p.line_id.is_some() {
                 storage.detach_mirror(p.id).await?;
             } else {
-                storage.set_mirror_state(p.id, "skipped").await?;
+                storage.set_mirror_state(p.id, SyncState::Skipped).await?;
             }
         }
         sum.skipped += 1;
@@ -430,7 +430,7 @@ async fn push(
             if p.line_id.is_some() {
                 storage.detach_mirror(p.id).await?;
             } else {
-                storage.set_mirror_state(p.id, "skipped").await?;
+                storage.set_mirror_state(p.id, SyncState::Skipped).await?;
             }
         }
         sum.skipped += 1;
@@ -448,7 +448,7 @@ async fn push(
             if e.payment.is_some() {
                 // An installment: replacing it would delete its whole group there.
                 if !opts.dry_run {
-                    storage.set_mirror_state(p.id, "error").await?;
+                    storage.set_mirror_state(p.id, SyncState::Error).await?;
                 }
                 sum.unsupported += 1;
                 return Ok(Step::Continue);
@@ -494,7 +494,7 @@ async fn push(
         .collect();
 
     // From here on the outcome may be unknown until checked: never re-send blindly.
-    storage.set_mirror_state(p.id, "verifying").await?;
+    storage.set_mirror_state(p.id, SyncState::Verifying).await?;
     *ops += 1;
     let failed = client.save_item_line(&fields).await.err();
     if failed.is_some() {
@@ -519,7 +519,7 @@ async fn push(
             Ok(Step::Continue)
         }
         [] => {
-            storage.set_mirror_state(p.id, "error").await?;
+            storage.set_mirror_state(p.id, SyncState::Error).await?;
             sum.failed += 1;
             Ok(Step::Stop(match failed {
                 Some(e) => format!("sending #{} failed: {e}", p.id),
@@ -530,7 +530,7 @@ async fn push(
             }))
         }
         _ => {
-            storage.set_mirror_state(p.id, "error").await?;
+            storage.set_mirror_state(p.id, SyncState::Error).await?;
             sum.failed += 1;
             Ok(Step::Stop(format!(
                 "#{} was sent but several identical new lines appeared; check Paamonim",
@@ -552,7 +552,7 @@ async fn adopt(
         // Deleted here while it was being sent.
         storage.queue_line_delete(&e.line_id, &p.date).await?;
     } else if !same_line(e, p, shekels) {
-        storage.set_mirror_state(p.id, "error").await?;
+        storage.set_mirror_state(p.id, SyncState::Error).await?;
         sum.failed += 1;
     }
     Ok(())
@@ -568,7 +568,7 @@ async fn resolve(
     sum: &mut MirrorSummary,
 ) -> Result<Step> {
     let Some(shekels) = shekels_for(p) else {
-        storage.set_mirror_state(p.id, "error").await?;
+        storage.set_mirror_state(p.id, SyncState::Error).await?;
         sum.failed += 1;
         return Ok(Step::Continue);
     };
@@ -585,7 +585,7 @@ async fn resolve(
         adopt(storage, p, &found[rank], shekels, sum).await?;
         sum.mirrored += 1;
     } else {
-        storage.set_mirror_state(p.id, "error").await?;
+        storage.set_mirror_state(p.id, SyncState::Error).await?;
         sum.failed += 1;
     }
     Ok(Step::Continue)
@@ -857,7 +857,7 @@ mod tests {
         }
     }
 
-    async fn state_of(s: &SqliteStorage, id: i64) -> String {
+    async fn state_of(s: &SqliteStorage, id: i64) -> SyncState {
         s.list_transactions()
             .await
             .unwrap()
@@ -881,7 +881,7 @@ mod tests {
         assert_eq!((sum.mirrored, sum.failed), (1, 0));
         assert_eq!(mock.lock().unwrap().lines[0].shekels, 11);
         let t = &s.list_transactions().await.unwrap()[0];
-        assert_eq!((t.amount_agorot, t.sync_state.as_str()), (-1050, "synced"));
+        assert_eq!((t.amount_agorot, t.sync_state), (-1050, SyncState::Synced));
         // Nothing left to do: a second run sends nothing.
         run(&c, &s, &opts()).await.unwrap();
         assert_eq!(mock.lock().unwrap().saves, 1);
@@ -910,7 +910,7 @@ mod tests {
         let c = serve(mock.clone()).await;
         run(&c, &s, &opts()).await.unwrap();
         assert_eq!(mock.lock().unwrap().saves, 0);
-        assert_eq!(state_of(&s, old).await, "local");
+        assert_eq!(state_of(&s, old).await, SyncState::Local);
         // New entries after that are mirrored.
         s.create_transaction(&tx(D, -2000, food)).await.unwrap();
         assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
@@ -927,7 +927,7 @@ mod tests {
         s.update_transaction(id, &tx("2026-10-04", -2000, food))
             .await
             .unwrap();
-        assert_eq!(state_of(&s, id).await, "modified");
+        assert_eq!(state_of(&s, id).await, SyncState::Modified);
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert_eq!((sum.replaced, sum.deleted), (1, 1));
         {
@@ -938,7 +938,7 @@ mod tests {
                 ("2026-10-04", 20)
             );
         }
-        assert_eq!(state_of(&s, id).await, "synced");
+        assert_eq!(state_of(&s, id).await, SyncState::Synced);
 
         s.delete_transaction(id).await.unwrap();
         let sum = run(&c, &s, &opts()).await.unwrap();
@@ -961,7 +961,7 @@ mod tests {
             let m = mock.lock().unwrap();
             assert_eq!((m.saves, m.deletes), (1, 0));
         }
-        assert_eq!(state_of(&s, id).await, "synced");
+        assert_eq!(state_of(&s, id).await, SyncState::Synced);
     }
 
     #[tokio::test]
@@ -979,7 +979,7 @@ mod tests {
         let sum = run(&c, &s, &no_delete).await.unwrap();
         assert_eq!(sum.unsupported, 1);
         assert_eq!(mock.lock().unwrap().saves, 1);
-        assert_eq!(state_of(&s, id).await, "modified");
+        assert_eq!(state_of(&s, id).await, SyncState::Modified);
         // With the endpoint configured it goes through.
         assert_eq!(run(&c, &s, &opts()).await.unwrap().replaced, 1);
         assert_eq!(mock.lock().unwrap().lines.len(), 1);
@@ -1000,7 +1000,7 @@ mod tests {
             let m = mock.lock().unwrap();
             assert_eq!((m.saves, m.lines.len()), (1, 1));
         }
-        assert_eq!(state_of(&s, id).await, "synced");
+        assert_eq!(state_of(&s, id).await, SyncState::Synced);
     }
 
     #[tokio::test]
@@ -1012,7 +1012,7 @@ mod tests {
         mock.lock().unwrap().fail_before_save = true;
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert!(sum.stopped.is_some());
-        assert_eq!(state_of(&s, id).await, "error");
+        assert_eq!(state_of(&s, id).await, SyncState::Error);
         run(&c, &s, &opts()).await.unwrap();
         assert_eq!(mock.lock().unwrap().saves, 1);
         // After a look, a manual retry puts it back in the queue.
@@ -1029,7 +1029,7 @@ mod tests {
         mock.lock().unwrap().silently_drop = true;
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert!(sum.stopped.is_some());
-        assert_eq!(state_of(&s, id).await, "error");
+        assert_eq!(state_of(&s, id).await, SyncState::Error);
     }
 
     #[tokio::test]
@@ -1040,8 +1040,8 @@ mod tests {
         let id = s.create_transaction(&tx(D, -1050, food)).await.unwrap();
         mock.lock().unwrap().add_twin = true;
         run(&c, &s, &opts()).await.unwrap();
-        assert_eq!(state_of(&s, id).await, "error");
-        assert!(s.list_transactions().await.unwrap()[0].sync_state != "synced");
+        assert_eq!(state_of(&s, id).await, SyncState::Error);
+        assert!(s.list_transactions().await.unwrap()[0].sync_state != SyncState::Synced);
     }
 
     #[tokio::test]
@@ -1069,7 +1069,7 @@ mod tests {
     async fn import_links_an_unconfirmed_line_instead_of_duplicating_it() {
         let (s, food, _) = setup().await;
         let id = s.create_transaction(&tx(D, -1050, food)).await.unwrap();
-        s.set_mirror_state(id, "error").await.unwrap();
+        s.set_mirror_state(id, SyncState::Error).await.unwrap();
         // Paamonim holds the rounded amount of what we sent.
         let batch = ImportBatch {
             categories: vec![ImportCategory {
@@ -1093,8 +1093,8 @@ mod tests {
         let all = s.list_transactions().await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(
-            (all[0].amount_agorot, all[0].sync_state.as_str()),
-            (-1050, "synced")
+            (all[0].amount_agorot, all[0].sync_state),
+            (-1050, SyncState::Synced)
         );
         // Importing again changes nothing.
         let sum = s.import_paamonim(&batch).await.unwrap();
@@ -1147,7 +1147,7 @@ mod tests {
         let sum = run(&c, &s, &dry).await.unwrap();
         assert_eq!(sum.planned.len(), 1);
         assert_eq!(mock.lock().unwrap().saves, 0);
-        assert_eq!(state_of(&s, id).await, "pending");
+        assert_eq!(state_of(&s, id).await, SyncState::Pending);
     }
 
     #[tokio::test]
@@ -1159,9 +1159,9 @@ mod tests {
         let sum = run(&serve(M::default()).await, &s, &opts()).await.unwrap();
         assert_eq!((sum.skipped, sum.mirrored), (2, 1));
         // Under a shekel is sent as ₪1.
-        assert_eq!(state_of(&s, tiny).await, "synced");
-        assert_eq!(state_of(&s, refund).await, "skipped");
-        assert_eq!(state_of(&s, zero).await, "skipped");
+        assert_eq!(state_of(&s, tiny).await, SyncState::Synced);
+        assert_eq!(state_of(&s, refund).await, SyncState::Skipped);
+        assert_eq!(state_of(&s, zero).await, SyncState::Skipped);
         let _ = pay;
     }
 
@@ -1338,8 +1338,8 @@ mod tests {
             );
             assert!(m.lines.iter().all(|l| l.item == "מאפייה"));
         }
-        assert_eq!(state_of(&s, a).await, "synced");
-        assert_eq!(state_of(&s, b).await, "synced");
+        assert_eq!(state_of(&s, a).await, SyncState::Synced);
+        assert_eq!(state_of(&s, b).await, SyncState::Synced);
         // Later lines use the linked item without creating another.
         s.create_transaction(&tx(D, -300, bakery)).await.unwrap();
         let sum = run(&c, &s, &opts()).await.unwrap();
@@ -1389,7 +1389,7 @@ mod tests {
             mock.lock().unwrap().custom,
             vec![(500, "בונוס".to_string(), "17".to_string(), true)]
         );
-        assert_eq!(state_of(&s, a).await, "synced");
+        assert_eq!(state_of(&s, a).await, SyncState::Synced);
     }
 
     #[tokio::test]
@@ -1414,9 +1414,9 @@ mod tests {
             .unwrap();
         let a = s.create_transaction(&tx(D, -2500, bakery)).await.unwrap();
         let b = s.create_transaction(&tx(D, -1000, bakery)).await.unwrap();
-        s.set_mirror_state(a, "skipped").await.unwrap();
+        s.set_mirror_state(a, SyncState::Skipped).await.unwrap();
         // The first line of an earlier run, whose item came back without a category.
-        s.set_mirror_state(b, "error").await.unwrap();
+        s.set_mirror_state(b, SyncState::Error).await.unwrap();
         assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 2);
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert_eq!((sum.items_created, sum.mirrored), (1, 2), "{sum:?}");
@@ -1427,8 +1427,8 @@ mod tests {
                 vec![(600, "מאפייה".to_string(), "3".to_string(), false)]
             );
         }
-        assert_eq!(state_of(&s, a).await, "synced");
-        assert_eq!(state_of(&s, b).await, "synced");
+        assert_eq!(state_of(&s, a).await, SyncState::Synced);
+        assert_eq!(state_of(&s, b).await, SyncState::Synced);
         assert_eq!(s.requeue_skipped_sub_categories().await.unwrap(), 0);
     }
 
@@ -1465,7 +1465,7 @@ mod tests {
         let mine = s.insert_category("שלי", false, None).await.unwrap();
         let id = s.create_transaction(&tx(D, -2500, mine)).await.unwrap();
         run(&c, &s, &opts()).await.unwrap();
-        assert_eq!(state_of(&s, id).await, "skipped");
+        assert_eq!(state_of(&s, id).await, SyncState::Skipped);
         assert!(mock.lock().unwrap().custom.is_empty());
         // Moved to a Paamonim item, it is mirrored.
         let food_item = cat_id(&s.list_categories().await.unwrap(), "סופר");
@@ -1504,8 +1504,8 @@ mod tests {
         let b = s.create_transaction(&tx(D, -1200, bakery)).await.unwrap();
         let sum = run(&c, &s, &opts()).await.unwrap();
         assert_eq!((sum.mirrored, sum.items_created), (2, 1));
-        assert_eq!(state_of(&s, a).await, "synced");
-        assert_eq!(state_of(&s, b).await, "synced");
+        assert_eq!(state_of(&s, a).await, SyncState::Synced);
+        assert_eq!(state_of(&s, b).await, SyncState::Synced);
         let m = mock.lock().unwrap();
         assert_eq!(m.custom.len(), 1);
         assert_eq!(
@@ -1535,7 +1535,7 @@ mod tests {
         s.move_category(item, mine).await.unwrap();
         let id = s.create_transaction(&tx(D, -2500, item)).await.unwrap();
         assert_eq!(run(&c, &s, &opts()).await.unwrap().mirrored, 1);
-        assert_eq!(state_of(&s, id).await, "synced");
+        assert_eq!(state_of(&s, id).await, SyncState::Synced);
         assert_eq!(mock.lock().unwrap().lines[0].item, "סופר");
         assert!(mock.lock().unwrap().custom.is_empty());
     }
@@ -1565,7 +1565,7 @@ mod tests {
             note: note.into(),
             item_key: Some("e:5".into()),
             payment_key: None,
-            state: "pending".into(),
+            state: SyncState::Pending,
             item_name: Some("סופר".into()),
             line_id: None,
             category_id: None,

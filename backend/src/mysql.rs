@@ -18,7 +18,7 @@ use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
     MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
-    RawPaymentMethod, Storage, Transaction, TxFx, REQUEUE_SKIPPED_SQL,
+    RawPaymentMethod, Storage, SyncState, Transaction, TxFx, REQUEUE_SKIPPED_SQL,
 };
 
 const SCHEMA: [&str; 14] = [
@@ -247,7 +247,7 @@ fn tx_from_row(r: &MySqlRow) -> Result<Transaction> {
         category_id: r.try_get("category_id")?,
         payment_method_id: r.try_get("payment_method_id")?,
         note: r.try_get("note")?,
-        sync_state: r.try_get("sync_state")?,
+        sync_state: r.try_get::<String, _>("sync_state")?.parse()?,
         recurring_series_id: r.try_get("recurring_series_id")?,
     })
 }
@@ -509,7 +509,7 @@ impl Storage for MySqlStorage {
             .map(|r| {
                 Ok(PendingMirror {
                     id: r.try_get("id")?,
-                    state: r.try_get("sync_state")?,
+                    state: r.try_get::<String, _>("sync_state")?.parse()?,
                     date: r.try_get("date")?,
                     amount_agorot: r.try_get("amount_agorot")?,
                     note: r.try_get("note")?,
@@ -525,9 +525,9 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
-    async fn set_mirror_state(&self, id: i64, state: &str) -> Result<()> {
+    async fn set_mirror_state(&self, id: i64, state: SyncState) -> Result<()> {
         sqlx::query("UPDATE transactions SET sync_state = ? WHERE id = ?")
-            .bind(state)
+            .bind(state.as_str())
             .bind(id)
             .execute(&self.pool)
             .await?;
