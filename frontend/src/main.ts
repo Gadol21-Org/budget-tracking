@@ -968,12 +968,13 @@ function combo(placeholder: string) {
   const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
   const close = () => {
     list.hidden = true;
+    unfit();
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
-    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("click", outside, true);
   };
-  /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not. */
-  const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("pointerdown", outside, true));
+  /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not, and neither must scrolling (a scroll gesture fires pointerdown but no click). */
+  const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("click", outside, true));
   /** When the last item was picked: the tap's own click may land on the field once the layout shifts, and must not reopen the list. */
   let pickedAt = 0;
   const pick = (v: string) => {
@@ -991,17 +992,66 @@ function combo(placeholder: string) {
             b.setAttribute("role", "option");
             b.setAttribute("aria-selected", String(i.value === value));
             // mousedown, so the pick lands before the input's blur closes the list.
-            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.dispatchEvent(new Event("change")));
+            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.blur(), input.dispatchEvent(new Event("change")));
             return b;
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
     );
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
-    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("click", outside, true);
   };
-  input.onfocus = () => (input.select(), Date.now() - pickedAt > 500 && show(""));
-  input.onclick = () => list.hidden && Date.now() - pickedAt > 500 && show("");
+  /** Bring the field to the top of the dialog so the list under it is not behind the keyboard (which opens a moment later). */
+  let unfit = () => {};
+  const reveal = () => {
+    // Align the field's label (מטבע / קטגוריה) to the top, not the bare field, so the header stays visible.
+    const top = root.closest("label") ?? root;
+    const dlg = root.closest("dialog");
+    const vv = window.visualViewport;
+    const go = () => {
+      if (list.hidden) return;
+      // iPhone Safari does not shrink the page for the keyboard, so the dialog would have nothing to scroll:
+      // fit it to the visible area above the keyboard while a list is open.
+      if (dlg && vv && vv.height < window.innerHeight - 100) {
+        dlg.style.maxHeight = `${vv.height - 24}px`;
+        dlg.style.top = `${vv.offsetTop + 12}px`;
+        dlg.style.bottom = "auto";
+        dlg.style.marginBlock = "0";
+      } else if (dlg) {
+        for (const p of ["max-height", "top", "bottom", "margin-block"]) dlg.style.removeProperty(p);
+      }
+      if (!dlg) return top.scrollIntoView({ block: "start", behavior: "smooth" });
+      const delta = top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop;
+      dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
+    };
+    unfit();
+    go();
+    setTimeout(go, 350);
+    setTimeout(go, 800);
+    // The keyboard changes the visible area a moment after the field is focused: fit and scroll again once it has.
+    if (vv) {
+      vv.addEventListener("resize", go);
+      vv.addEventListener("scroll", go);
+    }
+    unfit = () => {
+      vv?.removeEventListener("resize", go);
+      vv?.removeEventListener("scroll", go);
+      if (dlg) for (const p of ["max-height", "top", "bottom", "margin-block"]) dlg.style.removeProperty(p);
+      unfit = () => {};
+    };
+  };
+  const justPicked = () => Date.now() - pickedAt <= 500;
+  input.onfocus = () => {
+    // The layout can shift after a pick (the shekel box hides) so the tap's click lands on the field: stay closed.
+    if (justPicked()) return input.blur();
+    input.select();
+    show("");
+    reveal();
+  };
+  input.onclick = () => {
+    if (justPicked()) return input.blur();
+    if (list.hidden) (show(""), reveal());
+  };
   input.oninput = () => show(input.value);
   input.onkeydown = (e) => {
     if (e.key === "Tab" && !list.hidden) close();
