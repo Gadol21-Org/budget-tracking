@@ -1381,7 +1381,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     el("label", {}, "תאריך", dateField(date)),
     el("label", {}, "הערה", note),
     bizRow,
-    !existing ? el("label", { style: "flex-direction:row;align-items:center;gap:8px" }, repeat, "חוזר מדי חודש") : null,
+    // Only the checkbox (inside a finger-sized hit box) toggles; the row and its text are inert.
+    !existing ? el("div", { className: "repeat-row" }, el("label", { className: "repeat-hit" }, repeat), el("span", { textContent: "חוזר מדי חודש" })) : null,
     repeatBox,
     err,
     seriesId !== undefined
