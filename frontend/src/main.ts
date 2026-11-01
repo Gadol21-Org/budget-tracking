@@ -948,6 +948,44 @@ function menuButton(label: string, items: [string, () => void][], className = "b
 }
 
 
+/**
+ * When a pick list (category, sub-category, currency) opens with the keyboard up, make the page as tall as the visible area
+ * above the keyboard (as the browser reports it) and scroll the field's label to the top, so the list under the field is
+ * not hidden behind the keyboard. Nothing is added to the page; plain fields (amount, note, date) are left to the browser.
+ */
+let restorePage = () => {};
+function revealField(input: HTMLElement) {
+  const dlg = input.closest("dialog");
+  const vv = window.visualViewport;
+  if (!dlg) return;
+  const top = input.closest("label") ?? input;
+  const go = () => {
+    // Where the browser does not shrink the page for the keyboard, the visible area is smaller than the window.
+    if (vv && vv.height < window.innerHeight - 100) {
+      dlg.style.height = `${vv.height}px`;
+      dlg.style.top = `${vv.offsetTop}px`;
+    } else {
+      dlg.style.removeProperty("height");
+      dlg.style.removeProperty("top");
+    }
+    dlg.scrollTo({ top: dlg.scrollTop + top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop, behavior: "smooth" });
+  };
+  restorePage();
+  go();
+  const timer = setTimeout(go, 350);
+  vv?.addEventListener("resize", go);
+  restorePage = () => {
+    clearTimeout(timer);
+    vv?.removeEventListener("resize", go);
+    dlg.style.removeProperty("height");
+    dlg.style.removeProperty("top");
+    restorePage = () => {};
+  };
+}
+const isPick = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "combobox" && !!t.closest("dialog");
+document.addEventListener("focusin", (e) => isPick(e.target) && revealField(e.target));
+document.addEventListener("focusout", () => setTimeout(() => !isPick(document.activeElement) && restorePage(), 50));
+
 interface ComboItem {
   value: string;
   label: string;
@@ -968,7 +1006,6 @@ function combo(placeholder: string) {
   const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
   const close = () => {
     list.hidden = true;
-    unfit();
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
     document.removeEventListener("click", outside, true);
@@ -1001,56 +1038,16 @@ function combo(placeholder: string) {
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("click", outside, true);
   };
-  /** Bring the field to the top of the dialog so the list under it is not behind the keyboard (which opens a moment later). */
-  let unfit = () => {};
-  const reveal = () => {
-    // Align the field's label (מטבע / קטגוריה) to the top, not the bare field, so the header stays visible.
-    const top = root.closest("label") ?? root;
-    const dlg = root.closest("dialog");
-    const vv = window.visualViewport;
-    const go = () => {
-      if (list.hidden) return;
-      // iPhone Safari does not shrink the page for the keyboard, so the dialog would have nothing to scroll:
-      // fit it to the visible area above the keyboard while a list is open.
-      if (dlg && vv && vv.height < window.innerHeight - 100) {
-        dlg.style.maxHeight = `${vv.height - 24}px`;
-        dlg.style.top = `${vv.offsetTop + 12}px`;
-        dlg.style.bottom = "auto";
-        dlg.style.marginBlock = "0";
-      } else if (dlg) {
-        for (const p of ["max-height", "top", "bottom", "margin-block"]) dlg.style.removeProperty(p);
-      }
-      if (!dlg) return top.scrollIntoView({ block: "start", behavior: "smooth" });
-      const delta = top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop;
-      dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
-    };
-    unfit();
-    go();
-    setTimeout(go, 350);
-    setTimeout(go, 800);
-    // The keyboard changes the visible area a moment after the field is focused: fit and scroll again once it has.
-    if (vv) {
-      vv.addEventListener("resize", go);
-      vv.addEventListener("scroll", go);
-    }
-    unfit = () => {
-      vv?.removeEventListener("resize", go);
-      vv?.removeEventListener("scroll", go);
-      if (dlg) for (const p of ["max-height", "top", "bottom", "margin-block"]) dlg.style.removeProperty(p);
-      unfit = () => {};
-    };
-  };
   const justPicked = () => Date.now() - pickedAt <= 500;
   input.onfocus = () => {
     // The layout can shift after a pick (the shekel box hides) so the tap's click lands on the field: stay closed.
     if (justPicked()) return input.blur();
     input.select();
     show("");
-    reveal();
   };
   input.onclick = () => {
     if (justPicked()) return input.blur();
-    if (list.hidden) (show(""), reveal());
+    if (list.hidden) show("");
   };
   input.oninput = () => show(input.value);
   input.onkeydown = (e) => {
@@ -1095,7 +1092,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   /** The month of the occurrence being edited; the date field may move the charge out of it. */
   const month = existing?.date.slice(0, 7) ?? "";
   let isIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
-  const dlg = el("dialog");
+  const dlg = el("dialog", { className: "fullpage" });
   // The shekel is the default currency, always; a line already entered in USD or JPY opens in that one.
   const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
   let currency: Currency = startFx?.currency ?? "ILS";
@@ -1471,8 +1468,11 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
   trackDialog(dlg);
+  // Do not put the cursor (and the keyboard) on a field when the dialog opens.
+  dlg.tabIndex = -1;
+  dlg.setAttribute("autofocus", "");
   dlg.showModal();
-  amount.focus();
+  if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
 }
 
 function nav(): HTMLElement {
