@@ -19,7 +19,7 @@ use chrono::{Datelike, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::oplog::{self, kind};
-use crate::storage::{MonthlyTotal, NewTransaction, Storage};
+use crate::storage::{MonthlyTotal, NewTransaction, Storage, TxFx};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct RecurringSegment {
@@ -31,11 +31,17 @@ pub struct RecurringSegment {
     pub end_month: Option<String>,
     /// Day of month; months that are shorter use their last day.
     pub day: u32,
-    /// Signed like transactions: expenses are negative.
+    /// Signed like transactions: expenses are negative. For a foreign-currency rule this is
+    /// only an estimate in shekels (at the rate when the rule was saved); every month's real
+    /// charge is priced at that day's rate when it settles.
     pub amount_agorot: i64,
     pub category_id: Option<i64>,
     pub payment_method_id: Option<i64>,
     pub note: String,
+    /// `USD`, `EUR` or `JPY` for a foreign-currency rule; none means shekels.
+    pub currency: Option<String>,
+    /// The foreign amount, signed, in the currency's minor unit (cents; whole yen).
+    pub orig_minor: Option<i64>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -50,6 +56,10 @@ pub struct NewRecurring {
     pub payment_method_id: Option<i64>,
     #[serde(default)]
     pub note: String,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub orig_minor: Option<i64>,
 }
 
 fn first_day() -> u32 {
@@ -66,6 +76,8 @@ impl RecurringSegment {
             category_id: self.category_id,
             payment_method_id: self.payment_method_id,
             note: self.note.clone(),
+            currency: self.currency.clone(),
+            orig_minor: self.orig_minor,
         }
     }
 }
@@ -79,6 +91,11 @@ pub struct Occurrence {
     pub category_id: Option<i64>,
     pub payment_method_id: Option<i64>,
     pub note: String,
+    pub currency: Option<String>,
+    pub orig_minor: Option<i64>,
+    /// Set by [`settle_due`] just before settling a foreign occurrence: the rate of its day.
+    #[serde(skip)]
+    pub fx: Option<crate::storage::TxFx>,
 }
 
 #[derive(Debug)]
@@ -147,6 +164,9 @@ pub fn occurrences(segments: &[RecurringSegment], through_month: &str) -> Vec<Oc
                 category_id: s.category_id,
                 payment_method_id: s.payment_method_id,
                 note: s.note.clone(),
+                currency: s.currency.clone(),
+                orig_minor: s.orig_minor,
+                fx: None,
             });
             month = month + Months::new(1);
         }
@@ -185,7 +205,17 @@ pub async fn upcoming_stored(
 ) -> anyhow::Result<Vec<Occurrence>> {
     let segments = db.list_recurring().await?;
     let settled = db.settled_recurring().await?;
-    Ok(upcoming(&segments, through_month, today, &settled))
+    let mut occ = upcoming(&segments, through_month, today, &settled);
+    // Foreign previews use the newest rate seen, so the totals follow the market until the
+    // charge settles at its own day's rate.
+    for o in &mut occ {
+        if let (Some(c), Some(orig)) = (&o.currency, o.orig_minor) {
+            if let Some(rate) = db.get_fx_rate(c, "latest").await? {
+                o.amount_agorot = crate::fx::to_agorot(c, orig, rate);
+            }
+        }
+    }
+    Ok(occ)
 }
 
 /// Edit a single month on its own: it becomes a transaction with these values (any date,
@@ -196,6 +226,7 @@ pub async fn settle_month(
     series_id: i64,
     month: &str,
     t: &NewTransaction,
+    fx: Option<&TxFx>,
 ) -> Result<(), RecurringError> {
     if NaiveDate::parse_from_str(&t.date, "%Y-%m-%d").is_err() {
         return invalid("date must be YYYY-MM-DD");
@@ -203,7 +234,7 @@ pub async fn settle_month(
     if t.amount_agorot == 0 {
         return invalid("amount must not be zero");
     }
-    settle_or_skip(db, series_id, month, Some(t)).await
+    settle_or_skip(db, series_id, month, Some((t, fx))).await
 }
 
 /// Skip a single month: no transaction is made and the series carries on around it.
@@ -219,7 +250,7 @@ async fn settle_or_skip(
     db: &dyn Storage,
     series_id: i64,
     month: &str,
-    t: Option<&NewTransaction>,
+    t: Option<(&NewTransaction, Option<&TxFx>)>,
 ) -> Result<(), RecurringError> {
     if !is_month(month) {
         return invalid("month must be YYYY-MM");
@@ -231,7 +262,10 @@ async fn settle_or_skip(
     {
         return invalid("the series has no occurrence in that month");
     }
-    if !db.settle_recurring_month(series_id, month, t).await? {
+    if !db
+        .settle_recurring_month(series_id, month, t.map(|x| x.0), t.and_then(|x| x.1))
+        .await?
+    {
         return invalid("that month has already settled");
     }
     Ok(())
@@ -258,8 +292,36 @@ pub async fn settle_due(db: &dyn Storage, today: NaiveDate) -> anyhow::Result<us
     let today_str = today.format("%Y-%m-%d").to_string();
     let mut due = occurrences(&segments, &fmt_month(today));
     due.retain(|o| o.date <= today_str);
+    let mut complete = true;
+    if due.iter().any(|o| o.currency.is_some()) {
+        // Price each foreign charge at its own day's rate (today's is a stand-in until the
+        // day closes). Only months not settled yet need a rate.
+        let settled = db.settled_recurring().await?;
+        let mut priced = Vec::with_capacity(due.len());
+        for mut o in due {
+            let new = !settled.contains(&(o.series_id, o.date[..7].to_string()));
+            if let (true, Some(c), Some(orig)) = (new, o.currency.clone(), o.orig_minor) {
+                match crate::fx::rate_for(db, &c, &o.date, &today_str).await {
+                    Ok(r) => {
+                        o.amount_agorot = crate::fx::to_agorot(&c, orig, r.rate);
+                        o.fx = Some(crate::fx::build_fx(0, &c, orig, &r));
+                    }
+                    Err(e) => {
+                        // No rate and none cached: leave it for the next time.
+                        tracing::warn!("repeating charge not settled, no exchange rate: {e}");
+                        complete = false;
+                        continue;
+                    }
+                }
+            }
+            priced.push(o);
+        }
+        due = priced;
+    }
     let added = db.settle_recurring(&due).await?;
-    *last = Some((today, segments));
+    if complete {
+        *last = Some((today, segments));
+    }
     Ok(added)
 }
 
@@ -311,6 +373,48 @@ fn validate(r: &NewRecurring) -> Result<(), RecurringError> {
     if r.amount_agorot == 0 {
         return invalid("amount must not be zero");
     }
+    match (&r.currency, r.orig_minor) {
+        (None, None) => {}
+        (Some(c), Some(orig)) => {
+            if crate::fx::check_currency(c).is_err() {
+                return invalid("unsupported currency");
+            }
+            if orig == 0 {
+                return invalid("amount must not be zero");
+            }
+            if (orig < 0) != (r.amount_agorot < 0) {
+                return invalid("the shekel estimate must match the sign of the amount");
+            }
+        }
+        _ => return invalid("currency and orig_minor go together"),
+    }
+    Ok(())
+}
+
+/// Fill in the shekel estimate of a foreign-currency rule from today's rate (shekel rules are
+/// left as they are). A rule given in ILS arrives without a currency.
+pub async fn price_rule(
+    db: &dyn Storage,
+    r: &mut NewRecurring,
+    today: NaiveDate,
+) -> Result<(), RecurringError> {
+    r.currency = r.currency.take().filter(|c| c != "ILS");
+    let Some(c) = &r.currency else {
+        r.orig_minor = None;
+        return Ok(());
+    };
+    if crate::fx::check_currency(c).is_err() {
+        return invalid("unsupported currency");
+    }
+    let Some(orig) = r.orig_minor.filter(|o| *o != 0) else {
+        return invalid("amount must not be zero");
+    };
+    let t = today.format("%Y-%m-%d").to_string();
+    let rate = crate::fx::rate_for(db, c, &t, &t)
+        .await
+        .or_else(|e| invalid(&e.to_string()))?;
+    let a = crate::fx::to_agorot(c, orig, rate.rate);
+    r.amount_agorot = if a == 0 { orig.signum() } else { a };
     Ok(())
 }
 
@@ -448,6 +552,8 @@ mod tests {
             category_id: None,
             payment_method_id: None,
             note: "netflix".into(),
+            currency: None,
+            orig_minor: None,
         }
     }
 
@@ -569,10 +675,10 @@ mod tests {
             payment_method_id: None,
             note: "early".into(),
         };
-        settle_month(&s, id, "2026-03", &early).await.unwrap();
+        settle_month(&s, id, "2026-03", &early, None).await.unwrap();
         // Doing it twice, or for a month the series doesn't have, is refused.
-        assert!(settle_month(&s, id, "2026-03", &early).await.is_err());
-        assert!(settle_month(&s, id, "2025-12", &early).await.is_err());
+        assert!(settle_month(&s, id, "2026-03", &early, None).await.is_err());
+        assert!(settle_month(&s, id, "2025-12", &early, None).await.is_err());
         let ahead = upcoming_stored(&s, "2026-05", day("2026-02-20"))
             .await
             .unwrap();
@@ -642,6 +748,8 @@ mod tests {
             category_id: Some(7),
             payment_method_id: None,
             note: String::new(),
+            currency: None,
+            orig_minor: None,
         };
         let mut totals = vec![MonthlyTotal {
             month: "2026-02".into(),
@@ -657,5 +765,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("2026-02", -150, 2), ("2026-01", -100, 1)]
         );
+    }
+
+    async fn amount_on(s: &SqliteStorage, d: &str) -> i64 {
+        let all = s.list_transactions().await.unwrap();
+        all.iter().find(|t| t.date == d).unwrap().amount_agorot
+    }
+
+    #[tokio::test]
+    async fn foreign_months_settle_at_their_own_days_rate() {
+        let _g = crate::fx::ENV_LOCK.lock().await;
+        std::env::set_var("FX_FAKE_RATES", "USD=3.5");
+        let s = SqliteStorage::open(":memory:").unwrap();
+        let mut r = new("2026-01", None, -1);
+        r.day = 10;
+        r.currency = Some("USD".into());
+        r.orig_minor = Some(-1000); // $10.00
+        price_rule(&s, &mut r, day("2026-01-05")).await.unwrap();
+        assert_eq!(r.amount_agorot, -3500); // estimate at today's rate
+        create(&s, &r).await.unwrap();
+        // January 10 is closed on the 11th: priced at that day's rate, final.
+        assert_eq!(settle_due(&s, day("2026-01-11")).await.unwrap(), 1);
+        assert_eq!(amount_on(&s, "2026-01-10").await, -3500);
+        let fx = &s.list_tx_fx().await.unwrap()[0];
+        assert_eq!((fx.currency.as_str(), fx.orig_minor), ("USD", -1000));
+        assert!(!fx.estimated);
+        // February 10 settles on the day itself: a stand-in rate, re-priced once the day closes.
+        std::env::set_var("FX_FAKE_RATES", "USD=3.6");
+        assert_eq!(settle_due(&s, day("2026-02-10")).await.unwrap(), 1);
+        let fxs = s.list_tx_fx().await.unwrap();
+        assert!(fxs.iter().any(|f| f.estimated));
+        assert_eq!(amount_on(&s, "2026-02-10").await, -3600);
+        std::env::set_var("FX_FAKE_RATES", "USD=3.7");
+        assert_eq!(crate::fx::refresh_estimates(&s, "2026-02-11", 10).await, 1);
+        assert_eq!(amount_on(&s, "2026-02-10").await, -3700);
+        // Previews follow the newest "latest" rate cached (a closed day does not change it).
+        let ahead = upcoming_stored(&s, "2026-04", day("2026-02-11"))
+            .await
+            .unwrap();
+        assert_eq!(ahead[0].amount_agorot, -3600);
+        // Bad rules are refused.
+        let mut bad = new("2026-01", None, -1);
+        bad.currency = Some("GBP".into());
+        bad.orig_minor = Some(-5);
+        assert!(price_rule(&s, &mut bad, day("2026-01-05")).await.is_err());
+        let mut half = new("2026-01", None, -1);
+        half.currency = Some("USD".into());
+        assert!(create(&s, &half).await.is_err());
+        std::env::remove_var("FX_FAKE_RATES");
     }
 }

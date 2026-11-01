@@ -649,6 +649,7 @@ pub trait Storage: Send + Sync {
         _series_id: i64,
         _month: &str,
         _t: Option<&NewTransaction>,
+        _fx: Option<&TxFx>,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("repeating transactions are not supported by this storage backend")
     }
@@ -1539,7 +1540,7 @@ impl Storage for SqliteStorage {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, series_id, start_month, end_month, day, amount_agorot, category_id,
-                    payment_method_id, note
+                    payment_method_id, note, currency, orig_minor
              FROM recurring ORDER BY series_id, start_month",
         )?;
         let rows = stmt
@@ -1554,6 +1555,8 @@ impl Storage for SqliteStorage {
                     category_id: r.get(6)?,
                     payment_method_id: r.get(7)?,
                     note: r.get(8)?,
+                    currency: r.get(9)?,
+                    orig_minor: r.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1569,8 +1572,8 @@ impl Storage for SqliteStorage {
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO recurring (series_id, start_month, end_month, day, amount_agorot,
-                                    category_id, payment_method_id, note)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                    category_id, payment_method_id, note, currency, orig_minor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 series_id.unwrap_or(0),
                 r.start_month,
@@ -1579,7 +1582,9 @@ impl Storage for SqliteStorage {
                 r.amount_agorot,
                 r.category_id,
                 r.payment_method_id,
-                r.note
+                r.note,
+                r.currency,
+                r.orig_minor
             ],
         )?;
         let id = tx.last_insert_rowid();
@@ -1596,7 +1601,7 @@ impl Storage for SqliteStorage {
     async fn update_recurring(&self, id: i64, r: &NewRecurring) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute(
             "UPDATE recurring SET start_month = ?2, end_month = ?3, day = ?4, amount_agorot = ?5,
-               category_id = ?6, payment_method_id = ?7, note = ?8
+               category_id = ?6, payment_method_id = ?7, note = ?8, currency = ?9, orig_minor = ?10
              WHERE id = ?1",
             params![
                 id,
@@ -1606,7 +1611,9 @@ impl Storage for SqliteStorage {
                 r.amount_agorot,
                 r.category_id,
                 r.payment_method_id,
-                r.note
+                r.note,
+                r.currency,
+                r.orig_minor
             ],
         )?;
         Ok(())
@@ -1634,6 +1641,7 @@ impl Storage for SqliteStorage {
         series_id: i64,
         month: &str,
         t: Option<&NewTransaction>,
+        fx: Option<&TxFx>,
     ) -> anyhow::Result<bool> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
@@ -1655,6 +1663,9 @@ impl Storage for SqliteStorage {
                     series_id
                 ],
             )?;
+            if let Some(f) = fx {
+                insert_tx_fx(&tx, tx.last_insert_rowid(), f)?;
+            }
         }
         tx.commit()?;
         Ok(new == 1)
@@ -1683,6 +1694,9 @@ impl Storage for SqliteStorage {
                         o.series_id
                     ],
                 )?;
+                if let Some(f) = &o.fx {
+                    insert_tx_fx(&tx, tx.last_insert_rowid(), f)?;
+                }
                 added += 1;
             }
         }
@@ -1737,6 +1751,24 @@ impl Storage for SqliteStorage {
             .unwrap()
             .execute("DELETE FROM change_log WHERE at < ?1", params![before])?)
     }
+}
+
+/// Keep the foreign-currency details with a transaction that was just inserted.
+fn insert_tx_fx(conn: &rusqlite::Connection, id: i64, f: &TxFx) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO transaction_fx
+           (transaction_id, currency, orig_minor, rate, rate_date, estimated)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            id,
+            f.currency,
+            f.orig_minor,
+            f.rate,
+            f.rate_date,
+            f.estimated
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2291,6 +2323,8 @@ mod tests {
             category_id: Some(a),
             payment_method_id: None,
             note: String::new(),
+            currency: None,
+            orig_minor: None,
         };
         let first = s.insert_recurring(None, &rule("2026-01")).await.unwrap();
         s.insert_recurring(Some(first), &rule("2026-06"))

@@ -530,6 +530,7 @@ impl Storage for Logged {
         series_id: i64,
         month: &str,
         t: Option<&NewTransaction>,
+        fx: Option<&crate::storage::TxFx>,
     ) -> anyhow::Result<bool> {
         let scheduled = self
             .0
@@ -539,7 +540,10 @@ impl Storage for Logged {
             .filter(|s| s.series_id == series_id)
             .flat_map(|s| crate::recurring::occurrences(std::slice::from_ref(s), month))
             .find(|o| &o.date[..7] == month);
-        let settled = self.0.settle_recurring_month(series_id, month, t).await?;
+        let settled = self
+            .0
+            .settle_recurring_month(series_id, month, t, fx)
+            .await?;
         if settled {
             if let Some(n) = self.names().await {
                 let old = scheduled.as_ref().map(|o| n.occurrence(o));
@@ -685,6 +689,8 @@ mod tests {
             category_id: None,
             payment_method_id: None,
             note: "rent".into(),
+            currency: None,
+            orig_minor: None,
         };
         let series = recurring::create(&db, &rule("2026-01")).await.unwrap();
         recurring::settle_month(
@@ -692,6 +698,7 @@ mod tests {
             series,
             "2026-03",
             &tx("2026-03-05", -700, None, "rent"),
+            None,
         )
         .await
         .unwrap();
@@ -728,6 +735,8 @@ mod tests {
             category_id: None,
             payment_method_id: None,
             note: String::new(),
+            currency: None,
+            orig_minor: None,
         };
         let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
         let series = recurring::create(&db, &rule("2026-01", -500))
