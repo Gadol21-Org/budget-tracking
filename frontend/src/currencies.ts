@@ -130,15 +130,14 @@ export function currenciesView(ctx: CurrenciesCtx): HTMLElement {
       const rows = [...addedBox.querySelectorAll<HTMLElement>(".row[data-i]")];
       const rects = rows.map((r) => r.getBoundingClientRect());
       const startY = e.clientY;
-      const step = rects[i].height;
+      const step = rects.length > 1 ? rects[1].top - rects[0].top : rects[i].height;
       let to = i;
       row.classList.add("dragging");
       const move = (ev: PointerEvent) => {
         const dy = Math.max(rects[0].top - rects[i].top, Math.min(rects[rects.length - 1].top - rects[i].top, ev.clientY - startY));
         row.style.transform = `translateY(${dy}px)`;
-        const centre = rects[i].top + rects[i].height / 2 + dy;
-        to = rects.findIndex((r) => centre < r.top + r.height / 2);
-        if (to < 0) to = rects.length - 1;
+        // Rows are equally tall, so the new place is the number of whole rows the handle has travelled (the clamp above lets it reach either end).
+        to = Math.max(0, Math.min(rows.length - 1, i + Math.round(dy / step)));
         rows.forEach((r, k) => {
           if (k !== i) r.style.transform = i < k && k <= to ? `translateY(${-step}px)` : to <= k && k < i ? `translateY(${step}px)` : "";
         });
