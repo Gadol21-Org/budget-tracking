@@ -1,5 +1,7 @@
 import { bounds, contains, shift, title as periodTitle, type Period } from "./period";
 import { type Category, type Transaction } from "./api";
+import { categoryName, categoryPath } from "./categories";
+import { formatShekelsWhole, longMonth, shortMonth } from "./format";
 import { clickable, el, type Child } from "./ui";
 
 /** The two directions money moves. */
@@ -48,11 +50,8 @@ const PALETTE = ["#0f766e", "#4f46e5", "#d97706", "#db2777", "#0891b2", "#65a30d
 const OTHER_COLOR = "#94a3b8";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-const shekels = (agorot: number) => (agorot / 100).toLocaleString("he-IL", { style: "currency", currency: "ILS", maximumFractionDigits: 0 });
-const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: shekels(agorot) });
+const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekelsWhole(agorot) });
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const shortMonth = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("he-IL", { month: "short" });
-const longMonth = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("he-IL", { month: "long", year: "numeric" });
 
 // ---- Periods and comparison -------------------------------------------------------------------
 
@@ -380,7 +379,7 @@ function openCompareDialog(ctx: Ctx) {
 
 type Body = (ctx: Ctx, baseLabel: string) => HTMLElement;
 
-const catName = (ctx: Ctx, id: number | null) => ctx.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
+const catName = (ctx: Ctx, id: number | null) => categoryName(ctx.cats, id);
 
 function highlightSet(ctx: Ctx, months: string[]): Set<number> {
   return new Set(months.flatMap((m, i) => (contains(ctx.period, `${m}-15`) ? [i] : [])));
@@ -429,7 +428,7 @@ const overview: Body = (ctx, baseLabel) => {
       { className: "kpis" },
       kpi("הוצאות", money(cur.expense, "expense"), delta(cur.expense, bExp, true)),
       kpi("הכנסות", money(cur.income, "income"), delta(cur.income, bInc, false)),
-      kpi("יתרה", money(bal, bal < 0 ? "expense" : "income"), el("span", { className: `num delta ${Math.abs(bal - bBal) < 100 ? "flat" : bal > bBal ? "good" : "bad"}` }, `${bal >= bBal ? "+" : "−"}${shekels(Math.abs(bal - bBal))}`)),
+      kpi("יתרה", money(bal, bal < 0 ? "expense" : "income"), el("span", { className: `num delta ${Math.abs(bal - bBal) < 100 ? "flat" : bal > bBal ? "good" : "bad"}` }, `${bal >= bBal ? "+" : "−"}${formatShekelsWhole(Math.abs(bal - bBal))}`)),
       kpi("שיעור חיסכון", el("span", { className: "num", textContent: rate == null ? "–" : `${rate}%` }), el("span", { className: "delta flat", textContent: "מההכנסות" })),
     ),
     el("h2", { textContent: "תובנות" }),
@@ -438,7 +437,7 @@ const overview: Body = (ctx, baseLabel) => {
     el(
       "div",
       { className: "card" },
-      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${formatShekelsWhole(series[i])}`), series: [series], colors: ["var(--expense)"], highlight: highlightSet(ctx, months), avg }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--expense)" }), "הוצאות"), avg != null && el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו"), el("span", { textContent: "הקשה על עמודה מציגה את הסכום מעליה" })),
     ),
   );
@@ -484,7 +483,7 @@ const cats: Body = (ctx, baseLabel) => {
       : el(
           "div",
           { className: "catsgrid" },
-          el("div", { className: "card donutcard" }, svgBox(donut(parts, shekels(cur.sideTotal), S.title)), legend),
+          el("div", { className: "card donutcard" }, svgBox(donut(parts, formatShekelsWhole(cur.sideTotal), S.title)), legend),
           el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
           el(
             "div",
@@ -531,7 +530,7 @@ function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: 
     node: el(
       "div",
       { className: "card" },
-      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${shekels(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }),
+      peekChart({ labels: months.map(shortMonth), tips: months.map((m, i) => `${longMonth(m)}: ${formatShekelsWhole(series[i])}`), series: [series], colors: [color], highlight: highlightSet(ctx, months), avg }),
       el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:#d97706" }), "ממוצע החודשים שהסתיימו")),
     ),
   };
@@ -567,7 +566,7 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
     ? el(
         "div",
         { className: "card donutcard" },
-        svgBox(donut(slices.map((x) => ({ value: x.value, color: x.color })), shekels(g.total), S.title)),
+        svgBox(donut(slices.map((x) => ({ value: x.value, color: x.color })), formatShekelsWhole(g.total), S.title)),
         el(
           "div",
           { className: "donutlegend" },
@@ -649,7 +648,7 @@ const trends: Body = (ctx) => {
   const aggs = months.map((m) => aggregate(ctx, { kind: "month", month: m }));
   const income = aggs.map((a) => a.income), expense = aggs.map((a) => a.expense);
   const labels = months.map(shortMonth);
-  const tips = months.map((m, i) => `${longMonth(m)}: הכנסות ${shekels(income[i])}, הוצאות ${shekels(expense[i])}`);
+  const tips = months.map((m, i) => `${longMonth(m)}: הכנסות ${formatShekelsWhole(income[i])}, הוצאות ${formatShekelsWhole(expense[i])}`);
   const hi = highlightSet(ctx, months);
 
   // Averages count only months that have ended and hold data.
@@ -700,11 +699,7 @@ const trends: Body = (ctx) => {
 
 // ---- Dashboard: what changed ---------------------------------------------------------------------
 
-const catPath = (ctx: Ctx, id: number | null) => {
-  const c = ctx.cats.find((x) => x.id === id);
-  const p = c?.parent_id != null ? ctx.cats.find((x) => x.id === c.parent_id) : undefined;
-  return p && c ? `${p.name} › ${c.name}` : catName(ctx, id);
-};
+const catPath = (ctx: Ctx, id: number | null) => categoryPath(ctx.cats, id);
 
 const changes: Body = (ctx, baseLabel) => {
   const cur = aggregate(ctx, ctx.period);
@@ -738,7 +733,7 @@ const changes: Body = (ctx, baseLabel) => {
       { className: "row" },
       el("div", { className: "grow" }, el("div", { className: "name", textContent: i.name }), i.parent ? el("div", { className: "muted small", textContent: i.parent }) : null),
       el("div", { className: "changebar" }, el("span", { style: `width:${Math.max(4, (Math.abs(i.d) / max) * 100)}%;background:${color}` })),
-      el("div", { className: "amt" }, el("span", { className: "num", style: `color:${color}`, textContent: `${grow ? "+" : "−"}${shekels(Math.abs(i.d))}` }), i.was === 0 && el("div", { className: "delta flat", textContent: "חדש" })),
+      el("div", { className: "amt" }, el("span", { className: "num", style: `color:${color}`, textContent: `${grow ? "+" : "−"}${formatShekelsWhole(Math.abs(i.d))}` }), i.was === 0 && el("div", { className: "delta flat", textContent: "חדש" })),
       el("span", { className: "chev muted", textContent: "‹" }),
     );
     return clickable(r, () => ctx.navigate({ dash: "cats", cat: i.top, sub: i.sub }, "push"));
@@ -750,8 +745,8 @@ const changes: Body = (ctx, baseLabel) => {
       "div",
       { className: "card", style: "text-align:center" },
       el("div", { className: "muted small", textContent: `סך ההוצאות ${baseLabel}` }),
-      el("div", { className: "num", style: `font-size:1.5rem;font-weight:800;color:${net > 0 ? "var(--expense)" : "var(--income)"}`, textContent: `${net > 0 ? "+" : "−"}${shekels(Math.abs(net))}` }),
-      el("div", { className: "muted small", textContent: `${shekels(cur.expense)} לעומת ${shekels(wasTotal)}` }),
+      el("div", { className: "num", style: `font-size:1.5rem;font-weight:800;color:${net > 0 ? "var(--expense)" : "var(--income)"}`, textContent: `${net > 0 ? "+" : "−"}${formatShekelsWhole(Math.abs(net))}` }),
+      el("div", { className: "muted small", textContent: `${formatShekelsWhole(cur.expense)} לעומת ${formatShekelsWhole(wasTotal)}` }),
     ),
     el("h2", { textContent: "מה הגדיל את ההוצאות" }),
     up.length ? el("div", { className: "card rows" }, ...up.map((i) => row(i, true))) : el("div", { className: "empty", textContent: "שום דבר לא עלה" }),
@@ -790,7 +785,7 @@ const fixed: Body = (ctx) => {
   const paidSum = seriesRows.reduce((s, r) => s + r.sum, 0);
   const upcoming = inP.filter((t) => t.upcoming).sort((a, b) => a.date.localeCompare(b.date));
   const upcomingOut = -upcoming.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
-  const totalRow = (label: string, v: number) => el("div", { className: "row totalrow" }, el("div", { className: "grow" }, el("b", { textContent: label })), el("b", { className: "num", textContent: shekels(v) }));
+  const totalRow = (label: string, v: number) => el("div", { className: "row totalrow" }, el("div", { className: "grow" }, el("b", { textContent: label })), el("b", { className: "num", textContent: formatShekelsWhole(v) }));
 
   // Month-end forecast: variable spending continues at its pace so far; fixed and income are what is known.
   let forecast: HTMLElement | null = null;
@@ -809,7 +804,7 @@ const fixed: Body = (ctx) => {
         el("div", { className: "rows" },
           el("div", { className: "row" }, el("div", { className: "grow", textContent: `הוצאה משתנה עד היום (${day} מתוך ${n} ימים)` }), money(varSoFar)),
           el("div", { className: "row" }, el("div", { className: "grow", textContent: "בקצב הזה, עד סוף החודש" }), money(Math.round(projVar))),
-          el("div", { className: "row" }, el("div", { className: "grow" }, el("b", { textContent: "💡 יתרה צפויה בסוף החודש" })), el("b", { className: `num ${bal < 0 ? "expense" : "income"}`, textContent: shekels(Math.round(bal)) })),
+          el("div", { className: "row" }, el("div", { className: "grow" }, el("b", { textContent: "💡 יתרה צפויה בסוף החודש" })), el("b", { className: `num ${bal < 0 ? "expense" : "income"}`, textContent: formatShekelsWhole(Math.round(bal)) })),
         ),
         day < 7 && el("div", { className: "muted small", textContent: "מוקדם בחודש: התחזית גסה וצפויה להשתפר ככל שהחודש מתקדם." }),
         el("div", { className: "muted small", textContent: "מבוססת על קצב ההוצאה המשתנה עד היום, החיובים החוזרים וההכנסות שידועים." }),
@@ -828,8 +823,8 @@ const fixed: Body = (ctx) => {
       el(
         "div",
         { className: "splitlegend" },
-        el("span", {}, el("i", { style: "background:#4f46e5" }), "קבוע ", el("b", { className: "num", textContent: shekels(fixedSum) }), ` (${pct(fixedSum, total)})`),
-        el("span", {}, el("i", { style: "background:color-mix(in srgb, var(--brand) 35%, transparent)" }), "משתנה ", el("b", { className: "num", textContent: shekels(variable) })),
+        el("span", {}, el("i", { style: "background:#4f46e5" }), "קבוע ", el("b", { className: "num", textContent: formatShekelsWhole(fixedSum) }), ` (${pct(fixedSum, total)})`),
+        el("span", {}, el("i", { style: "background:color-mix(in srgb, var(--brand) 35%, transparent)" }), "משתנה ", el("b", { className: "num", textContent: formatShekelsWhole(variable) })),
       ),
     ),
     el(
@@ -903,7 +898,7 @@ const rhythm: Body = (ctx) => {
       ...days.map((v, i) => {
         const future = i >= elapsed;
         const t = future ? 0 : Math.min(1, v / scale);
-        const c = el("div", { className: `hmcell${future ? " future" : ""}`, title: `${i + 1}: ${shekels(v)}`, textContent: String(i + 1) });
+        const c = el("div", { className: `hmcell${future ? " future" : ""}`, title: `${i + 1}: ${formatShekelsWhole(v)}`, textContent: String(i + 1) });
         if (!future && v > 0) {
           c.style.background = `color-mix(in srgb, var(--expense) ${Math.round(12 + t * 78)}%, transparent)`;
           if (t > 0.55) c.style.color = "#fff";
@@ -955,7 +950,7 @@ const rhythm: Body = (ctx) => {
     el(
       "div",
       { className: "card" },
-      svgBox(barChart({ labels: WEEKDAYS, tips: WEEKDAYS.map((d, i) => `${d}: ${shekels(avg[i])}`), series: [avg], colors: ["var(--expense)"], highlight: new Set([peakDay]), height: 90 })),
+      svgBox(barChart({ labels: WEEKDAYS, tips: WEEKDAYS.map((d, i) => `${d}: ${formatShekelsWhole(avg[i])}`), series: [avg], colors: ["var(--expense)"], highlight: new Set([peakDay]), height: 90 })),
       avg[peakDay] > 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "📅" }), el("div", {}, "יום ", el("b", { textContent: WEEKDAYS[peakDay] }), " הוא היום היקר ביותר: ", money(Math.round(avg[peakDay])), " בממוצע.")),
     ),
   );

@@ -54,3 +54,9 @@ export function title(p: Period): string {
 export const MONTHS = Array.from({ length: 12 }, (_, i) =>
   new Date(2000, i, 1).toLocaleDateString("he-IL", { month: "long" }),
 );
+
+/** Whole months from `from` to `to` (both YYYY-MM); negative if `to` is earlier. */
+export const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
+
+/** The YYYY-MM month `n` months after `month` (before it if negative). */
+export const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);

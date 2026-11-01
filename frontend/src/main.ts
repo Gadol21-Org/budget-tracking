@@ -1,10 +1,12 @@
 import "./style.css";
+import { categoryById, categoryName, categoryPath } from "./categories";
+import { formatShekels } from "./format";
 import { clickable, dateField, el, fmtDate, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
-import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
+import { addMonths, contains, MONTHS, monthOf, monthsBetween, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
-import { api, CURRENCIES, currencySymbol, decimals, formatMinor, formatRate, formatShekels, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
+import { api, CURRENCIES, currencySymbol, decimals, formatMinor, formatRate, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
 
 type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
 
@@ -16,11 +18,11 @@ const state = {
   txs: [] as Transaction[],
   recurring: [] as RecurringSegment[],
   cats: [] as Category[],
-  /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
   /** Which side of the summary's category breakdown is shown. */
   kind: "expense" as "expense" | "income",
   /** Which side of the category manager in settings is shown (true = income). */
   catKind: false,
+  /** Set when a summary row was opened: the list shows only that category (and its sub-categories). */
   filter: undefined as { id: number | null } | undefined,
   /** The insights tab: open dashboard, drill-down position and what the period is compared with. */
   insights: { dash: "overview", cmp: { kind: "prev" } } as InsightsState,
@@ -143,14 +145,10 @@ function fxLine(t: Transaction): HTMLElement | null {
   return el("div", { className: stub ? "fxline estimated" : "fxline", title: stub ? "שער זמני: יתעדכן לשער של היום שבו התנועה בוצעה" : `שער ליום ${fmtDate(f.rate_date)}`, textContent: `${orig} · שער ${formatRate(f.rate)}${stub ? " (זמני)" : ""}` });
 }
 const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
-const catById = (id: number | null) => state.cats.find((c) => c.id === id);
-const catName = (id: number | null) => catById(id)?.name ?? "ללא קטגוריה";
+const catById = (id: number | null) => categoryById(state.cats, id);
+const catName = (id: number | null) => categoryName(state.cats, id);
 /** "parent › child" for sub-categories. */
-const catPath = (id: number | null) => {
-  const c = catById(id);
-  const p = c?.parent_id != null ? catById(c.parent_id) : undefined;
-  return p && c ? `${p.name} › ${c.name}` : catName(id);
-};
+const catPath = (id: number | null) => categoryPath(state.cats, id);
 
 const dayTitle = (d: string) =>
   new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" });
@@ -1066,8 +1064,6 @@ function combo(placeholder: string) {
   };
 }
 
-const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
-const addMonths = (month: string, n: number) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 + n, 1)).toISOString().slice(0, 7);
 
 /**
  * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits

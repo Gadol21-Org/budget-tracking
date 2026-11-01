@@ -77,7 +77,8 @@ export const CURRENCIES: { code: Currency; symbol: string; name: string }[] = [
   { code: "EUR", symbol: "€", name: "יורו" },
   { code: "JPY", symbol: "¥", name: "ין" },
 ];
-export const currencySymbol = (c: Currency) => CURRENCIES.find((x) => x.code === c)!.symbol;
+/** The symbol of a currency, or its code if it is not one we know. */
+export const currencySymbol = (c: Currency) => CURRENCIES.find((x) => x.code === c)?.symbol ?? c;
 /** Decimal places of a currency's minor unit (cents; the yen has none). */
 export const decimals = (c: Currency) => (c === "JPY" ? 0 : 2);
 
@@ -225,6 +226,3 @@ export function formatMinor(minor: number, c: Currency): string {
 /** A rate in shekels per unit, with enough digits for the yen (₪0.0245). */
 export const formatRate = (rate: number) => rate.toLocaleString("en-US", { maximumSignificantDigits: 4 });
 
-export function formatShekels(agorot: number): string {
-  return (agorot / 100).toLocaleString("he-IL", { style: "currency", currency: "ILS" });
-}

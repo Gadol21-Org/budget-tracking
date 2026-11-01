@@ -39,6 +39,10 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
       - name: Format
         run: cargo fmt --all --check
 
