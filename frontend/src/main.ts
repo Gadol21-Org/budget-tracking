@@ -1168,7 +1168,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     void refreshQuote();
     syncSave();
   });
-  const curSeg = el("label", { className: "curfield" }, "מטבע", curPick.root);
+  const curSeg = el("div", { className: "field curfield" }, el("span", { textContent: "מטבע" }), curPick.root);
   const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
   const fxNote = el("div", { className: "fxnote muted" });
   const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
@@ -1376,8 +1376,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     el("div", { className: "seg" }, expBtn, incBtn),
     el("div", { className: "amountrow" }, el("label", {}, amountLbl, amount), curSeg),
     fxBox,
-    el("label", {}, "קטגוריה", topPick.root),
-    el("label", {}, "תת-קטגוריה", subPick.root),
+    el("div", { className: "field" }, el("span", { textContent: "קטגוריה" }), topPick.root),
+    el("div", { className: "field" }, el("span", { textContent: "תת-קטגוריה" }), subPick.root),
     el("label", {}, "תאריך", dateField(date)),
     el("label", {}, "הערה", note),
     bizRow,
