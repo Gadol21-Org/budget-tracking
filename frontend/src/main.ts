@@ -1068,7 +1068,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   /** The month of the occurrence being edited; the date field may move the charge out of it. */
   const month = existing?.date.slice(0, 7) ?? "";
   let isIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
-  const dlg = el("dialog");
+  const dlg = el("dialog", { className: "fullpage" });
   // The shekel is the default currency, always; a line already entered in USD or JPY opens in that one.
   const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
   let currency: Currency = startFx?.currency ?? "ILS";
