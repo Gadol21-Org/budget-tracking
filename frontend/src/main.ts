@@ -1148,7 +1148,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     forever.value = "months";
     months.value = String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1);
   }
-  const repeatBox = el("div", { style: "display:flex;flex-direction:column;gap:12px" }, el("label", {}, "משך", forever), el("label", {}, "מספר חודשים (כולל החודש הזה)", months));
+  const repeatBox = el("div", { style: "display:flex;flex-direction:column;gap:12px" }, el("div", { className: "field" }, el("span", { textContent: "משך" }), forever), el("div", { className: "field" }, el("span", { textContent: "מספר חודשים (כולל החודש הזה)" }), months));
   const showRepeat = () => {
     repeatBox.style.display = repeat.checked ? "flex" : "none";
     months.parentElement!.style.display = forever.value === "months" ? "" : "none";
@@ -1172,7 +1172,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
   const fxNote = el("div", { className: "fxnote muted" });
   const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
-  const fxBox = el("div", { className: "fxbox" }, el("label", {}, "סכום בשקלים (₪)", ils), fxNote, startFx ? refreshBtn : null);
+  const fxBox = el("div", { className: "fxbox" }, el("div", { className: "field" }, el("span", { textContent: "סכום בשקלים (₪)" }), ils), fxNote, startFx ? refreshBtn : null);
   /** The rate for the chosen day (null: unknown, e.g. offline: the server converts when the line is sent). */
   let quote: { rate: number; date: string; estimated: boolean } | null = startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null;
   let quoteSeq = 0;
@@ -1374,12 +1374,12 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     "form",
     { className: "add", method: "dialog" },
     el("div", { className: "seg" }, expBtn, incBtn),
-    el("div", { className: "amountrow" }, el("label", {}, amountLbl, amount), curSeg),
+    el("div", { className: "amountrow" }, el("div", { className: "field" }, amountLbl, amount), curSeg),
     fxBox,
     el("div", { className: "field" }, el("span", { textContent: "קטגוריה" }), topPick.root),
     el("div", { className: "field" }, el("span", { textContent: "תת-קטגוריה" }), subPick.root),
-    el("label", {}, "תאריך", dateField(date)),
-    el("label", {}, "הערה", note),
+    el("div", { className: "field" }, el("span", { textContent: "תאריך" }), dateField(date)),
+    el("div", { className: "field" }, el("span", { textContent: "הערה" }), note),
     bizRow,
     // Only the checkbox (inside a finger-sized hit box) toggles; the row and its text are inert.
     !existing ? el("div", { className: "repeat-row" }, el("label", { className: "repeat-hit" }, repeat), el("span", { textContent: "חוזר מדי חודש" })) : null,
