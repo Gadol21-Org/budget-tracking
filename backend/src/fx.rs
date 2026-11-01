@@ -20,11 +20,21 @@ use crate::storage::{Storage, TxFx};
 #[cfg(test)]
 pub static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub const CURRENCIES: [&str; 3] = ["USD", "EUR", "JPY"];
+/// Every currency a transaction can be entered in besides the shekel: the ones Frankfurter
+/// (ECB) publishes daily rates for, which the other providers also price. Keep in step with
+/// `CURRENCIES` in `frontend/src/api.ts` (names and symbols live there).
+pub const CURRENCIES: [&str; 30] = [
+    "USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD", "CNY", "HKD", "SGD", "KRW", "INR",
+    "THB", "MYR", "IDR", "PHP", "TRY", "ZAR", "BRL", "MXN", "SEK", "NOK", "DKK", "PLN", "CZK",
+    "HUF", "RON", "BGN", "ISK",
+];
 
-/// Decimal places of the currency's minor unit (cents; the yen has none).
+/// The currencies that are on before the user changes the setting.
+pub const DEFAULT_ENABLED: [&str; 3] = ["USD", "EUR", "JPY"];
+
+/// Decimal places of the currency's minor unit (cents; the yen and won have none).
 pub fn decimals(currency: &str) -> u32 {
-    if currency == "JPY" {
+    if matches!(currency, "JPY" | "KRW" | "ISK") {
         0
     } else {
         2
@@ -176,6 +186,39 @@ pub async fn rate_for(db: &dyn Storage, currency: &str, date: &str, today: &str)
     }
 }
 
+/// The enabled currencies saved by the user (order = picker order); the defaults until saved.
+pub async fn enabled_currencies(db: &dyn Storage) -> Result<Vec<String>> {
+    Ok(match db.get_setting(ENABLED_KEY).await? {
+        Some(v) => serde_json::from_str::<Vec<String>>(&v)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| check_currency(c).is_ok())
+            .collect(),
+        None => DEFAULT_ENABLED.iter().map(|c| c.to_string()).collect(),
+    })
+}
+
+/// Save the enabled currencies in order. The shekel is implicit, so it is dropped; unknown
+/// codes and duplicates are rejected.
+pub async fn save_enabled_currencies(db: &dyn Storage, list: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for c in list {
+        if c == "ILS" {
+            continue;
+        }
+        check_currency(c)?;
+        if out.contains(c) {
+            bail!("duplicate currency {c}");
+        }
+        out.push(c.clone());
+    }
+    db.set_setting(ENABLED_KEY, &serde_json::to_string(&out)?)
+        .await?;
+    Ok(out)
+}
+
+const ENABLED_KEY: &str = "enabled_currencies";
+
 /// Build the stored details for a new or changed foreign amount.
 pub fn build_fx(id: i64, currency: &str, orig_minor: i64, r: &Rate) -> TxFx {
     TxFx {
@@ -272,6 +315,25 @@ mod tests {
         );
         assert_eq!(parse_er_api(&json!({"rates": {"ILS": 3.3}})), Some(3.3));
         assert_eq!(parse_frankfurter(&json!({})), None);
+    }
+
+    #[tokio::test]
+    async fn enabled_currencies_keep_their_order() {
+        let s = SqliteStorage::open(":memory:").unwrap();
+        assert_eq!(enabled_currencies(&s).await.unwrap(), ["USD", "EUR", "JPY"]);
+        let list = ["GBP", "ILS", "USD"].map(String::from);
+        // The shekel is implicit and dropped; the saved order is kept.
+        assert_eq!(save_enabled_currencies(&s, &list).await.unwrap(), ["GBP", "USD"]);
+        assert_eq!(enabled_currencies(&s).await.unwrap(), ["GBP", "USD"]);
+        assert!(save_enabled_currencies(&s, &["XXX".to_string()]).await.is_err());
+        assert!(save_enabled_currencies(&s, &["USD".to_string(), "USD".to_string()])
+            .await
+            .is_err());
+        // Everything may be removed.
+        assert!(save_enabled_currencies(&s, &[]).await.unwrap().is_empty());
+        assert!(enabled_currencies(&s).await.unwrap().is_empty());
+        assert_eq!(decimals("KRW"), 0);
+        assert_eq!(decimals("GBP"), 2);
     }
 
     #[tokio::test]

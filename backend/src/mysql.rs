@@ -21,7 +21,7 @@ use crate::storage::{
     RawPaymentMethod, Storage, Transaction, TxFx, REQUEUE_SKIPPED_SQL,
 };
 
-const SCHEMA: [&str; 14] = [
+const SCHEMA: [&str; 15] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -121,6 +121,10 @@ const SCHEMA: [&str; 14] = [
          date VARCHAR(10) NOT NULL,
          rate DOUBLE NOT NULL,
          PRIMARY KEY (currency, date)
+     )",
+    "CREATE TABLE IF NOT EXISTS app_settings (
+         k VARCHAR(64) PRIMARY KEY,
+         v TEXT NOT NULL
      )",
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
@@ -450,6 +454,29 @@ impl Storage for MySqlStorage {
         .bind(currency)
         .bind(date)
         .bind(rate)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT v FROM app_settings WHERE k = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => Some(r.try_get("v")?),
+            None => None,
+        })
+    }
+
+    async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (k, v) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE v = VALUES(v)",
+        )
+        .bind(key)
+        .bind(value)
         .execute(&self.pool)
         .await?;
         Ok(())

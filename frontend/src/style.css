@@ -364,3 +364,8 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 /* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
 html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }
 dialog { overscroll-behavior: contain; }
+
+/* Currency settings page */
+.row.fixed .name { font-weight: 600; }
+.iconbtn { min-width: 44px; min-height: 44px; padding: 6px 10px; touch-action: manipulation; }
+.cursearch { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
