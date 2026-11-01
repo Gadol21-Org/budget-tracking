@@ -62,6 +62,42 @@ export interface BusinessData {
   links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
+/** Currencies a transaction can be entered in; the shekel is the default and the stored one. */
+export type Currency = "ILS" | "USD" | "JPY";
+export const CURRENCIES: { code: Currency; symbol: string; name: string }[] = [
+  { code: "ILS", symbol: "₪", name: "שקל" },
+  { code: "USD", symbol: "$", name: "דולר" },
+  { code: "JPY", symbol: "¥", name: "ין" },
+];
+export const currencySymbol = (c: Currency) => CURRENCIES.find((x) => x.code === c)!.symbol;
+/** Decimal places of a currency's minor unit (cents; the yen has none). */
+export const decimals = (c: Currency) => (c === "JPY" ? 0 : 2);
+
+/** What a foreign-currency transaction was entered as; its `amount_agorot` is the shekel value. */
+export interface Fx {
+  transaction_id: number;
+  currency: Currency;
+  /** Signed like the shekel amount, in cents (USD) or whole yen. */
+  orig_minor: number;
+  /** Shekels per one unit of the currency; 0 while a queued line waits for a connection. */
+  rate: number;
+  rate_date: string;
+  /** The rate is a stand-in until the day's real rate is known. */
+  estimated: boolean;
+}
+
+/** A transaction as sent to the server. A foreign one gives `currency` + `orig_minor`; without
+ * `amount_agorot` the server converts at the rate for its day. */
+export interface TxInput {
+  date: string;
+  amount_agorot?: number;
+  category_id: number | null;
+  payment_method_id: number | null;
+  note: string;
+  currency?: Currency;
+  orig_minor?: number;
+}
+
 export interface MonthlyTotal {
   month: string;
   category_id: number | null;
@@ -100,7 +136,12 @@ export const api = {
   transactions: () => request<Transaction[]>("/api/transactions"),
   categories: () => request<Category[]>("/api/categories"),
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),
-  addTransaction: (t: Omit<Transaction, "id" | "sync_state">) =>
+  /** Foreign-currency details of transactions (stand-in rates of closed days are replaced first). */
+  foreign: () => request<Fx[]>("/api/foreign"),
+  /** The rate that would be used for a currency on a day. */
+  fxRate: (currency: Currency, date: string) =>
+    request<{ rate: number; date: string; estimated: boolean }>(`/api/fx/rate?currency=${currency}&date=${date}`),
+  addTransaction: (t: TxInput) =>
     request<number>("/api/transactions", { method: "POST", body: JSON.stringify(t) }),
   recurring: () => request<RecurringSegment[]>("/api/recurring"),
   occurrences: () => request<Occurrence[]>("/api/recurring/occurrences"),
@@ -146,7 +187,7 @@ export const api = {
   tagTransactions: (ids: number[], business: number | null) =>
     request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: business }) }),
   exportSheets: () => request<{ transactions: number; tabs: number }>("/api/export/sheets", { method: "POST" }),
-  updateTransaction: (id: number, t: Omit<Transaction, "id" | "sync_state">) =>
+  updateTransaction: (id: number, t: TxInput) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
   /** Whether changes are being written to Paamonim. */
@@ -159,6 +200,22 @@ export function parseAgorot(input: string): number {
   if (!Number.isFinite(n)) throw new Error("Invalid amount");
   return Math.round(n * 100);
 }
+
+/** Parse a typed amount into the currency's minor unit (cents, agorot; whole yen). */
+export function parseMinor(input: string, c: Currency): number {
+  const n = Number(input.replace(",", "."));
+  if (!Number.isFinite(n)) throw new Error("Invalid amount");
+  return Math.round(n * 10 ** decimals(c));
+}
+
+/** An amount in a currency's minor unit, e.g. ¥3,000 or $12.50. */
+export function formatMinor(minor: number, c: Currency): string {
+  const d = decimals(c);
+  return `${currencySymbol(c)}${(minor / 10 ** d).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}`;
+}
+
+/** A rate in shekels per unit, with enough digits for the yen (₪0.0245). */
+export const formatRate = (rate: number) => rate.toLocaleString("en-US", { maximumSignificantDigits: 4 });
 
 export function formatShekels(agorot: number): string {
   return (agorot / 100).toLocaleString("he-IL", { style: "currency", currency: "ILS" });

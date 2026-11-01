@@ -18,10 +18,10 @@ use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
     MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
-    RawPaymentMethod, Storage, Transaction, REQUEUE_SKIPPED_SQL,
+    RawPaymentMethod, Storage, Transaction, TxFx, REQUEUE_SKIPPED_SQL,
 };
 
-const SCHEMA: [&str; 12] = [
+const SCHEMA: [&str; 14] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -105,6 +105,20 @@ const SCHEMA: [&str; 12] = [
     "CREATE TABLE IF NOT EXISTS category_business (
          category_id BIGINT PRIMARY KEY,
          business_id BIGINT NOT NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS transaction_fx (
+         transaction_id BIGINT PRIMARY KEY,
+         currency VARCHAR(8) NOT NULL,
+         orig_minor BIGINT NOT NULL,
+         rate DOUBLE NOT NULL,
+         rate_date VARCHAR(10) NOT NULL,
+         estimated BOOLEAN NOT NULL DEFAULT FALSE
+     )",
+    "CREATE TABLE IF NOT EXISTS fx_rates (
+         currency VARCHAR(8) NOT NULL,
+         date VARCHAR(10) NOT NULL,
+         rate DOUBLE NOT NULL,
+         PRIMARY KEY (currency, date)
      )",
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
@@ -327,6 +341,84 @@ impl Storage for MySqlStorage {
                 .execute(&self.pool)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn set_tx_fx(&self, id: i64, fx: Option<&TxFx>) -> Result<()> {
+        match fx {
+            Some(f) => {
+                sqlx::query(
+                    "INSERT INTO transaction_fx
+                       (transaction_id, currency, orig_minor, rate, rate_date, estimated)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE currency = VALUES(currency),
+                       orig_minor = VALUES(orig_minor), rate = VALUES(rate),
+                       rate_date = VALUES(rate_date), estimated = VALUES(estimated)",
+                )
+                .bind(id)
+                .bind(&f.currency)
+                .bind(f.orig_minor)
+                .bind(f.rate)
+                .bind(&f.rate_date)
+                .bind(f.estimated)
+                .execute(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query("DELETE FROM transaction_fx WHERE transaction_id = ?")
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await?
+            }
+        };
+        Ok(())
+    }
+
+    async fn list_tx_fx(&self) -> Result<Vec<TxFx>> {
+        let rows = sqlx::query(
+            "SELECT f.transaction_id, f.currency, f.orig_minor, f.rate, f.rate_date,
+                    CAST(f.estimated AS SIGNED) AS estimated
+             FROM transaction_fx f JOIN transactions t ON t.id = f.transaction_id
+             ORDER BY f.transaction_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(TxFx {
+                    transaction_id: r.try_get("transaction_id")?,
+                    currency: r.try_get("currency")?,
+                    orig_minor: r.try_get("orig_minor")?,
+                    rate: r.try_get("rate")?,
+                    rate_date: r.try_get("rate_date")?,
+                    estimated: r.try_get::<i64, _>("estimated")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> Result<Option<f64>> {
+        let row = sqlx::query("SELECT rate FROM fx_rates WHERE currency = ? AND date = ?")
+            .bind(currency)
+            .bind(date)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => Some(r.try_get("rate")?),
+            None => None,
+        })
+    }
+
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO fx_rates (currency, date, rate) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE rate = VALUES(rate)",
+        )
+        .bind(currency)
+        .bind(date)
+        .bind(rate)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -910,6 +1002,10 @@ impl Storage for MySqlStorage {
         .execute(&mut *tx)
         .await?;
         sqlx::query("DELETE FROM transactions WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM transaction_fx WHERE transaction_id = ?")
             .bind(id)
             .execute(&mut *tx)
             .await?;

@@ -86,6 +86,23 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
          CREATE TABLE IF NOT EXISTS category_business_required (
              category_id INTEGER PRIMARY KEY
          );
+         -- Transactions entered in a foreign currency: the original amount and the rate used for
+         -- the shekel amount. Local only; Paamonim only ever gets the shekel amount.
+         CREATE TABLE IF NOT EXISTS transaction_fx (
+             transaction_id INTEGER PRIMARY KEY,
+             currency TEXT NOT NULL,
+             orig_minor INTEGER NOT NULL,
+             rate REAL NOT NULL,
+             rate_date TEXT NOT NULL,
+             estimated INTEGER NOT NULL DEFAULT 0
+         );
+         -- Exchange-rate cache: shekels per unit, by day (`latest` = newest fetched).
+         CREATE TABLE IF NOT EXISTS fx_rates (
+             currency TEXT NOT NULL,
+             date TEXT NOT NULL,
+             rate REAL NOT NULL,
+             PRIMARY KEY (currency, date)
+         );
          CREATE INDEX IF NOT EXISTS idx_change_log_at ON change_log(at);
          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
          CREATE INDEX IF NOT EXISTS idx_tx_category_date ON transactions(category_id, date);",

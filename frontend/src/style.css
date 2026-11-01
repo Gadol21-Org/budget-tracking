@@ -92,6 +92,12 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg button { padding: 10px; border: 0; background: var(--bg); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
+.seg.three { grid-template-columns: repeat(3, 1fr); }
+.fxbox { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; }
+.fxnote { font-size: .85rem; }
+.btn.small { padding: 6px 12px; font-size: .85rem; align-self: flex-start; }
+.fxline { font-size: .8rem; color: var(--muted); }
+.fxline.estimated { font-style: italic; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; }
 .btn { padding: 11px 18px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; }
 .btn.primary { background: var(--brand); color: var(--brand-contrast); border-color: var(--brand); font-weight: 700; }

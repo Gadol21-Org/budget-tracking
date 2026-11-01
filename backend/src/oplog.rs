@@ -237,6 +237,18 @@ impl Storage for Logged {
     async fn remove_business(&self, id: i64) -> anyhow::Result<()> {
         self.0.remove_business(id).await
     }
+    async fn set_tx_fx(&self, id: i64, fx: Option<&crate::storage::TxFx>) -> anyhow::Result<()> {
+        self.0.set_tx_fx(id, fx).await
+    }
+    async fn list_tx_fx(&self) -> anyhow::Result<Vec<crate::storage::TxFx>> {
+        self.0.list_tx_fx().await
+    }
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>> {
+        self.0.get_fx_rate(currency, date).await
+    }
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()> {
+        self.0.put_fx_rate(currency, date, rate).await
+    }
     async fn business_links(&self) -> anyhow::Result<crate::storage::BusinessLinks> {
         self.0.business_links().await
     }

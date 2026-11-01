@@ -258,6 +258,25 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         ]);
     }
 
+    let mut foreign = header(&[
+        "Transaction id",
+        "Currency",
+        "Original amount",
+        "Rate (ILS per unit)",
+        "Rate date",
+        "Estimated",
+    ]);
+    for f in storage.list_tx_fx().await? {
+        foreign.push(vec![
+            json!(f.transaction_id),
+            f.currency.clone().into(),
+            json!(f.orig_minor as f64 / 10f64.powi(crate::fx::decimals(&f.currency) as i32)),
+            json!(f.rate),
+            f.rate_date.into(),
+            json!(f.estimated),
+        ]);
+    }
+
     let mut deletes = header(&["Paamonim line id", "Date"]);
     for d in storage.pending_line_deletes().await? {
         deletes.push(vec![d.line_id.into(), d.date.into()]);
@@ -275,6 +294,7 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         ("Recurring", rec),
         ("Recurring settled", settled),
         ("Change log", log),
+        ("Foreign currency", foreign),
         ("Paamonim pending deletes", deletes),
         ("Paamonim meta", meta),
     ])
