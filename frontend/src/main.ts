@@ -991,7 +991,7 @@ function combo(placeholder: string) {
             b.setAttribute("role", "option");
             b.setAttribute("aria-selected", String(i.value === value));
             // mousedown, so the pick lands before the input's blur closes the list.
-            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.dispatchEvent(new Event("change")));
+            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.blur(), input.dispatchEvent(new Event("change")));
             return b;
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
