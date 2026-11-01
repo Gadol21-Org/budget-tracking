@@ -971,9 +971,8 @@ function revealField(input: HTMLElement) {
     }
     const d = dlg.getBoundingClientRect();
     const t = top.getBoundingClientRect();
-    // A pick list needs room below its field: put the label at the top. Any other field only scrolls if it would be hidden.
-    const delta = input.getAttribute("role") === "combobox" ? t.top - d.top - dlg.clientTop : t.top < d.top ? t.top - d.top : Math.max(0, t.bottom - (d.bottom - 12));
-    if (delta) dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
+    // A pick list needs room below its field: put the label at the top.
+    dlg.scrollTo({ top: dlg.scrollTop + (t.top - d.top - dlg.clientTop), behavior: "smooth" });
   };
   unfitDialog();
   go();
@@ -988,9 +987,10 @@ function revealField(input: HTMLElement) {
     unfitDialog = () => {};
   };
 }
-const isTextField = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && !!t.closest("dialog") && t.matches("input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea");
-document.addEventListener("focusin", (e) => isTextField(e.target) && revealField(e.target));
-document.addEventListener("focusout", () => setTimeout(() => !isTextField(document.activeElement) && unfitDialog(), 50));
+// Only the pick lists: plain fields (note, amount, date) are left to the browser, which already brings them into view.
+const isPickField = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && !!t.closest("dialog") && t.getAttribute("role") === "combobox";
+document.addEventListener("focusin", (e) => isPickField(e.target) && revealField(e.target));
+document.addEventListener("focusout", () => setTimeout(() => !isPickField(document.activeElement) && unfitDialog(), 50));
 
 interface ComboItem {
   value: string;
