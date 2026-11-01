@@ -949,49 +949,18 @@ function menuButton(label: string, items: [string, () => void][], className = "b
 
 
 /**
- * While a text field in a dialog has the phone keyboard up: fit the dialog to the visible area above the keyboard
- * (iPhone Safari does not shrink the page for it, so the dialog would otherwise sit partly behind it) and scroll the
- * field's label (מטבע / קטגוריה / הערה) to the top of the dialog, so the field and any list under it are in view.
+ * When a pick list (category, sub-category, currency) opens, scroll its label to the top of the dialog so the list under
+ * the field is not hidden. Plain fields (amount, note, date) are left to the browser.
  */
-let unfitDialog = () => {};
 function revealField(input: HTMLElement) {
   const dlg = input.closest("dialog");
-  const vv = window.visualViewport;
-  if (!dlg) return;
   const top = input.closest("label") ?? input;
-  const props = ["max-height", "top", "bottom", "margin-block"];
-  const go = () => {
-    if (vv && vv.height < window.innerHeight - 100) {
-      dlg.style.maxHeight = `${vv.height - 16}px`;
-      dlg.style.top = `${vv.offsetTop + 8}px`;
-      dlg.style.bottom = "auto";
-      dlg.style.marginBlock = "0";
-    } else {
-      for (const p of props) dlg.style.removeProperty(p);
-    }
-    const d = dlg.getBoundingClientRect();
-    const t = top.getBoundingClientRect();
-    // A pick list needs room below its field: put the label at the top. Any other field only scrolls if it would be hidden.
-    const delta = input.getAttribute("role") === "combobox" ? t.top - d.top - dlg.clientTop : t.top < d.top ? t.top - d.top : Math.max(0, t.bottom - (d.bottom - 12));
-    if (delta) dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
-  };
-  unfitDialog();
+  const go = () => dlg && dlg.scrollTo({ top: dlg.scrollTop + top.getBoundingClientRect().top - dlg.getBoundingClientRect().top - dlg.clientTop, behavior: "smooth" });
   go();
-  const timers = [setTimeout(go, 350), setTimeout(go, 800)];
-  vv?.addEventListener("resize", go);
-  vv?.addEventListener("scroll", go);
-  unfitDialog = () => {
-    timers.forEach(clearTimeout);
-    vv?.removeEventListener("resize", go);
-    vv?.removeEventListener("scroll", go);
-    for (const p of props) dlg.style.removeProperty(p);
-    unfitDialog = () => {};
-  };
+  // The keyboard opens a moment after the field is focused: scroll again once it has.
+  setTimeout(go, 350);
 }
-const isTextField = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && !!t.closest("dialog") && t.matches("input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea");
-document.addEventListener("focusin", (e) => isTextField(e.target) && revealField(e.target));
-document.addEventListener("focusout", () => setTimeout(() => !isTextField(document.activeElement) && unfitDialog(), 50));
-
+document.addEventListener("focusin", (e) => e.target instanceof HTMLElement && e.target.getAttribute("role") === "combobox" && e.target.closest("dialog") && revealField(e.target));
 
 interface ComboItem {
   value: string;
