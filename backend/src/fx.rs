@@ -243,10 +243,9 @@ mod tests {
     use super::*;
     use crate::storage::{NewTransaction, SqliteStorage};
     use serde_json::json;
-    use std::sync::Mutex;
 
     /// The tests set a process-wide variable, so they take turns.
-    static ENV: Mutex<()> = Mutex::new(());
+    static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn converts_with_the_currencys_minor_unit() {
@@ -274,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_days_are_final_and_cached_today_is_an_estimate() {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ENV.lock().await;
         std::env::set_var("FX_FAKE_RATES", "USD=3.5,JPY=0.02");
         let s = SqliteStorage::open(":memory:").unwrap();
         let past = rate_for(&s, "USD", "2026-10-01", "2026-10-05")
@@ -311,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn estimates_are_repriced_once_the_day_has_closed() {
-        let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ENV.lock().await;
         std::env::set_var("FX_FAKE_RATES", "USD=3.0");
         let s = SqliteStorage::open(":memory:").unwrap();
         let id = s
