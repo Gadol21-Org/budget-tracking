@@ -953,6 +953,8 @@ function menuButton(label: string, items: [string, () => void][], className = "b
  * (iPhone Safari does not shrink the page for it, so the dialog would otherwise sit partly behind it) and scroll the
  * field's label (מטבע / קטגוריה / הערה) to the top of the dialog, so the field and any list under it are in view.
  */
+/** iPhone Safari reports a visible height that stops about this much (in px) above the real top of the keyboard's ^ v ✓ bar. */
+const KEYBOARD_BAR = 44;
 let unfitDialog = () => {};
 function revealField(input: HTMLElement) {
   const dlg = input.closest("dialog");
@@ -962,7 +964,7 @@ function revealField(input: HTMLElement) {
   const props = ["max-height", "top", "bottom", "margin-block"];
   const go = () => {
     if (vv && vv.height < window.innerHeight - 100) {
-      dlg.style.maxHeight = `${vv.height - 16}px`;
+      dlg.style.maxHeight = `${vv.height + KEYBOARD_BAR - 16}px`;
       dlg.style.top = `${vv.offsetTop + 8}px`;
       dlg.style.bottom = "auto";
       dlg.style.marginBlock = "0";
@@ -971,8 +973,9 @@ function revealField(input: HTMLElement) {
     }
     const d = dlg.getBoundingClientRect();
     const t = top.getBoundingClientRect();
-    // A pick list needs room below its field: put the label at the top.
-    dlg.scrollTo({ top: dlg.scrollTop + (t.top - d.top - dlg.clientTop), behavior: "smooth" });
+    // A pick list needs room below its field: put the label at the top. Any other field only scrolls if it would be hidden.
+    const delta = input.getAttribute("role") === "combobox" ? t.top - d.top - dlg.clientTop : t.top < d.top ? t.top - d.top : Math.max(0, t.bottom - (d.bottom - 12));
+    if (delta) dlg.scrollTo({ top: dlg.scrollTop + delta, behavior: "smooth" });
   };
   unfitDialog();
   go();
@@ -987,10 +990,9 @@ function revealField(input: HTMLElement) {
     unfitDialog = () => {};
   };
 }
-// Only the pick lists: plain fields (note, amount, date) are left to the browser, which already brings them into view.
-const isPickField = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && !!t.closest("dialog") && t.getAttribute("role") === "combobox";
-document.addEventListener("focusin", (e) => isPickField(e.target) && revealField(e.target));
-document.addEventListener("focusout", () => setTimeout(() => !isPickField(document.activeElement) && unfitDialog(), 50));
+const isTextField = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && !!t.closest("dialog") && t.matches("input:not([type=checkbox]):not([type=radio]):not([type=button]), textarea");
+document.addEventListener("focusin", (e) => isTextField(e.target) && revealField(e.target));
+document.addEventListener("focusout", () => setTimeout(() => !isTextField(document.activeElement) && unfitDialog(), 50));
 
 
 // TEMPORARY (remove before merge): with ?debug in the address, show the visible-area numbers on screen.
