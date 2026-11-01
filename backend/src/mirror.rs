@@ -85,6 +85,8 @@ pub struct MirrorSummary {
     pub unsupported: usize,
     /// Marked `error`; check them and `POST /api/mirror/paamonim/retry/:id`.
     pub failed: usize,
+    /// Rows left `verifying` because their check failed (e.g. unreadable history); retried next run.
+    pub unresolved: Vec<String>,
     /// Why the run ended early, if it did.
     pub stopped: Option<String>,
     /// Dry run only: what would have been done.
@@ -152,7 +154,8 @@ pub fn save_fields(
 
 async fn history(client: &Client, date: &str) -> Result<Vec<HistoryEntry>> {
     let html = client.activity_history_html(date, date).await?;
-    let lines = paamonim::parse_history(&html);
+    // A single-day query: Paamonim leaves the date row off a first line dated after today.
+    let lines = paamonim::parse_day_history(&html, date);
     // Fail closed: if some lines weren't understood we can't tell what is new.
     if html.matches("line_id=").count() != lines.len() {
         bail!("Paamonim history for {date} has lines that could not be read");
@@ -276,7 +279,15 @@ pub async fn run(client: &Client, storage: &dyn Storage, opts: &Options) -> Resu
         let step = if p.state == SyncState::Verifying {
             let n = verifying_per_sig[&sig(p)];
             let rank = *claimed.entry(sig(p)).and_modify(|c| *c += 1).or_insert(1) - 1;
-            resolve(client, storage, p, n, rank, &mut sum).await?
+            match resolve(client, storage, p, n, rank, &mut sum).await {
+                Ok(step) => step,
+                Err(e) => {
+                    // Stays `verifying`; don't let one stuck row block every other row.
+                    tracing::warn!("mirror: could not verify transaction {}: {e:#}", p.id);
+                    sum.unresolved.push(format!("#{}: {e:#}", p.id));
+                    continue;
+                }
+            }
         } else {
             push(client, storage, opts, p, &mut ops, &mut sum).await?
         };
@@ -639,6 +650,8 @@ mod tests {
         silently_drop: bool,
         /// Next save: also add an identical line, as if someone else entered one.
         add_twin: bool,
+        /// Leave the date row off the history, as Paamonim does for a first line dated after today.
+        no_date_row: bool,
     }
 
     type M = Arc<Mutex<Mock>>;
@@ -726,7 +739,7 @@ mod tests {
             let day = &q["start_date"];
             let mut out = String::new();
             for l in m.lines.iter().filter(|l| &l.date == day) {
-                if out.is_empty() {
+                if out.is_empty() && !m.no_date_row {
                     let d = NaiveDate::parse_from_str(day, "%Y-%m-%d").unwrap();
                     let month = HEBREW_MONTHS[chrono::Datelike::month0(&d) as usize];
                     out += &format!(
@@ -886,6 +899,28 @@ mod tests {
         run(&c, &s, &opts()).await.unwrap();
         assert_eq!(mock.lock().unwrap().saves, 1);
         let _ = id;
+    }
+
+    #[tokio::test]
+    async fn history_without_a_date_row_is_read_as_the_queried_day() {
+        let (s, food, _) = setup().await;
+        let mock = M::default();
+        mock.lock().unwrap().no_date_row = true;
+        let c = serve(mock.clone()).await;
+        // Saved, but the read-back has no date row: still adopted, not stuck in `verifying`.
+        let id = s.create_transaction(&tx(D, -1000, food)).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert_eq!((sum.mirrored, sum.failed), (1, 0));
+        assert_eq!(state_of(&s, id).await, SyncState::Synced);
+
+        // A save whose answer was lost is also found on the next run.
+        mock.lock().unwrap().fail_after_save = true;
+        let id2 = s.create_transaction(&tx(D, -2000, food)).await.unwrap();
+        run(&c, &s, &opts()).await.unwrap();
+        let sum = run(&c, &s, &opts()).await.unwrap();
+        assert!(sum.unresolved.is_empty());
+        assert_eq!(state_of(&s, id2).await, SyncState::Synced);
+        assert_eq!(mock.lock().unwrap().lines.len(), 2);
     }
 
     #[tokio::test]
