@@ -1111,17 +1111,14 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   /** The currency in force: repeating charges are in shekels only. */
   const cur = (): Currency => (repeat.checked ? "ILS" : currency);
   const amountLbl = el("span", { textContent: "סכום (₪)" });
-  const curBtns = CURRENCIES.map((c) => {
-    const b = el("button", { type: "button", textContent: `${c.symbol} ${c.name}` });
-    b.onclick = () => {
-      currency = c.code;
-      syncFx();
-      void refreshQuote();
-      syncSave();
-    };
-    return b;
-  });
-  const curSeg = el("div", { className: "seg three", role: "group", ariaLabel: "מטבע" }, ...curBtns);
+  const curSel = el("select", { ariaLabel: "מטבע" }, ...CURRENCIES.map((c) => el("option", { value: c.code, textContent: `${c.symbol} ${c.name} (${c.code})` })));
+  curSel.onchange = () => {
+    currency = curSel.value as Currency;
+    syncFx();
+    void refreshQuote();
+    syncSave();
+  };
+  const curSeg = el("label", {}, "מטבע", curSel);
   const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
   const fxNote = el("div", { className: "fxnote muted" });
   const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
@@ -1171,7 +1168,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   };
   const syncFx = () => {
     const c = cur();
-    curBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(CURRENCIES[i].code === c)));
+    curSel.value = c;
     curSeg.style.display = repeat.checked ? "none" : "";
     fxBox.style.display = c === "ILS" ? "none" : "";
     amountLbl.textContent = `סכום (${currencySymbol(c)})`;
