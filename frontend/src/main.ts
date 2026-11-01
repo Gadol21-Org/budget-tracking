@@ -974,6 +974,8 @@ function combo(placeholder: string) {
   };
   /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not. */
   const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("pointerdown", outside, true));
+  /** When the last item was picked: the tap's own click may land on the field once the layout shifts, and must not reopen the list. */
+  let pickedAt = 0;
   const pick = (v: string) => {
     value = v;
     input.value = labelOf(v);
@@ -989,7 +991,7 @@ function combo(placeholder: string) {
             b.setAttribute("role", "option");
             b.setAttribute("aria-selected", String(i.value === value));
             // mousedown, so the pick lands before the input's blur closes the list.
-            b.onmousedown = (e) => (e.preventDefault(), pick(i.value), input.dispatchEvent(new Event("change")));
+            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.dispatchEvent(new Event("change")));
             return b;
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
@@ -998,8 +1000,8 @@ function combo(placeholder: string) {
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("pointerdown", outside, true);
   };
-  input.onfocus = () => (input.select(), show(""));
-  input.onclick = () => list.hidden && show("");
+  input.onfocus = () => (input.select(), Date.now() - pickedAt > 500 && show(""));
+  input.onclick = () => list.hidden && Date.now() - pickedAt > 500 && show("");
   input.oninput = () => show(input.value);
   input.onkeydown = (e) => {
     if (e.key === "Tab" && !list.hidden) close();
@@ -1112,16 +1114,14 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const cur = (): Currency => (repeat.checked ? "ILS" : currency);
   const amountLbl = el("span", { textContent: "סכום (₪)" });
   const curPick = combo("חיפוש מטבע…");
-  curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} (${c.code})` })), currency);
+  curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} ${c.code}` })), currency);
   curPick.input.addEventListener("change", () => {
     currency = (curPick.value || "ILS") as Currency;
     syncFx();
     void refreshQuote();
     syncSave();
   });
-  // Selecting the text lets you type a new search straight away.
-  curPick.input.addEventListener("focus", () => curPick.input.select());
-  const curSeg = el("label", {}, "מטבע", curPick.root);
+  const curSeg = el("label", { className: "curfield" }, "מטבע", curPick.root);
   const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
   const fxNote = el("div", { className: "fxnote muted" });
   const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
@@ -1327,8 +1327,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     "form",
     { className: "add", method: "dialog" },
     el("div", { className: "seg" }, expBtn, incBtn),
-    curSeg,
-    el("label", {}, amountLbl, amount),
+    el("div", { className: "amountrow" }, el("label", {}, amountLbl, amount), curSeg),
     fxBox,
     el("label", {}, "קטגוריה", topPick.root),
     el("label", {}, "תת-קטגוריה", subPick.root),
