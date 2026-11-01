@@ -3,7 +3,7 @@ import { clickable, dateField, el, fmtDate, type Child } from "./ui";
 import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./insights";
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
-import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, openTagDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
+import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
 import { api, CURRENCIES, currencySymbol, decimals, formatMinor, formatRate, formatShekels, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
 
 type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
@@ -40,8 +40,6 @@ const state = {
   /** The transaction list: all, only business lines or only the rest. */
   bizFilter: "all" as "all" | "biz" | "none",
   /** Choosing several lines to tag them as a business's. */
-  selecting: false,
-  selected: new Set<number>(),
   /** Transactions entered in USD or JPY, by transaction id (queued lines by -queue id): original amount and rate. */
   fx: new Map<number, Fx>(),
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
@@ -355,10 +353,13 @@ function listView(): HTMLElement {
     .filter(inFilter)
     .filter((t) => state.bizFilter === "all" || (businessOf(state.biz, state.cats, t) != null) === (state.bizFilter === "biz"));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
+  // The first day (newest first) with something that really happened: the list opens here, with later, upcoming days above it.
+  const nowDay = days.find((d) => txs.some((t) => t.date === d && !t.upcoming));
   const body: Child[] = days.map((d) =>
     el(
       "div",
-      {},
+      d === nowDay ? { id: "now-anchor", className: "now-anchor" } : {},
+      d === nowDay && days[0] !== d ? el("div", { className: "upcoming-divider", textContent: "▲ למעלה: תנועות עתידיות · מכאן: מה שכבר קרה" }) : null,
       el("div", { className: "daylabel", textContent: dayTitle(d) }),
       el(
         "div",
@@ -378,17 +379,9 @@ function listView(): HTMLElement {
             const edit = t.sync_state === "queued" ? null : el("button", { className: "del", title: "עריכה", textContent: "✎" });
             if (edit) edit.onclick = () => openTransactionDialog(t);
             const biz = businessOf(state.biz, state.cats, t);
-            const pickBox = state.selecting && !t.upcoming && t.sync_state !== "queued" ? el("input", { type: "checkbox", className: "selbox", checked: state.selected.has(t.id), ariaLabel: "בחירה" }) : null;
-            if (pickBox)
-              pickBox.onchange = () => {
-                if (pickBox.checked) state.selected.add(t.id);
-                else state.selected.delete(t.id);
-                render();
-              };
             return el(
               "div",
               { className: t.upcoming ? "row upcoming" : "row" },
-              pickBox,
               el(
                 "div",
                 { className: "grow" },
@@ -445,20 +438,7 @@ function listView(): HTMLElement {
         }),
       )
     : null;
-  const selectBtn = hasBiz ? el("button", { className: "btn", type: "button", textContent: state.selecting ? "ביטול בחירה" : "בחירה וסימון לעסק" }) : null;
-  if (selectBtn)
-    selectBtn.onclick = () => {
-      state.selecting = !state.selecting;
-      state.selected.clear();
-      render();
-    };
-  const tag = el("button", { className: "btn primary", type: "button", textContent: `סימון לעסק (${state.selected.size})` });
-  tag.disabled = state.selected.size === 0;
-  tag.onclick = () => openTagDialog(manageCtx(), [...state.selected], () => ((state.selecting = false), state.selected.clear()));
-  const selBar = state.selecting
-    ? el("div", { className: "selbar" }, el("div", { className: "grow muted", textContent: "בחרו תנועות, גם ישנות" }), tag)
-    : null;
-  return el("div", {}, header, monthBar(), bizSeg, selectBtn ? el("div", { className: "actions", style: "justify-content:flex-start;margin-bottom:8px" }, selectBtn) : null, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]), selBar);
+  return el("div", {}, header, monthBar(), bizSeg, ...(body.length ? body : [el("div", { className: "empty", textContent: "אין תנועות בתקופה זו" })]));
 }
 
 function manageCtx() {
@@ -1541,7 +1521,8 @@ let renderedView: View | undefined;
 function render() {
   const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()) }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
-  if (renderedView !== state.view) window.scrollTo(0, 0);
+  const entering = renderedView !== state.view;
+  if (entering) window.scrollTo(0, 0);
   renderedView = state.view;
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
@@ -1549,6 +1530,8 @@ function render() {
   const main = el("main", {}, banner, view);
   main.dataset.view = state.view;
   root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);
+  // Transactions open focused on the latest day that actually happened; upcoming days stay reachable above.
+  if (entering && state.view === "list") document.getElementById("now-anchor")?.scrollIntoView({ block: "start" });
 }
 
 /** Send lines saved while offline, oldest first. Stops at the first one the server can't be reached for. */

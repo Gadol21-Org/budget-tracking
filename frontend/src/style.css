@@ -364,3 +364,5 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 /* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
 html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }
 dialog { overscroll-behavior: contain; }
+.now-anchor { scroll-margin-top: 8px; }
+.upcoming-divider { text-align: center; font-size: .8rem; color: #d97706; border-top: 2px dashed #f59e0b; padding: 6px 0 2px; margin: 18px 0 4px; }
