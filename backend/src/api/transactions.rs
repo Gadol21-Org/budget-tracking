@@ -7,7 +7,7 @@ use crate::storage::{NewTransaction, Transaction};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) async fn list_transactions(
     State(db): State<Db>,
@@ -165,6 +165,39 @@ pub(crate) async fn fx_rate(
     Ok(Json(
         serde_json::json!({ "rate": r.rate, "date": r.date, "estimated": r.estimated }),
     ))
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct EnabledCurrencies {
+    enabled: Vec<String>,
+    /// Every code that can be added (read only).
+    #[serde(default, skip_deserializing)]
+    supported: Vec<&'static str>,
+}
+
+/// The currencies added in settings, in picker order (the shekel is always available).
+pub(crate) async fn get_currency_settings(
+    State(db): State<Db>,
+) -> Result<Json<EnabledCurrencies>, ApiError> {
+    Ok(Json(EnabledCurrencies {
+        enabled: fx::enabled_currencies(db.as_ref())
+            .await
+            .map_err(internal)?,
+        supported: fx::CURRENCIES.to_vec(),
+    }))
+}
+
+pub(crate) async fn put_currency_settings(
+    State(db): State<Db>,
+    Json(b): Json<EnabledCurrencies>,
+) -> Result<Json<EnabledCurrencies>, ApiError> {
+    let enabled = fx::save_enabled_currencies(db.as_ref(), &b.enabled)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(EnabledCurrencies {
+        enabled,
+        supported: fx::CURRENCIES.to_vec(),
+    }))
 }
 
 /// The foreign-currency details of transactions. Rates that were stand-ins and whose day

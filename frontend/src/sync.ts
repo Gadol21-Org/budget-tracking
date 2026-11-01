@@ -1,5 +1,6 @@
 import { dequeue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { toBizData } from "./business";
+import { loadEnabledCurrencies } from "./currencies";
 import { api, type Fx, type LogEntry, type Transaction } from "./api";
 import { state } from "./state";
 import { LOG_PAGE } from "./views/log";
@@ -61,6 +62,7 @@ export async function load() {
   } catch {
     /* keep what we had */
   }
+  await loadEnabledCurrencies();
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();

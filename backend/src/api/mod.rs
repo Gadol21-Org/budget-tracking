@@ -92,6 +92,10 @@ pub(crate) fn router(db: Db) -> Router {
         .route("/api/fx/rate", get(transactions::fx_rate))
         .route("/api/foreign", get(transactions::list_foreign))
         .route(
+            "/api/settings/currencies",
+            get(transactions::get_currency_settings).put(transactions::put_currency_settings),
+        )
+        .route(
             "/api/transactions/:id/refresh-rate",
             axum::routing::post(transactions::refresh_rate),
         )

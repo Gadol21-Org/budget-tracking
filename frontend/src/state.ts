@@ -3,7 +3,7 @@ import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
 import { type Category, type Fx, type LogEntry, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies";
 
 export const root = document.getElementById("app")!;
 

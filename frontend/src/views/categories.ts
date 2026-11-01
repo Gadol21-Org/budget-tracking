@@ -245,6 +245,12 @@ export function businessesLinkCard(): HTMLElement {
   return el("div", { className: "card" }, el("h2", { textContent: "עסקים" }), el("p", { className: "muted", textContent: "עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
 }
 
+export function currenciesLinkCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "ניהול מטבעות" });
+  open.onclick = () => go("currencies");
+  return el("div", { className: "card" }, el("h2", { textContent: "מטבעות" }), el("p", { className: "muted", textContent: "בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
+}
+
 export function categoriesCard(): HTMLElement {
   const kinds = [
     [false, "הוצאות"],

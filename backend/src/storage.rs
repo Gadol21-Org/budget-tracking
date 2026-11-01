@@ -342,6 +342,9 @@ pub trait Storage: Send + Sync {
     /// Cached rate (shekels per unit) for a currency on a date (`latest` is the newest fetched).
     async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>>;
     async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()>;
+    /// App-wide settings (key/value text), synced across devices.
+    async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>>;
+    async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
     async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
@@ -990,6 +993,26 @@ impl Storage for SqliteStorage {
             "INSERT INTO fx_rates (currency, date, rate) VALUES (?1, ?2, ?3)
              ON CONFLICT(currency, date) DO UPDATE SET rate = excluded.rate",
             params![currency, date, rate],
+        )?;
+        Ok(())
+    }
+
+    async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT v FROM app_settings WHERE k = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO app_settings (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![key, value],
         )?;
         Ok(())
     }

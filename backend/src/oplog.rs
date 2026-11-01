@@ -249,6 +249,12 @@ impl Storage for Logged {
     async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()> {
         self.0.put_fx_rate(currency, date, rate).await
     }
+    async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        self.0.get_setting(key).await
+    }
+    async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.0.set_setting(key, value).await
+    }
     async fn business_links(&self) -> anyhow::Result<crate::storage::BusinessLinks> {
         self.0.business_links().await
     }

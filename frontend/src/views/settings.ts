@@ -1,7 +1,7 @@
 import { el } from "../ui";
 import { api } from "../api";
 import { load } from "../sync";
-import { businessesLinkCard, categoriesLinkCard } from "./categories";
+import { businessesLinkCard, categoriesLinkCard, currenciesLinkCard } from "./categories";
 import { openLog } from "./log";
 
 export function settingsView(): HTMLElement {
@@ -37,6 +37,7 @@ export function settingsView(): HTMLElement {
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
     categoriesLinkCard(),
     businessesLinkCard(),
+    currenciesLinkCard(),
     historyCard(),
   );
 }

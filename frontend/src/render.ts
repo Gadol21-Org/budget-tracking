@@ -1,5 +1,6 @@
 import { el } from "./ui";
 import { insightsView, type Cmp } from "./insights";
+import { currenciesView } from "./currencies";
 import { businessDashboard, businessesView } from "./business";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, openDialog, showCategory } from "./nav";
@@ -13,7 +14,7 @@ import { openTransactionDialog } from "./dialogs/transaction";
 export function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses" || state.view === "currencies")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       if (view === "insights") {
         if (state.view === "insights") {
@@ -26,7 +27,7 @@ export function nav(): HTMLElement {
     };
     return b;
   };
-  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("insights", "📈", "תובנות"), item("list", "📋", "תנועות"), item("settings", "⚙️", "הגדרות"));
+  return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("insights", "📈", "תובנות"), item("settings", "⚙️", "הגדרות"));
 }
 
 export function insightsScreen(): HTMLElement {
@@ -61,7 +62,7 @@ export function businessScreen(): HTMLElement {
 export let renderedView: View | undefined;
 
 export function render() {
-  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()) }[state.view]();
+  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()), currencies: () => currenciesView({ back: () => goBack("settings") }) }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   const entering = renderedView !== state.view;
   if (entering) window.scrollTo(0, 0);

@@ -3,7 +3,8 @@ import { monthsBetween } from "../period";
 import { buildRecurringRule, buildTxBody, ruleFxOf, startAmountText } from "./txForm";
 import { enqueue, isNetworkError, requestPersistence } from "../offline";
 import { businessChips, businessRequired, bizName, categoryBusiness } from "../business";
-import { api, CURRENCIES, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction, type TxInput } from "../api";
+import { LRM, pickerCurrencies } from "../currencies";
+import { api, currencyInfo, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction, type TxInput } from "../api";
 import { root, state } from "../state";
 import { combo, menuButton } from "../widgets";
 import { catById, catPath, showPeriodFor } from "../selectors";
@@ -91,7 +92,8 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
   const cur = (): Currency => currency;
   const amountLbl = el("span", { textContent: "סכום (₪)" });
   const curPick = combo("חיפוש מטבע…");
-  curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} ${c.code}` })), currency);
+  // Only the currencies added in settings (in their order); a line already in a removed one keeps its own.
+  curPick.set(pickerCurrencies(currency).map((code) => { const c = currencyInfo(code); return { value: c.code, label: c.symbol === c.code ? `${c.name} ${c.code}` : `${LRM}${c.symbol}${LRM} ${c.name} ${c.code}` }; }), currency);
   curPick.input.addEventListener("change", () => {
     currency = (curPick.value || "ILS") as Currency;
     syncFx();
