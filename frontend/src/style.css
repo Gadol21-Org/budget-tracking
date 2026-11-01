@@ -352,3 +352,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
 .bizchip.big { font-size: .9rem; padding: 3px 12px; }
 .bizpick [hidden] { display: none !important; }
+
+/* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
+html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }
+dialog { overscroll-behavior: contain; }
