@@ -1,8 +1,9 @@
 import { dateField, el, fmtDate } from "../ui";
-import { addMonths, monthsBetween } from "../period";
+import { monthsBetween } from "../period";
+import { buildRecurringRule, buildTxBody, ruleFxOf, startAmountText } from "./txForm";
 import { enqueue, isNetworkError, requestPersistence } from "../offline";
 import { businessChips, businessRequired, bizName, categoryBusiness } from "../business";
-import { api, CURRENCIES, currencySymbol, decimals, formatRate, parseAgorot, parseMinor, type Currency, type Transaction, type TxInput } from "../api";
+import { api, CURRENCIES, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction, type TxInput } from "../api";
 import { root, state } from "../state";
 import { combo, menuButton } from "../widgets";
 import { catById, catPath, showPeriodFor } from "../selectors";
@@ -23,7 +24,7 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
   // The shekel is the default currency, always; a line already entered in USD or JPY opens in that one.
   const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
   // A repeating charge in a foreign currency opens in that currency, with its original amount.
-  const ruleFx = existing?.upcoming && segment?.currency && segment.orig_minor != null ? { currency: segment.currency, orig_minor: segment.orig_minor } : undefined;
+  const ruleFx = ruleFxOf(existing, segment);
   let currency: Currency = startFx?.currency ?? ruleFx?.currency ?? "ILS";
   const amount = el("input", {
     type: "text",
@@ -31,7 +32,7 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
     placeholder: "0.00",
     required: true,
     autocomplete: "off",
-    value: startFx ? String(Math.abs(startFx.orig_minor) / 10 ** decimals(startFx.currency)) : ruleFx ? String(Math.abs(ruleFx.orig_minor) / 10 ** decimals(ruleFx.currency)) : existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
+    value: startAmountText(existing, startFx, ruleFx),
   });
   const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
   const topPick = combo("חיפוש קטגוריה…");
@@ -263,25 +264,23 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
   cancel.onclick = () => dlg.close();
   const save = el("button", { type: "submit", className: "btn primary", textContent: existing ? "עדכון" : "שמירה" });
   /** The line as the server takes it, for a single transaction and for one month of a series. */
-  const buildBody = (): TxInput => {
-    const abs = Math.abs(parseAgorot(amount.value));
-    if (abs === 0) throw new Error("יש להזין סכום");
-    const sign = isIncome ? 1 : -1;
-    const body: TxInput = { date: date.value, amount_agorot: sign * abs, category_id: categoryId(), payment_method_id: existing?.payment_method_id ?? null, note: note.value };
-    if (cur() !== "ILS") {
-      // Foreign: send the original amount; the server converts it at the rate for the day unless
-      // the shekel amount was typed in, or the saved line is unchanged (then its rate is kept).
-      delete body.amount_agorot;
-      body.currency = cur();
-      body.orig_minor = sign * origMinor();
-      if (ilsTouched && !repeat.checked) {
-        const a = Math.abs(parseAgorot(ils.value));
-        if (a === 0) throw new Error("יש להזין סכום בשקלים");
-        body.amount_agorot = sign * a;
-      } else if (!forceLookup && fxUnchanged()) body.amount_agorot = existing!.amount_agorot;
-    }
-    return body;
-  };
+  const buildBody = (): TxInput =>
+    buildTxBody({
+      date: date.value,
+      amountText: amount.value,
+      isIncome,
+      categoryId,
+      paymentMethodId: existing?.payment_method_id ?? null,
+      note: note.value,
+      currency: cur(),
+      origMinor: origMinor(),
+      ilsText: ils.value,
+      ilsTouched,
+      repeating: repeat.checked,
+      forceLookup,
+      fxUnchanged: fxUnchanged(),
+      savedAgorot: existing?.amount_agorot,
+    });
   // Only this month: becomes a transaction with these values; later months are unchanged.
   const updateOnce = async () => {
     try {
@@ -353,22 +352,7 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
       const catId = categoryId();
       save.disabled = true;
       if (repeat.checked) {
-        const n = Number(months.value);
-        if (forever.value === "months" && !(Number.isInteger(n) && n >= 1)) throw new Error("מספר החודשים אינו תקין");
-        // A series change starts from the occurrence's own month, whatever date was typed.
-        const start = seriesId !== undefined ? month : date.value.slice(0, 7);
-        const rule = {
-          start_month: start,
-          end_month: forever.value === "months" ? addMonths(start, n - 1) : null,
-          day: seriesId !== undefined && date.value.slice(0, 7) !== month ? (segment?.day ?? 1) : Number(date.value.slice(8)),
-          // A foreign rule keeps its original amount; the server estimates the shekels and prices each month at its day's rate.
-          amount_agorot: body.amount_agorot ?? (body.orig_minor! < 0 ? -1 : 1),
-          currency: body.currency ?? null,
-          orig_minor: body.orig_minor ?? null,
-          category_id: catId,
-          payment_method_id: body.payment_method_id,
-          note: body.note,
-        };
+        const rule = buildRecurringRule({ body, categoryId: catId, date: date.value, duration: forever.value, months: Number(months.value), seriesMonth: seriesId !== undefined ? month : undefined, segmentDay: segment?.day });
         if (seriesId !== undefined) await api.changeRecurring(seriesId, rule);
         else await api.addRecurring(rule);
       } else if (existing) {
