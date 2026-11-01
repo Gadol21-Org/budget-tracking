@@ -1,4 +1,5 @@
-import { api, formatShekels, type Business, type BusinessData, type Category, type Transaction } from "./api";
+import { formatShekels, formatShekelsWhole, shortMonth } from "./format";
+import { api, type Business, type BusinessData, type Category, type Transaction } from "./api";
 import { clickable, el, type Child } from "./ui";
 import { contains, shift, title as periodTitle, type Period } from "./period";
 
@@ -76,10 +77,8 @@ const TABS: [BizTab, string][] = [
   ["compare", "השוואה"],
 ];
 
-const shekels = (a: number) => (a / 100).toLocaleString("he-IL", { style: "currency", currency: "ILS", maximumFractionDigits: 0 });
-const money = (a: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: shekels(a) });
+const money = (a: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekelsWhole(a) });
 const signed = (a: number) => money(a, a < 0 ? "expense" : "income");
-const shortMonth = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString("he-IL", { month: "short" });
 
 interface Fig {
   income: number;
@@ -121,7 +120,7 @@ function allocation(ctx: BizCtx, p: Period, id: number): number | null {
 }
 
 function delta(label: string, diff: number): HTMLElement {
-  return el("div", { className: "row" }, el("div", { className: "grow", textContent: label }), el("span", { className: `num ${diff < 0 ? "expense" : "income"}`, textContent: `${diff < 0 ? "▼" : "▲"} ${shekels(Math.abs(diff))}` }));
+  return el("div", { className: "row" }, el("div", { className: "grow", textContent: label }), el("span", { className: `num ${diff < 0 ? "expense" : "income"}`, textContent: `${diff < 0 ? "▼" : "▲"} ${formatShekelsWhole(Math.abs(diff))}` }));
 }
 
 function hero(label: string, f: Fig): HTMLElement {
@@ -130,8 +129,8 @@ function hero(label: string, f: Fig): HTMLElement {
     "div",
     { className: "bizhero" },
     el("div", { className: "small", textContent: label }),
-    el("div", { className: "big num", textContent: shekels(f.profit) }),
-    el("div", { className: "sub" }, el("span", { textContent: `הכנסות ${shekels(f.income)}` }), el("span", { textContent: `הוצאות ${shekels(f.expense)}` }), margin != null ? el("span", { textContent: `שולי רווח ${margin}%` }) : null),
+    el("div", { className: "big num", textContent: formatShekelsWhole(f.profit) }),
+    el("div", { className: "sub" }, el("span", { textContent: `הכנסות ${formatShekelsWhole(f.income)}` }), el("span", { textContent: `הוצאות ${formatShekelsWhole(f.expense)}` }), margin != null ? el("span", { textContent: `שולי רווח ${margin}%` }) : null),
   );
 }
 
@@ -251,14 +250,14 @@ function categories(ctx: BizCtx): Child[] {
     const total = rows.reduce((s, [, v]) => s + v, 0);
     const max = rows[0]?.[1] ?? 1;
     return [
-      el("h2", { textContent: `${title} לפי קטגוריה · ${shekels(total)}` }),
+      el("h2", { textContent: `${title} לפי קטגוריה · ${formatShekelsWhole(total)}` }),
       rows.length
         ? el(
             "div",
             { className: "card rows" },
             ...rows.map(([id, v]) => {
               const part = whole.get(id) ?? 0;
-              return el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: name(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (v / max) * 100)}%` })), part > v ? el("div", { className: "muted small", textContent: `${shekels(v)} מתוך ${shekels(part)} בקטגוריה` }) : null), money(v));
+              return el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: name(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (v / max) * 100)}%` })), part > v ? el("div", { className: "muted small", textContent: `${formatShekelsWhole(v)} מתוך ${formatShekelsWhole(part)} בקטגוריה` }) : null), money(v));
             }),
           )
         : el("div", { className: "empty", textContent: empty }),

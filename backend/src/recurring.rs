@@ -644,9 +644,8 @@ mod tests {
         assert_eq!(settle_due(&s, day("2026-03-15")).await.unwrap(), 0);
         let txs = s.list_transactions().await.unwrap();
         assert_eq!(txs.len(), 2);
-        assert!(txs
-            .iter()
-            .all(|t| t.recurring_series_id == Some(id) && t.sync_state == "pending"));
+        assert!(txs.iter().all(|t| t.recurring_series_id == Some(id)
+            && t.sync_state == crate::storage::SyncState::Pending));
         // A deleted settled transaction is not brought back.
         s.delete_transaction(txs[0].id).await.unwrap();
         assert_eq!(settle_due(&s, day("2026-03-16")).await.unwrap(), 0);

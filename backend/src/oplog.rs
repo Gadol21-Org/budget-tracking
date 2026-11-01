@@ -285,7 +285,11 @@ impl Storage for Logged {
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         self.0.pending_mirrors().await
     }
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
+    async fn set_mirror_state(
+        &self,
+        id: i64,
+        state: crate::storage::SyncState,
+    ) -> anyhow::Result<()> {
         self.0.set_mirror_state(id, state).await
     }
     async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {

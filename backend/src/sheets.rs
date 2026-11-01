@@ -164,7 +164,7 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
             opt(t.payment_method_id),
             name(&pm_names, t.payment_method_id).into(),
             t.note.into(),
-            t.sync_state.into(),
+            t.sync_state.as_str().into(),
             opt(t.recurring_series_id),
             opt(line),
             opt(mdate),

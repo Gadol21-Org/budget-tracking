@@ -9,6 +9,68 @@ use serde::{Deserialize, Serialize};
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 
+/// Where a transaction stands with its Paamonim copy (the `sync_state` column).
+///
+/// `Pending` was never sent; `Modified` was edited after it was sent (the old Paamonim line has
+/// to be replaced); `Verifying` may have been sent but not confirmed, so it is checked before
+/// anything is posted again; `Synced` matches Paamonim; `Error` failed and is retried by hand;
+/// `Skipped` has no place in Paamonim (its category is not linked); `Local` is not mirrored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncState {
+    Pending,
+    Synced,
+    Modified,
+    Verifying,
+    Error,
+    Skipped,
+    Local,
+}
+
+impl SyncState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SyncState::Pending => "pending",
+            SyncState::Synced => "synced",
+            SyncState::Modified => "modified",
+            SyncState::Verifying => "verifying",
+            SyncState::Error => "error",
+            SyncState::Skipped => "skipped",
+            SyncState::Local => "local",
+        }
+    }
+}
+
+impl std::str::FromStr for SyncState {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        Ok(match s {
+            "pending" => SyncState::Pending,
+            "synced" => SyncState::Synced,
+            "modified" => SyncState::Modified,
+            "verifying" => SyncState::Verifying,
+            "error" => SyncState::Error,
+            "skipped" => SyncState::Skipped,
+            "local" => SyncState::Local,
+            other => anyhow::bail!("unknown sync_state {other:?}"),
+        })
+    }
+}
+
+impl rusqlite::types::FromSql for SyncState {
+    fn column_result(v: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        v.as_str()?
+            .parse()
+            .map_err(|e: anyhow::Error| rusqlite::types::FromSqlError::Other(e.into()))
+    }
+}
+
+impl rusqlite::ToSql for SyncState {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct Transaction {
     pub id: i64,
@@ -17,7 +79,7 @@ pub struct Transaction {
     pub category_id: Option<i64>,
     pub payment_method_id: Option<i64>,
     pub note: String,
-    pub sync_state: String,
+    pub sync_state: SyncState,
     /// Set on a settled occurrence of a repeating transaction.
     pub recurring_series_id: Option<i64>,
 }
@@ -237,7 +299,7 @@ pub struct ImportSummary {
 #[derive(Debug, Clone)]
 pub struct PendingMirror {
     pub id: i64,
-    pub state: String,
+    pub state: SyncState,
     pub date: String,
     pub amount_agorot: i64,
     pub note: String,
@@ -313,7 +375,7 @@ pub trait Storage: Send + Sync {
     /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
     /// Set `sync_state` (e.g. `verifying` before a request, `error`, `local`).
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()>;
+    async fn set_mirror_state(&self, id: i64, state: SyncState) -> anyhow::Result<()>;
     /// Record that `posted` now exists in Paamonim as `line_id`. The line it replaces (if the
     /// transaction was already linked) is queued for deletion. If the transaction changed
     /// since `posted` was read it becomes `modified` instead of `synced`. Returns false when
@@ -477,7 +539,10 @@ pub trait Storage: Send + Sync {
         if target.paamonim_home() != from.paamonim_home()
             && self.list_transactions().await?.iter().any(|t| {
                 t.category_id == Some(id)
-                    && matches!(t.sync_state.as_str(), "synced" | "modified" | "verifying")
+                    && matches!(
+                        t.sync_state,
+                        SyncState::Synced | SyncState::Modified | SyncState::Verifying
+                    )
             })
         {
             return Err(CategoryError::Invalid(
@@ -1018,7 +1083,7 @@ impl Storage for SqliteStorage {
         Ok(rows)
     }
 
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
+    async fn set_mirror_state(&self, id: i64, state: SyncState) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute(
             "UPDATE transactions SET sync_state = ?2 WHERE id = ?1",
             params![id, state],
@@ -1869,8 +1934,8 @@ mod tests {
             .unwrap();
         let t = &s.list_transactions().await.unwrap()[0];
         assert_eq!(
-            (t.date.as_str(), t.amount_agorot, t.sync_state.as_str()),
-            ("2026-10-04", -2000, "pending")
+            (t.date.as_str(), t.amount_agorot, t.sync_state),
+            ("2026-10-04", -2000, SyncState::Pending)
         );
         mark(&s, id, "77").await;
         s.update_transaction(id, &tx("2026-10-05", -2500, None))
@@ -1878,7 +1943,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             s.list_transactions().await.unwrap()[0].sync_state,
-            "modified"
+            SyncState::Modified
         );
     }
 
@@ -2254,8 +2319,8 @@ mod tests {
         assert_eq!(
             states,
             [
-                (Some(b), "modified".to_string()),
-                (Some(b), "pending".to_string())
+                (Some(b), SyncState::Pending),
+                (Some(b), SyncState::Modified)
             ]
         );
     }
