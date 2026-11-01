@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::oplog::{LogEntry, NewLogEntry};
@@ -30,6 +30,23 @@ pub struct NewTransaction {
     pub payment_method_id: Option<i64>,
     #[serde(default)]
     pub note: String,
+}
+
+/// The original foreign-currency amount of a transaction whose `amount_agorot` is the shekel
+/// value. Local only: Paamonim and the totals only ever see the shekel amount.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct TxFx {
+    pub transaction_id: i64,
+    /// `USD` or `JPY`.
+    pub currency: String,
+    /// Signed like `amount_agorot`, in the currency's minor unit (cents; whole yen).
+    pub orig_minor: i64,
+    /// Shekels per one unit of the currency.
+    pub rate: f64,
+    /// The day the rate is for (the day it was set, for a manual one).
+    pub rate_date: String,
+    /// The rate is a stand-in (today's or fallback one); it is replaced once the day has closed.
+    pub estimated: bool,
 }
 
 /// One business of the whole business. The `is_general` one holds shared costs.
@@ -256,6 +273,13 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
+    /// Set (or with None, clear) the foreign-currency details of a transaction.
+    async fn set_tx_fx(&self, id: i64, fx: Option<&TxFx>) -> anyhow::Result<()>;
+    /// Details of the transactions that still exist and were entered in a foreign currency.
+    async fn list_tx_fx(&self) -> anyhow::Result<Vec<TxFx>>;
+    /// Cached rate (shekels per unit) for a currency on a date (`latest` is the newest fetched).
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>>;
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
     async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
@@ -843,6 +867,67 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
+    async fn set_tx_fx(&self, id: i64, fx: Option<&TxFx>) -> anyhow::Result<()> {
+        let conn = self.0.lock().unwrap();
+        match fx {
+            Some(f) => conn.execute(
+                "INSERT INTO transaction_fx (transaction_id, currency, orig_minor, rate, rate_date, estimated)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(transaction_id) DO UPDATE SET currency = excluded.currency,
+                   orig_minor = excluded.orig_minor, rate = excluded.rate,
+                   rate_date = excluded.rate_date, estimated = excluded.estimated",
+                params![id, f.currency, f.orig_minor, f.rate, f.rate_date, f.estimated],
+            )?,
+            None => conn.execute(
+                "DELETE FROM transaction_fx WHERE transaction_id = ?1",
+                params![id],
+            )?,
+        };
+        Ok(())
+    }
+
+    async fn list_tx_fx(&self) -> anyhow::Result<Vec<TxFx>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT f.transaction_id, f.currency, f.orig_minor, f.rate, f.rate_date, f.estimated
+             FROM transaction_fx f JOIN transactions t ON t.id = f.transaction_id
+             ORDER BY f.transaction_id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(TxFx {
+                    transaction_id: r.get(0)?,
+                    currency: r.get(1)?,
+                    orig_minor: r.get(2)?,
+                    rate: r.get(3)?,
+                    rate_date: r.get(4)?,
+                    estimated: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>> {
+        let conn = self.0.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT rate FROM fx_rates WHERE currency = ?1 AND date = ?2",
+                params![currency, date],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT INTO fx_rates (currency, date, rate) VALUES (?1, ?2, ?3)
+             ON CONFLICT(currency, date) DO UPDATE SET rate = excluded.rate",
+            params![currency, date, rate],
+        )?;
+        Ok(())
+    }
+
     async fn set_transactions_business(
         &self,
         ids: &[i64],
@@ -1347,6 +1432,10 @@ impl Storage for SqliteStorage {
             params![id],
         )?;
         tx.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM transaction_fx WHERE transaction_id = ?1",
+            params![id],
+        )?;
         tx.commit()?;
         Ok(())
     }

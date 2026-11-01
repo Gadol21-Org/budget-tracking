@@ -4,7 +4,7 @@ import { insightsView, type Cmp, type InsightsNav, type InsightsState } from "./
 import { contains, MONTHS, monthOf, shift, title as periodTitle, type Period } from "./period";
 import { dequeue, enqueue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { businessChips, businessDashboard, businessesView, businessOf, businessRequired, bizName, categoryBusiness, emptyBiz, openCategoryBusinessDialog, openTagDialog, summaryFigures, toBizData, type BizData, type BizView } from "./business";
-import { api, formatShekels, parseAgorot, type Category, type LogEntry, type RecurringSegment, type Transaction } from "./api";
+import { api, CURRENCIES, currencySymbol, decimals, formatMinor, formatRate, formatShekels, parseAgorot, parseMinor, type Category, type Currency, type Fx, type LogEntry, type RecurringSegment, type Transaction, type TxInput } from "./api";
 
 type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses";
 
@@ -42,6 +42,8 @@ const state = {
   /** Choosing several lines to tag them as a business's. */
   selecting: false,
   selected: new Set<number>(),
+  /** Transactions entered in USD or JPY, by transaction id (queued lines by -queue id): original amount and rate. */
+  fx: new Map<number, Fx>(),
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };
@@ -124,6 +126,17 @@ function syncMark(t: Transaction): HTMLElement | null {
   return null;
 }
 
+/** The foreign-currency details of a line, if it was entered in USD or JPY. */
+const fxOf = (t: Transaction): Fx | undefined => (t.upcoming ? undefined : state.fx.get(t.id));
+/** Under the category: what the line was entered as, and the rate that gave its shekel amount. */
+function fxLine(t: Transaction): HTMLElement | null {
+  const f = fxOf(t);
+  if (!f) return null;
+  const orig = formatMinor(Math.abs(f.orig_minor), f.currency);
+  if (f.rate === 0) return el("div", { className: "fxline", title: "השער ייקבע כשהתנועה תישלח", textContent: `${orig} · ממתין לשער` });
+  const stub = f.estimated;
+  return el("div", { className: stub ? "fxline estimated" : "fxline", title: stub ? "שער זמני: יתעדכן לשער של היום שבו התנועה בוצעה" : `שער ליום ${fmtDate(f.rate_date)}`, textContent: `${orig} · שער ${formatRate(f.rate)}${stub ? " (זמני)" : ""}` });
+}
 const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
 const catById = (id: number | null) => state.cats.find((c) => c.id === id);
 const catName = (id: number | null) => catById(id)?.name ?? "ללא קטגוריה";
@@ -379,10 +392,11 @@ function listView(): HTMLElement {
                   catPath(t.category_id),
                 ),
                 biz != null ? el("span", { className: t.id > 0 && state.biz.tx.has(t.id) ? "bizchip" : "bizchip auto", title: t.id > 0 && state.biz.tx.has(t.id) ? "סומנה בעסק" : "בעסק לפי הקטגוריה", textContent: bizName(state.biz, biz) }) : null,
+                fxLine(t),
                 t.note ? el("div", { className: "muted", textContent: t.note }) : null,
               ),
               syncMark(t),
-              money(t.amount_agorot, t.amount_agorot < 0 ? "expense" : "income"),
+              fxOf(t)?.rate === 0 ? el("span", { className: `num ${fxOf(t)!.orig_minor < 0 ? "expense" : "income"}`, textContent: formatMinor(Math.abs(fxOf(t)!.orig_minor), fxOf(t)!.currency) }) : money(t.amount_agorot, t.amount_agorot < 0 ? "expense" : "income"),
               edit,
               del,
             );
@@ -960,6 +974,8 @@ function combo(placeholder: string) {
   };
   /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not. */
   const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("pointerdown", outside, true));
+  /** When the last item was picked: the tap's own click may land on the field once the layout shifts, and must not reopen the list. */
+  let pickedAt = 0;
   const pick = (v: string) => {
     value = v;
     input.value = labelOf(v);
@@ -975,7 +991,7 @@ function combo(placeholder: string) {
             b.setAttribute("role", "option");
             b.setAttribute("aria-selected", String(i.value === value));
             // mousedown, so the pick lands before the input's blur closes the list.
-            b.onmousedown = (e) => (e.preventDefault(), pick(i.value), input.dispatchEvent(new Event("change")));
+            b.onmousedown = (e) => (e.preventDefault(), (pickedAt = Date.now()), pick(i.value), input.dispatchEvent(new Event("change")));
             return b;
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
@@ -984,8 +1000,8 @@ function combo(placeholder: string) {
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("pointerdown", outside, true);
   };
-  input.onfocus = () => (input.select(), show(""));
-  input.onclick = () => list.hidden && show("");
+  input.onfocus = () => (input.select(), Date.now() - pickedAt > 500 && show(""));
+  input.onclick = () => list.hidden && Date.now() - pickedAt > 500 && show("");
   input.oninput = () => show(input.value);
   input.onkeydown = (e) => {
     if (e.key === "Tab" && !list.hidden) close();
@@ -1030,13 +1046,16 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const month = existing?.date.slice(0, 7) ?? "";
   let isIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
   const dlg = el("dialog");
+  // The shekel is the default currency, always; a line already entered in USD or JPY opens in that one.
+  const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
+  let currency: Currency = startFx?.currency ?? "ILS";
   const amount = el("input", {
     type: "text",
     inputMode: "decimal",
     placeholder: "0.00",
     required: true,
     autocomplete: "off",
-    value: existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
+    value: startFx ? String(Math.abs(startFx.orig_minor) / 10 ** decimals(startFx.currency)) : existing ? String(Math.abs(existing.amount_agorot) / 100) : "",
   });
   const date = el("input", { type: "date", required: true, value: existing?.date ?? new Date().toISOString().slice(0, 10) });
   const topPick = combo("חיפוש קטגוריה…");
@@ -1090,6 +1109,86 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   repeat.onchange = forever.onchange = showRepeat;
   showRepeat();
 
+  // Foreign currency (USD, JPY): the shekel amount follows the rate for the transaction's day.
+  /** The currency in force: repeating charges are in shekels only. */
+  const cur = (): Currency => (repeat.checked ? "ILS" : currency);
+  const amountLbl = el("span", { textContent: "סכום (₪)" });
+  const curPick = combo("חיפוש מטבע…");
+  curPick.set(CURRENCIES.map((c) => ({ value: c.code, label: `${c.symbol} ${c.name} ${c.code}` })), currency);
+  curPick.input.addEventListener("change", () => {
+    currency = (curPick.value || "ILS") as Currency;
+    syncFx();
+    void refreshQuote();
+    syncSave();
+  });
+  const curSeg = el("label", { className: "curfield" }, "מטבע", curPick.root);
+  const ils = el("input", { type: "text", inputMode: "decimal", placeholder: "0.00", autocomplete: "off" });
+  const fxNote = el("div", { className: "fxnote muted" });
+  const refreshBtn = el("button", { type: "button", className: "btn small", textContent: "עדכון שער" });
+  const fxBox = el("div", { className: "fxbox" }, el("label", {}, "סכום בשקלים (₪)", ils), fxNote, startFx ? refreshBtn : null);
+  /** The rate for the chosen day (null: unknown, e.g. offline: the server converts when the line is sent). */
+  let quote: { rate: number; date: string; estimated: boolean } | null = startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null;
+  let quoteSeq = 0;
+  /** The shekel amount was typed in (what the card really charged): it is used as it is. */
+  let ilsTouched = false;
+  /** "Update rate" was pressed: look the rate up again instead of keeping the saved one. */
+  let forceLookup = false;
+  if (startFx) ils.value = String(Math.abs(existing!.amount_agorot) / 100);
+  const origMinor = () => {
+    try {
+      return Math.abs(parseMinor(amount.value, cur()));
+    } catch {
+      return 0;
+    }
+  };
+  /** A saved foreign line whose currency, amount and day are as they were keeps its saved rate. */
+  const fxUnchanged = () => !!startFx && cur() === startFx.currency && origMinor() === Math.abs(startFx.orig_minor) && date.value === existing!.date;
+  const recalc = () => {
+    if (cur() === "ILS") return;
+    const sym = currencySymbol(cur());
+    if (!quote) {
+      fxNote.textContent = "אין שער זמין כרגע: השער ייקבע כשהתנועה תישלח";
+      return;
+    }
+    if (!ilsTouched) {
+      const minor = origMinor();
+      ils.value = minor ? ((minor / 10 ** decimals(cur())) * quote.rate).toFixed(2) : "";
+    }
+    fxNote.textContent = ilsTouched ? `סכום החיוב הוזן ידנית · השער יחושב ממנו` : `שער: 1 ${sym} = ₪${formatRate(quote.rate)} · ${fmtDate(quote.date)}${quote.estimated ? " · זמני, יתעדכן אוטומטית כשהיום יסתיים" : ""}`;
+  };
+  const refreshQuote = async () => {
+    if (cur() === "ILS") return;
+    const seq = ++quoteSeq;
+    fxNote.textContent = "מביא שער…";
+    try {
+      const q = await api.fxRate(cur(), date.value);
+      if (seq === quoteSeq) quote = q;
+    } catch {
+      if (seq !== quoteSeq) return;
+      quote = null;
+    }
+    if (seq === quoteSeq) recalc();
+  };
+  const syncFx = () => {
+    const c = cur();
+    if (curPick.value !== c) curPick.pick(c);
+    curSeg.style.display = repeat.checked ? "none" : "";
+    fxBox.style.display = c === "ILS" ? "none" : "";
+    amountLbl.textContent = `סכום (${currencySymbol(c)})`;
+    if (c !== "ILS") recalc();
+  };
+  amount.addEventListener("input", recalc);
+  ils.addEventListener("input", () => {
+    ilsTouched = ils.value.trim() !== "";
+    recalc();
+  });
+  date.addEventListener("change", () => void refreshQuote());
+  refreshBtn.onclick = () => {
+    ilsTouched = false;
+    forceLookup = true;
+    void refreshQuote();
+  };
+  repeat.addEventListener("change", () => (syncFx(), syncSave()));
   const expBtn = el("button", { type: "button", textContent: "הוצאה" });
   const incBtn = el("button", { type: "button", textContent: "הכנסה" });
   const kindCats = () => state.cats.filter((c) => c.is_income === isIncome);
@@ -1136,10 +1235,10 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
       return false;
     }
   };
-  /** A usable amount: a number that is not zero (to the agora). */
+  /** A usable amount: a number that is not zero (to the agora, cent or yen). */
   const amountReady = () => {
     try {
-      return parseAgorot(amount.value) !== 0 && amount.value.trim() !== "";
+      return parseMinor(amount.value, cur()) !== 0 && amount.value.trim() !== "";
     } catch {
       return false;
     }
@@ -1228,7 +1327,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
     "form",
     { className: "add", method: "dialog" },
     el("div", { className: "seg" }, expBtn, incBtn),
-    el("label", {}, "סכום (₪)", amount),
+    el("div", { className: "amountrow" }, el("label", {}, amountLbl, amount), curSeg),
+    fxBox,
     el("label", {}, "קטגוריה", topPick.root),
     el("label", {}, "תת-קטגוריה", subPick.root),
     el("label", {}, "תאריך", dateField(date)),
@@ -1250,6 +1350,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   // The update menu of a repeating charge is greyed out the same way.
   form.querySelectorAll(".menuwrap > button.primary").forEach((b) => b.classList.add("needs-category"));
   dlg.append(form);
+  syncFx();
+  if (!startFx) void refreshQuote();
   syncSave();
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -1257,13 +1359,21 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
       const abs = Math.abs(parseAgorot(amount.value));
       if (abs === 0) throw new Error("יש להזין סכום");
       save.disabled = true;
-      const body = {
-        date: date.value,
-        amount_agorot: isIncome ? abs : -abs,
-        category_id: categoryId(),
-        payment_method_id: existing?.payment_method_id ?? null,
-        note: note.value,
-      };
+      const sign = isIncome ? 1 : -1;
+      const catId = categoryId();
+      const body: TxInput = { date: date.value, amount_agorot: sign * abs, category_id: catId, payment_method_id: existing?.payment_method_id ?? null, note: note.value };
+      if (cur() !== "ILS") {
+        // Foreign: send the original amount; the server converts it at the rate for the day unless
+        // the shekel amount was typed in, or the saved line is unchanged (then its rate is kept).
+        delete body.amount_agorot;
+        body.currency = cur();
+        body.orig_minor = sign * origMinor();
+        if (ilsTouched) {
+          const a = Math.abs(parseAgorot(ils.value));
+          if (a === 0) throw new Error("יש להזין סכום בשקלים");
+          body.amount_agorot = sign * a;
+        } else if (!forceLookup && fxUnchanged()) body.amount_agorot = existing!.amount_agorot;
+      }
       if (repeat.checked) {
         const n = Number(months.value);
         if (forever.value === "months" && !(Number.isInteger(n) && n >= 1)) throw new Error("מספר החודשים אינו תקין");
@@ -1273,8 +1383,8 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
           start_month: start,
           end_month: forever.value === "months" ? addMonths(start, n - 1) : null,
           day: seriesId !== undefined && date.value.slice(0, 7) !== month ? (segment?.day ?? 1) : Number(date.value.slice(8)),
-          amount_agorot: body.amount_agorot,
-          category_id: body.category_id,
+          amount_agorot: sign * abs,
+          category_id: catId,
           payment_method_id: body.payment_method_id,
           note: body.note,
         };
@@ -1296,7 +1406,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
         }
       }
       try {
-        localStorage.setItem(lastKey(body.category_id), bizPick.value == null ? "" : String(bizPick.value));
+        localStorage.setItem(lastKey(catId), bizPick.value == null ? "" : String(bizPick.value));
       } catch {
         /* storage unavailable */
       }
@@ -1391,17 +1501,18 @@ async function flushQueue() {
   }
 }
 
-type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror">;
+type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx">;
 async function fetchAll(): Promise<ServerData & { log?: LogEntry[] }> {
-  const [cats, txs, recurring, occurrences, log, mirror] = await Promise.all([
+  const [cats, txs, recurring, occurrences, log, mirror, fx] = await Promise.all([
     api.categories(),
     api.transactions(),
     api.recurring(),
     api.occurrences(),
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
     api.mirrorStatus().catch(() => ({ enabled: false })),
+    api.foreign().catch((e) => (isNetworkError(e) ? Promise.reject(e) : undefined)),
   ]);
-  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log };
+  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx };
 }
 
 async function load() {
@@ -1426,8 +1537,19 @@ async function load() {
   } catch {
     /* keep what we had */
   }
+  // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
+  if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();
-  const txs: Transaction[] = [...data.txs, ...queued.map((q: Queued) => ({ id: -q.qid, ...q.tx, sync_state: "queued" }))];
+  // A queued foreign line has no shekel amount yet: the server converts it when it is sent.
+  const queuedFx = new Map<number, Fx>();
+  const txs: Transaction[] = [
+    ...data.txs,
+    ...queued.map((q: Queued) => {
+      if (q.tx.currency && q.tx.orig_minor != null) queuedFx.set(-q.qid, { transaction_id: -q.qid, currency: q.tx.currency, orig_minor: q.tx.orig_minor, rate: 0, rate_date: q.tx.date, estimated: true });
+      return { id: -q.qid, ...q.tx, amount_agorot: q.tx.amount_agorot ?? 0, sync_state: "queued" };
+    }),
+  ];
+  for (const [id, f] of queuedFx) state.fx.set(id, f);
   state.mirror = data.mirror;
   trackSync(txs);
   if (log) {

@@ -1,4 +1,4 @@
-import type { Category, Occurrence, RecurringSegment, Transaction } from "./api";
+import type { Category, Fx, Occurrence, RecurringSegment, Transaction, TxInput } from "./api";
 
 /** Offline support: the last data fetched from the server, and new transactions waiting to be sent.
  * Both live in IndexedDB (with persistent storage requested, so the browser does not evict them). */
@@ -9,10 +9,12 @@ export interface Snapshot {
   recurring: RecurringSegment[];
   occurrences: Occurrence[];
   mirror: boolean;
+  /** Foreign-currency details of the transactions. */
+  fx?: Fx[];
   savedAt: number;
 }
 
-export type NewTransaction = Omit<Transaction, "id" | "sync_state">;
+export type NewTransaction = TxInput;
 export interface Queued {
   qid: number;
   tx: NewTransaction;
