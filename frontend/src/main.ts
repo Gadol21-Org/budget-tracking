@@ -1179,7 +1179,7 @@ function openTransactionDialog(existing?: Transaction, startAsIncome = false) {
   const amountLbl = el("span", { textContent: "סכום (₪)" });
   const curPick = combo("חיפוש מטבע…");
   // Only the currencies added in settings (in their order); a line already in a removed one keeps its own.
-  curPick.set(pickerCurrencies(currency).map((code) => { const c = currencyInfo(code); return { value: c.code, label: `${LRM}${c.symbol}${LRM} ${c.name} ${c.code}` }; }), currency);
+  curPick.set(pickerCurrencies(currency).map((code) => { const c = currencyInfo(code); return { value: c.code, label: c.symbol === c.code ? `${c.name} ${c.code}` : `${LRM}${c.symbol}${LRM} ${c.name} ${c.code}` }; }), currency);
   curPick.input.addEventListener("change", () => {
     currency = (curPick.value || "ILS") as Currency;
     syncFx();

@@ -69,52 +69,38 @@ export interface BusinessData {
   links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
-/** A currency code: "ILS" or one of `CURRENCIES` (the server only accepts those). */
+/** A currency code: "ILS" or one the server supports (`CURRENCIES` in backend/src/fx.rs). */
 export type Currency = string;
 export interface CurrencyInfo {
   code: Currency;
   symbol: string;
   name: string;
 }
-/** Every currency the rate services can price, shekel first (keep in step with `CURRENCIES` in backend/src/fx.rs). */
-export const CURRENCIES: CurrencyInfo[] = [
-  { code: "ILS", symbol: "₪", name: "שקל" },
-  { code: "USD", symbol: "$", name: "דולר אמריקאי" },
-  { code: "EUR", symbol: "€", name: "יורו" },
-  { code: "JPY", symbol: "¥", name: "ין יפני" },
-  { code: "GBP", symbol: "£", name: "לירה שטרלינג" },
-  { code: "CHF", symbol: "CHF", name: "פרנק שווייצרי" },
-  { code: "CAD", symbol: "C$", name: "דולר קנדי" },
-  { code: "AUD", symbol: "A$", name: "דולר אוסטרלי" },
-  { code: "NZD", symbol: "NZ$", name: "דולר ניו זילנדי" },
-  { code: "CNY", symbol: "CN¥", name: "יואן סיני" },
-  { code: "HKD", symbol: "HK$", name: "דולר הונג קונג" },
-  { code: "SGD", symbol: "S$", name: "דולר סינגפורי" },
-  { code: "KRW", symbol: "₩", name: "וון דרום קוריאני" },
-  { code: "INR", symbol: "₹", name: "רופי הודי" },
-  { code: "THB", symbol: "฿", name: "באט תאילנדי" },
-  { code: "MYR", symbol: "RM", name: "רינגיט מלזי" },
-  { code: "IDR", symbol: "Rp", name: "רופיה אינדונזית" },
-  { code: "PHP", symbol: "₱", name: "פסו פיליפיני" },
-  { code: "TRY", symbol: "₺", name: "לירה טורקית" },
-  { code: "ZAR", symbol: "R", name: "ראנד דרום אפריקאי" },
-  { code: "BRL", symbol: "R$", name: "ריאל ברזילאי" },
-  { code: "MXN", symbol: "MX$", name: "פסו מקסיקני" },
-  { code: "SEK", symbol: "SEK", name: "כתר שוודי" },
-  { code: "NOK", symbol: "NOK", name: "כתר נורווגי" },
-  { code: "DKK", symbol: "DKK", name: "כתר דני" },
-  { code: "PLN", symbol: "zł", name: "זלוטי פולני" },
-  { code: "CZK", symbol: "Kč", name: "כתר צ'כי" },
-  { code: "HUF", symbol: "Ft", name: "פורינט הונגרי" },
-  { code: "RON", symbol: "lei", name: "לאו רומני" },
-  { code: "BGN", symbol: "лв", name: "לב בולגרי" },
-  { code: "ISK", symbol: "ISK", name: "כתר איסלנדי" },
-];
-/** Info for a code; a code this build does not know (a newer server) still displays as itself. */
-export const currencyInfo = (c: Currency): CurrencyInfo => CURRENCIES.find((x) => x.code === c) ?? { code: c, symbol: c, name: c };
+const infoCache = new Map<Currency, CurrencyInfo>();
+let names: Intl.DisplayNames | undefined;
+/** Hebrew name and symbol of a currency, from the browser's own data (so any code displays, even one this build never heard of). */
+export function currencyInfo(code: Currency): CurrencyInfo {
+  let info = infoCache.get(code);
+  if (!info) {
+    let symbol = code;
+    let name = code;
+    try {
+      names ??= new Intl.DisplayNames("he", { type: "currency" });
+      name = code === "ILS" ? "שקל" : names.of(code) ?? code;
+      symbol = new Intl.NumberFormat("he", { style: "currency", currency: code, currencyDisplay: "symbol" }).formatToParts(1).find((p) => p.type === "currency")?.value ?? code;
+    } catch {
+      /* unknown code: show it as is */
+    }
+    info = { code, symbol, name };
+    infoCache.set(code, info);
+  }
+  return info;
+}
 export const currencySymbol = (c: Currency) => currencyInfo(c).symbol;
-/** Decimal places of a currency's minor unit (cents; the yen and won have none). */
-export const decimals = (c: Currency) => (c === "JPY" || c === "KRW" || c === "ISK" ? 0 : 2);
+/** Decimal places of a currency's minor unit (ISO 4217; mirrors `decimals` in backend/src/fx.rs). */
+export const decimals = (c: Currency) => (ZERO_DEC.has(c) ? 0 : THREE_DEC.has(c) ? 3 : 2);
+const ZERO_DEC = new Set("BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX VND VUV XAF XOF XPF".split(" "));
+const THREE_DEC = new Set("BHD IQD JOD KWD LYD OMR TND".split(" "));
 
 /** What a foreign-currency transaction was entered as; its `amount_agorot` is the shekel value. */
 export interface Fx {
@@ -234,7 +220,7 @@ export const api = {
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),
   deleteTransaction: (id: number) => request<void>(`/api/transactions/${id}`, { method: "DELETE" }),
   /** The currencies added in settings, in picker order (the shekel is always available). */
-  currencySettings: () => request<{ enabled: Currency[] }>("/api/settings/currencies"),
+  currencySettings: () => request<{ enabled: Currency[]; supported: Currency[] }>("/api/settings/currencies"),
   saveCurrencySettings: (enabled: Currency[]) =>
     request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
   /** Whether changes are being written to Paamonim. */

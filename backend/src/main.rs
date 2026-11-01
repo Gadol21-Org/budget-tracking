@@ -206,6 +206,9 @@ async fn fx_rate(
 #[derive(Serialize, Deserialize)]
 struct EnabledCurrencies {
     enabled: Vec<String>,
+    /// Every code that can be added (read only).
+    #[serde(default, skip_deserializing)]
+    supported: Vec<&'static str>,
 }
 
 /// The currencies added in settings, in picker order (the shekel is always available).
@@ -216,6 +219,7 @@ async fn get_currency_settings(
         enabled: fx::enabled_currencies(db.as_ref())
             .await
             .map_err(internal)?,
+        supported: fx::CURRENCIES.to_vec(),
     }))
 }
 
@@ -226,7 +230,10 @@ async fn put_currency_settings(
     let enabled = fx::save_enabled_currencies(db.as_ref(), &b.enabled)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    Ok(Json(EnabledCurrencies { enabled }))
+    Ok(Json(EnabledCurrencies {
+        enabled,
+        supported: fx::CURRENCIES.to_vec(),
+    }))
 }
 
 /// The foreign-currency details of transactions. Rates that were stand-ins and whose day

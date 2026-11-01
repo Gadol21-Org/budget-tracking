@@ -1,4 +1,4 @@
-import { api, CURRENCIES, currencyInfo, type Currency } from "./api";
+import { api, currencyInfo, type Currency } from "./api";
 import { el } from "./ui";
 
 /**
@@ -9,18 +9,21 @@ import { el } from "./ui";
 const KEY = "budget.currencies";
 /** Keeps a Latin symbol like C$ in reading order inside Hebrew text. */
 export const LRM = "\u200E";
+const ALL_KEY = "budget.currencies.all";
 const DEFAULT: Currency[] = ["USD", "EUR", "JPY"];
 
 let enabled: Currency[] = readCache();
+/** Every currency the server can price (for the add list). */
+let supported: Currency[] = readCache(ALL_KEY, []);
 
-function readCache(): Currency[] {
+function readCache(key = KEY, fallback: Currency[] = DEFAULT): Currency[] {
   try {
-    const v = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    const v = JSON.parse(localStorage.getItem(key) ?? "null");
     if (Array.isArray(v)) return v.filter((c): c is string => typeof c === "string");
   } catch {
     /* storage unavailable or damaged */
   }
-  return [...DEFAULT];
+  return [...fallback];
 }
 
 function remember(list: Currency[]) {
@@ -38,7 +41,14 @@ export const enabledCurrencies = (): Currency[] => enabled;
 /** Fetch the saved list; offline, the last known one stays. */
 export async function loadEnabledCurrencies(): Promise<void> {
   try {
-    remember((await api.currencySettings()).enabled);
+    const r = await api.currencySettings();
+    remember(r.enabled);
+    supported = r.supported;
+    try {
+      localStorage.setItem(ALL_KEY, JSON.stringify(supported));
+    } catch {
+      /* fine */
+    }
   } catch {
     /* keep what we had */
   }
@@ -62,14 +72,14 @@ export function currenciesView(ctx: CurrenciesCtx): HTMLElement {
   back.onclick = ctx.back;
   const msg = el("div", { className: "note error" });
   const addedBox = el("div", { className: "rows" });
-  const moreBox = el("div", { className: "rows" });
-  const search = el("input", { type: "search", placeholder: "חיפוש מטבע…", autocomplete: "off", spellcheck: false, className: "cursearch" });
+  const moreBox = el("div", { className: "rows curlist" });
+  const search = el("input", { type: "search", placeholder: "חיפוש מטבע לפי שם או קוד…", autocomplete: "off", spellcheck: false, className: "cursearch" });
 
   /** Save a new list; on failure show the error and go back to what the server has. */
-  const save = async (list: Currency[]) => {
+  const save = async (list: Currency[], focus?: number) => {
     const before = enabled;
     remember(list);
-    paint();
+    paint(focus);
     msg.textContent = "";
     try {
       remember((await api.saveCurrencySettings(list)).enabled);
@@ -77,59 +87,100 @@ export function currenciesView(ctx: CurrenciesCtx): HTMLElement {
       remember(before);
       msg.textContent = `השמירה נכשלה: ${e instanceof Error ? e.message : e}`;
     }
-    paint();
+    paint(focus);
   };
 
-  const icon = (text: string, title: string, on: () => void, disabled = false) => {
-    const b = el("button", { type: "button", className: "btn iconbtn", textContent: text, title, disabled });
+  const icon = (text: string, title: string, on: () => void) => {
+    const b = el("button", { type: "button", className: "btn iconbtn", textContent: text, title });
     b.setAttribute("aria-label", title);
     b.onclick = on;
     return b;
   };
-  const addBtn = (c: { code: Currency; name: string }) => {
-    const b = el("button", { type: "button", className: "btn", textContent: "הוספה", title: `הוספת ${c.name}` });
-    b.setAttribute("aria-label", `הוספת ${c.name}`);
+  const addBtn = (c: Currency) => {
+    const b = el("button", { type: "button", className: "btn", textContent: "הוספה", title: `הוספת ${currencyInfo(c).name}` });
+    b.setAttribute("aria-label", `הוספת ${currencyInfo(c).name}`);
     b.style.whiteSpace = "nowrap";
-    b.onclick = () => void save([...enabled, c.code]);
+    b.onclick = () => void save([...enabled, c]);
     return b;
   };
   const label = (c: Currency) => {
     const i = currencyInfo(c);
-    return el("div", { className: "grow" }, el("div", { className: "name", textContent: `${LRM}${i.symbol}${LRM} ${i.name}` }), el("div", { className: "muted", textContent: i.code }));
+    return el("div", { className: "grow" }, el("div", { className: "name", textContent: i.symbol === i.code ? i.name : `${LRM}${i.symbol}${LRM} ${i.name}` }), el("div", { className: "muted", textContent: i.code }));
   };
-  const move = (i: number, d: number) => {
+  const reorder = (from: number, to: number) => {
     const list = [...enabled];
-    [list[i], list[i + d]] = [list[i + d], list[i]];
-    void save(list);
+    list.splice(to, 0, ...list.splice(from, 1));
+    return list;
   };
 
-  function paint() {
+  /** A handle that drags its row (mouse, touch and pen alike: pointer events, the handle opts out of scrolling); arrow keys on the focused handle move it too. */
+  function handle(i: number, row: HTMLElement): HTMLElement {
+    const h = el("button", { type: "button", className: "btn iconbtn draghandle", textContent: "⠿", title: "גרירה לשינוי סדר" });
+    h.setAttribute("aria-label", `שינוי סדר: ${currencyInfo(enabled[i]).name}. חצים למעלה ולמטה מזיזים`);
+    h.onkeydown = (e) => {
+      const to = e.key === "ArrowUp" ? i - 1 : e.key === "ArrowDown" ? i + 1 : -1;
+      if (to < 0 || to >= enabled.length) return;
+      e.preventDefault();
+      void save(reorder(i, to), to);
+    };
+    h.onpointerdown = (e) => {
+      if (e.button > 0) return;
+      e.preventDefault();
+      h.setPointerCapture(e.pointerId);
+      const rows = [...addedBox.querySelectorAll<HTMLElement>(".row[data-i]")];
+      const rects = rows.map((r) => r.getBoundingClientRect());
+      const startY = e.clientY;
+      const step = rects[i].height;
+      let to = i;
+      row.classList.add("dragging");
+      const move = (ev: PointerEvent) => {
+        const dy = Math.max(rects[0].top - rects[i].top, Math.min(rects[rects.length - 1].top - rects[i].top, ev.clientY - startY));
+        row.style.transform = `translateY(${dy}px)`;
+        const centre = rects[i].top + rects[i].height / 2 + dy;
+        to = rects.findIndex((r) => centre < r.top + r.height / 2);
+        if (to < 0) to = rects.length - 1;
+        rows.forEach((r, k) => {
+          if (k !== i) r.style.transform = i < k && k <= to ? `translateY(${-step}px)` : to <= k && k < i ? `translateY(${step}px)` : "";
+        });
+      };
+      const end = (ev: PointerEvent) => {
+        h.removeEventListener("pointermove", move);
+        h.removeEventListener("pointerup", end);
+        h.removeEventListener("pointercancel", end);
+        rows.forEach((r) => ((r.style.transform = ""), r.classList.remove("dragging")));
+        if (ev.type === "pointerup" && to !== i) void save(reorder(i, to));
+      };
+      h.addEventListener("pointermove", move);
+      h.addEventListener("pointerup", end);
+      h.addEventListener("pointercancel", end);
+    };
+    return h;
+  }
+
+  function paint(focus?: number) {
     const ils = currencyInfo("ILS");
     addedBox.replaceChildren(
       el("div", { className: "row fixed" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `${ils.symbol} ${ils.name}` }), el("div", { className: "muted", textContent: "ILS · ברירת מחדל, תמיד זמין" }))),
-      ...enabled.map((c, i) =>
-        el(
-          "div",
-          { className: "row" },
-          label(c),
-          icon("▲", "הזזה למעלה", () => move(i, -1), i === 0),
-          icon("▼", "הזזה למטה", () => move(i, 1), i === enabled.length - 1),
-          icon("✕", "הסרה", () => void save(enabled.filter((x) => x !== c))),
-        ),
-      ),
+      ...(enabled.length ? [] : [el("div", { className: "empty", textContent: "לא נוספו מטבעות נוספים" })]),
+      ...enabled.map((c, i) => {
+        const row = el("div", { className: "row", draggable: false });
+        row.dataset.i = String(i);
+        row.append(handle(i, row), label(c), icon("✕", "הסרה", () => void save(enabled.filter((x) => x !== c))));
+        return row;
+      }),
     );
+    if (focus != null) addedBox.querySelector<HTMLElement>(`.row[data-i="${focus}"] .draghandle`)?.focus();
     const q = search.value.trim().toLowerCase();
-    const rest = CURRENCIES.filter((c) => c.code !== "ILS" && !enabled.includes(c.code)).filter((c) => !q || `${c.symbol} ${c.name} ${c.code}`.toLowerCase().includes(q));
-    moreBox.replaceChildren(
-      ...(rest.length
-        ? rest.map((c) => el("div", { className: "row" }, label(c.code), addBtn(c)))
-        : [el("div", { className: "empty", textContent: q ? "אין תוצאות" : "כל המטבעות נוספו" })]),
-    );
+    const all = supported.length ? supported : enabled;
+    const rest = all.filter((c) => c !== "ILS" && !enabled.includes(c)).filter((c) => !q || `${currencyInfo(c).symbol} ${currencyInfo(c).name} ${c}`.toLowerCase().includes(q));
+    moreBox.replaceChildren(...(rest.length ? rest.map((c) => el("div", { className: "row" }, label(c), addBtn(c))) : [el("div", { className: "empty", textContent: q ? "אין תוצאות" : "כל המטבעות נוספו" })]));
+    count.textContent = `${rest.length} מטבעות זמינים`;
   }
-  search.oninput = paint;
+  const count = el("div", { className: "muted" });
+  search.oninput = () => paint();
   paint();
   // Another device may have changed the list: show the server's copy.
-  void loadEnabledCurrencies().then(paint);
+  void loadEnabledCurrencies().then(() => paint());
 
   return el(
     "div",
@@ -140,10 +191,10 @@ export function currenciesView(ctx: CurrenciesCtx): HTMLElement {
       "div",
       { className: "card" },
       el("h2", { textContent: "מטבעות פעילים" }),
-      el("p", { className: "muted", textContent: "רק המטבעות כאן מוצגים בהוספה ועריכה של תנועות, לפי הסדר הזה. תנועות שכבר נשמרו במטבע שהוסר ממשיכות להופיע כרגיל." }),
+      el("p", { className: "muted", textContent: "רק המטבעות כאן מוצגים בהוספה ועריכה של תנועות, לפי הסדר הזה. גוררים בידית ⠿ כדי לשנות את הסדר. תנועות שכבר נשמרו במטבע שהוסר ממשיכות להופיע כרגיל." }),
       addedBox,
       msg,
     ),
-    el("div", { className: "card" }, el("h2", { textContent: "הוספת מטבע" }), search, moreBox),
+    el("div", { className: "card" }, el("h2", { textContent: "הוספת מטבע" }), search, count, moreBox),
   );
 }
