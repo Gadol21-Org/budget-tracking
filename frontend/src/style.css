@@ -285,6 +285,15 @@ form.add label[hidden] { display: none; }
 
 .banner { background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--expense); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; color: var(--muted); font-size: 14px; }
 
+/* "New version available": a bar above the nav that asks for a relaunch; never reloads by itself. */
+.update-banner {
+  position: fixed; bottom: calc(var(--nav-h) + 90px + env(safe-area-inset-bottom)); inset-inline: 12px; margin-inline: auto; max-width: 420px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--brand); border-radius: var(--radius);
+  padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 45;
+}
+.update-banner button { background: var(--brand); color: var(--brand-contrast); border: 0; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 600; }
+
 /* "Loading earlier months": floats over the screen (above the nav bar, clear of the month title) so the content does not jump; fades in only if the fetch takes a moment. */
 .loading-toast {
   position: fixed; bottom: calc(var(--nav-h) + 24px + env(safe-area-inset-bottom)); inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px);

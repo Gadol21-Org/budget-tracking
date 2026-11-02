@@ -32,7 +32,16 @@ self.addEventListener("fetch", (e) => {
       const network = fetch(e.request)
         .then((res) => {
           if (res.status >= 500) throw new TypeError("server unavailable");
-          if (res.ok) cache.put(key, res.clone());
+          if (res.ok) {
+            const copy = res.clone();
+            // The new page's hashed files are stored with it, so the stored page and its files always match (also offline).
+            const files = e.request.mode === "navigate" ? res.clone().text().then((html) => Promise.all([...new Set(html.match(/\/assets\/[^"'\s]+/g) ?? [])].map((u) => cache.match(u).then((hit) => hit || cache.add(u))))) : Promise.resolve();
+            // Store the page, then tell the open page so it can see whether it is a newer version than the one running.
+            const stored = Promise.all([files, cache.put(key, copy)]).then(async () => {
+              if (e.request.mode === "navigate") for (const c of await self.clients.matchAll()) c.postMessage({ type: "shell-updated" });
+            });
+            e.waitUntil(stored.catch(() => {}));
+          }
           return res;
         })
         .catch(() => undefined);
