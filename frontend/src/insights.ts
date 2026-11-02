@@ -462,6 +462,14 @@ const catColor = (ctx: Ctx, id: number | null): string => {
   return i < 0 ? OTHER_COLOR : colorAt(i);
 };
 
+/** One legend line: colour, name (cut with … when long), amount and share, each in its own column so the numbers line up. */
+function legendRow(color: string, name: string, value: number, total: number, onTap?: () => void): HTMLElement {
+  const label = el("span", { className: "nm", textContent: name });
+  label.title = name;
+  const row = el("div", { className: "lrow" }, el("i", { style: `background:${color}` }), label, money(value), el("span", { className: "muted num", textContent: `${Math.max(1, Math.round((value / total) * 100))}%` }));
+  return onTap ? clickable(row, onTap) : row;
+}
+
 /** The donut and the category list of one side; `heading` replaces the default hint above the list. */
 function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const side = sideOf(ctx), S = SIDES[side];
@@ -470,11 +478,7 @@ function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const rows = [...cur.groups.entries()].sort((a, b) => b[1].total - a[1].total);
   const max = rows[0]?.[1].total ?? 1;
   const parts = rows.map(([id, g]) => ({ value: g.total, color: catColor(ctx, id) }));
-  const legend = el(
-    "div",
-    { className: "donutlegend" },
-    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, money(g.total), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
-  );
+  const legend = el("div", { className: "donutlegend tbl" }, ...rows.map(([id, g]) => legendRow(catColor(ctx, id), catName(ctx, id), g.total, cur.sideTotal)));
   if (rows.length === 0) return el("div", {}, heading ?? null, el("div", { className: "empty", textContent: S.empty }));
   return el(
     "div",
@@ -582,14 +586,7 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
         "div",
         { className: "card donutcard" },
         svgBox(donut(slices.map((x) => ({ value: x.value, color: x.color })), formatShekelsWhole(g.total), S.title)),
-        el(
-          "div",
-          { className: "donutlegend" },
-          ...slices.map((x) => {
-            const item = el("div", {}, el("i", { style: `background:${x.color}` }), `${x.name} `, money(x.value), " ", el("span", { className: "muted num", textContent: `${Math.round((x.value / g.total) * 100)}%` }));
-            return x.open ? clickable(item, x.open) : item;
-          }),
-        ),
+        el("div", { className: "donutlegend tbl" }, ...slices.map((x) => legendRow(x.color, x.name, x.value, g.total, x.open))),
       )
     : null;
   return el(

@@ -398,3 +398,9 @@ dialog { overscroll-behavior: contain; }
 /* Summary: the category section header carries the comparison chip. */
 .sumhead { display: flex; align-items: center; gap: 8px; }
 .sumhead .cmpbtn { margin-inline-start: auto; font-weight: 400; }
+/* Donut legend as a table: swatch, name, amount, share. The rows share the columns, so the numbers line up. */
+.donutlegend.tbl { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; column-gap: 8px; row-gap: 3px; align-items: center; }
+.donutlegend.tbl .lrow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+.donutlegend.tbl .lrow i { margin: 0; }
+.donutlegend.tbl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.donutlegend.tbl .num { text-align: end; justify-self: end; }
