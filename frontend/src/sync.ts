@@ -112,6 +112,9 @@ export async function load() {
   render();
 }
 
+/** Months fetched beyond what the screen needs when older months are loaded. */
+export const HISTORY_PADDING_MONTHS = 3;
+
 let historyFailed = false;
 let extending: Promise<void> | undefined;
 
@@ -152,10 +155,10 @@ export function neededFrom(): string {
 
 /** Called by every render: fetch older months in the background when the screen reaches before the loaded ones. */
 export function ensureHistory() {
-  // Fetch whole years at a time, so paging back month by month costs one request a year.
   const needed = neededFrom();
   if (state.loadedFrom === undefined || needed >= state.loadedFrom || extending || historyFailed) return;
-  const from = `${needed.slice(0, 4)}-01-01`;
+  // Fetch 3 months more than needed, so paging back a month or two does not fetch again.
+  const from = `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
   state.loadingOlder = true;
   void loadHistory(from);
 }
