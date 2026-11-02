@@ -1,0 +1,36 @@
+# `docker compose up --build` builds the app image and starts the app (http://localhost:3000)
+# with its MySQL. For development with `cargo run`, start just the database:
+# `docker compose up -d mysql` (matches MYSQL_URL in .env.example).
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: budget
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pbudget"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # Paamonim / Google Sheets settings, if you have a .env (optional).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Overrides MYSQL_URL from .env: inside compose the database is at host "mysql".
+      MYSQL_URL: mysql://root:budget@mysql:3306/budget
+      BIND_ADDR: 0.0.0.0:3000
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  mysql-data:

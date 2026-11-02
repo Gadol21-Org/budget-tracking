@@ -18,7 +18,7 @@ use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
     rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
     MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
-    RawPaymentMethod, Storage, SyncState, Transaction, TxFx, REQUEUE_SKIPPED_SQL,
+    RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
 };
 
 const SCHEMA: [&str; 15] = [
@@ -132,6 +132,16 @@ const SCHEMA: [&str; 15] = [
      )",
 ];
 
+/// See [`Storage::requeue_skipped_sub_categories`]. A category goes under a Paamonim category
+/// directly or through the category its parent is linked to.
+const REQUEUE_SKIPPED_SQL: &str = "UPDATE transactions SET sync_state = 'pending'
+     WHERE sync_state IN ('skipped', 'error') AND paamonim_line_id IS NULL AND category_id IN (
+       SELECT c.id FROM categories c JOIN categories pc ON pc.id = c.parent_id
+       LEFT JOIN categories lc ON lc.id = pc.linked_to AND lc.deleted = 0
+       WHERE c.paamonim_item_id IS NULL AND c.deleted = 0 AND pc.deleted = 0
+         AND (pc.paamonim_item_id LIKE 'ce:%' OR pc.paamonim_item_id LIKE 'ci:%'
+              OR lc.paamonim_item_id LIKE 'ce:%' OR lc.paamonim_item_id LIKE 'ci:%'))";
+
 pub struct MySqlStorage {
     pool: MySqlPool,
 }
@@ -139,6 +149,10 @@ pub struct MySqlStorage {
 impl MySqlStorage {
     pub async fn connect() -> Result<Self> {
         let url = std::env::var("MYSQL_URL").context("MYSQL_URL is not set")?;
+        Self::connect_url(&url).await
+    }
+
+    pub async fn connect_url(url: &str) -> Result<Self> {
         let opts: MySqlConnectOptions = url.parse().context("parsing MYSQL_URL")?;
         // Create the database on first use (the account needs the CREATE privilege;
         // if it lacks it and the database already exists, this is skipped).
@@ -1441,11 +1455,9 @@ mod tests {
     use super::*;
     use crate::storage::{ImportCategory, ImportPaymentMethod, ImportTransaction};
 
-    /// Needs a MySQL 8 server with an empty database: `MYSQL_URL=... cargo test -- --ignored`.
     #[tokio::test]
-    #[ignore]
     async fn import_is_idempotent_and_links_parents() {
-        let s = MySqlStorage::connect().await.unwrap();
+        let s = crate::testdb::fresh().await;
         let batch = ImportBatch {
             categories: vec![
                 ImportCategory {

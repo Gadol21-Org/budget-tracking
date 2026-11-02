@@ -89,11 +89,11 @@ pub(crate) async fn set_user_name(
 mod tests {
     use super::*;
     use crate::oplog::Logged;
-    use crate::storage::{NewTransaction, SqliteStorage};
+    use crate::storage::NewTransaction;
     use std::sync::Arc;
 
-    fn db() -> Db {
-        Arc::new(Logged(Arc::new(SqliteStorage::open(":memory:").unwrap())))
+    async fn db() -> Db {
+        Arc::new(Logged(Arc::new(crate::testdb::fresh().await)))
     }
 
     fn tx() -> NewTransaction {
@@ -108,7 +108,7 @@ mod tests {
 
     #[tokio::test]
     async fn changes_record_the_user_when_present_and_work_without() {
-        let db = db();
+        let db = db().await;
         db.create_transaction(&tx()).await.unwrap(); // no header: no user, no error
         oplog::ACTOR
             .scope(Some("a@x.com".into()), async {
@@ -130,7 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_known_emails_can_be_named_and_empty_name_clears() {
-        let db = db();
+        let db = db().await;
         oplog::ACTOR
             .scope(Some("a@x.com".into()), async {
                 db.create_transaction(&tx()).await.unwrap();

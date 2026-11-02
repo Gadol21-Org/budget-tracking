@@ -1,7 +1,8 @@
 # Deploys any branch to the STAGING container on the Oracle VM (port 8083), with made-up
 # sample data only. Run it from Actions > Staging > Run workflow and pick the branch, or
 # trigger it from a thread (see deploy/STAGING.md). It never touches production: separate
-# container and volume, SQLite, and no MySQL / Google Sheets / Paamonim settings.
+# containers and volume (its own sample MySQL), and no production MySQL / Google Sheets /
+# Paamonim settings.
 name: Staging
 
 on:

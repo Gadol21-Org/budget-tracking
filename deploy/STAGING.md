@@ -7,10 +7,10 @@ branch before it is merged to `main`. It holds **made-up sample data only**.
 |---|---|---|
 | Container | `budget-tracking` | `budget-staging` |
 | Port on the VM | `127.0.0.1:8082` (via Cloudflare tunnel) | `0.0.0.0:8083` |
-| Data | Oracle MySQL | SQLite in Docker volume `budget-staging-data` |
+| Data | Oracle MySQL | its own MySQL container `budget-staging-mysql` (Docker volume `budget-staging-data`, private network, nothing published) |
 | Google Sheets / Paamonim | per `BUDGET_ENV` | **off** (no credentials are passed in, mirroring forced off) |
 
-Staging is started without `--env-file`, so it cannot see the production MySQL URL, the Sheets key or the Paamonim login.
+Staging is started without `--env-file`, so it cannot see the production MySQL URL (it talks to its own sample MySQL container), the Sheets key or the Paamonim login.
 
 ## Deploy a branch
 

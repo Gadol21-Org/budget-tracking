@@ -300,7 +300,7 @@ pub async fn reprice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{NewTransaction, SqliteStorage};
+    use crate::storage::NewTransaction;
     use serde_json::json;
 
     use super::ENV_LOCK as ENV;
@@ -331,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_currencies_keep_their_order() {
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         assert_eq!(enabled_currencies(&s).await.unwrap(), ["USD", "EUR", "JPY"]);
         let list = ["GBP", "ILS", "USD"].map(String::from);
         // The shekel is implicit and dropped; the saved order is kept.
@@ -360,7 +360,7 @@ mod tests {
     async fn closed_days_are_final_and_cached_today_is_an_estimate() {
         let _g = ENV.lock().await;
         std::env::set_var("FX_FAKE_RATES", "USD=3.5,JPY=0.02");
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let past = rate_for(&s, "USD", "2026-10-01", "2026-10-05")
             .await
             .unwrap();
@@ -397,7 +397,7 @@ mod tests {
     async fn estimates_are_repriced_once_the_day_has_closed() {
         let _g = ENV.lock().await;
         std::env::set_var("FX_FAKE_RATES", "USD=3.0");
-        let s = SqliteStorage::open(":memory:").unwrap();
+        let s = crate::testdb::fresh().await;
         let id = s
             .create_transaction(&NewTransaction {
                 date: "2026-10-05".into(),
