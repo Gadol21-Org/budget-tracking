@@ -838,8 +838,15 @@ mod tests {
             dates(s.list_transactions_from("2025-07-01").await.unwrap()),
             ["2026-10-03", "2025-07-01"]
         );
-        assert_eq!(s.list_transactions_from("2000-01-01").await.unwrap().len(), 4);
-        assert!(s.list_transactions_from("2027-01-01").await.unwrap().is_empty());
+        assert_eq!(
+            s.list_transactions_from("2000-01-01").await.unwrap().len(),
+            4
+        );
+        assert!(s
+            .list_transactions_from("2027-01-01")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
