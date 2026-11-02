@@ -3,13 +3,16 @@ import "./gestures";
 import "./widgets";
 import { el } from "./ui";
 import { root } from "./state";
-import { load } from "./sync";
+import { load, showCached } from "./sync";
 import { screenState } from "./nav";
 import { openTransactionDialog } from "./dialogs/transaction";
 
 root.replaceChildren(el("main", {}, el("div", { className: "empty", textContent: "טוען…" })));
 
-load()
+// Show the last-seen data at once; the fresh data is fetched behind it and replaces it when it arrives.
+showCached()
+  .catch(() => false)
+  .then(() => load())
   .then(openShortcutAction)
   .catch((e) => {
     root.replaceChildren(el("main", {}, el("div", { className: "empty error", textContent: `לא ניתן לטעון נתונים: ${e}` })));

@@ -66,7 +66,6 @@ export async function load() {
     state.offline = true;
   }
   state.loadedFrom = loadedFrom;
-  const { cats, recurring, occurrences, log } = data;
   // Businesses are optional: a failure (or being offline) leaves the last ones in place.
   try {
     state.biz = toBizData(await api.businesses());
@@ -74,6 +73,20 @@ export async function load() {
     /* keep what we had */
   }
   await loadEnabledCurrencies();
+  await apply(data);
+}
+
+/** First paint: show the offline copy at once, before anything is fetched. False if there is none yet. */
+export async function showCached(): Promise<boolean> {
+  const snap = await loadSnapshot();
+  if (!snap) return false;
+  state.loadedFrom = snap.from ?? "";
+  await apply(snap);
+  return true;
+}
+
+async function apply(data: ServerData & { log?: LogEntry[] }) {
+  const { cats, recurring, occurrences, log } = data;
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();
