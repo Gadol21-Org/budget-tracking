@@ -473,7 +473,7 @@ function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const legend = el(
     "div",
     { className: "donutlegend" },
-    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
+    ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, money(g.total), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
   );
   if (rows.length === 0) return el("div", {}, heading ?? null, el("div", { className: "empty", textContent: S.empty }));
   return el(
@@ -586,7 +586,7 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
           "div",
           { className: "donutlegend" },
           ...slices.map((x) => {
-            const item = el("div", {}, el("i", { style: `background:${x.color}` }), `${x.name} `, el("span", { className: "muted num", textContent: `${Math.round((x.value / g.total) * 100)}%` }));
+            const item = el("div", {}, el("i", { style: `background:${x.color}` }), `${x.name} `, money(x.value), " ", el("span", { className: "muted num", textContent: `${Math.round((x.value / g.total) * 100)}%` }));
             return x.open ? clickable(item, x.open) : item;
           }),
         ),
