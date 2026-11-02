@@ -5,9 +5,11 @@ PWA (TypeScript, Vite) with a Rust (axum) backend. Amounts are stored as exact i
 ## Run locally
 ```
 cp .env.example .env   # quote values containing '#', e.g. PAAMONIM_PASSWORD='pass#'
-docker compose up -d             # MySQL 8 on localhost:3306 (see Storage)
+docker compose up -d mysql       # MySQL 8 on localhost:3306 (see Storage)
 cargo run                        # builds the frontend too, then serves http://127.0.0.1:3000
 ```
+To run everything in Docker instead (no Rust or Node needed), `docker compose up --build` builds the app image and starts it with the database at http://localhost:3000; it reads Paamonim and Sheets settings from `.env` if present.
+
 `cargo run` runs `npm install` / `npm run build` in `frontend/` via `backend/build.rs` (needs Node.js; set `SKIP_FRONTEND_BUILD=1` to skip). For hot reload while editing the UI: `cd frontend && npm run dev` and open http://localhost:5173 (it proxies `/api` to :3000).
 
 ## Deployment
@@ -18,7 +20,7 @@ To run on an Oracle Cloud VM with MySQL HeatWave, with automatic deploys from `m
 ## Storage
 The MySQL connection uses the system TLS library (`native-tls`): on Linux install OpenSSL's headers (`apt install libssl-dev pkg-config`); Windows and macOS use the built-in one, so nothing extra is needed.
 
-The app stores everything in MySQL 8 (Oracle MySQL HeatWave Always Free, or any server) through `MYSQL_URL=mysql://user:password@host:3306/budget`; the database and tables are created on startup, and the monthly totals are aggregated in the database. Locally, `docker compose up -d` starts a MySQL 8 container that matches the `MYSQL_URL` in `.env.example`; data lives in a Docker volume (`docker compose down -v` wipes it).
+The app stores everything in MySQL 8 (Oracle MySQL HeatWave Always Free, or any server) through `MYSQL_URL=mysql://user:password@host:3306/budget`; the database and tables are created on startup, and the monthly totals are aggregated in the database. Locally, `docker compose up -d mysql` starts a MySQL 8 container that matches the `MYSQL_URL` in `.env.example`; data lives in a Docker volume (`docker compose down -v` wipes it).
 
 Tests need a MySQL-compatible server but not Docker. Each test creates its own empty database. `cargo test` uses the server `MYSQL_URL` points at (for example the compose one; it needs the `CREATE`/`DROP` privilege, use `root`), or, when `MYSQL_URL` is unset, starts a throwaway `mariadbd`/`mysqld` from the `PATH` in a temp directory and removes it afterwards (`apt install mariadb-server` is enough; the system service doesn't need to run). With neither, the tests fail with a message saying so. CI runs them against a MySQL 8 service container.
 
