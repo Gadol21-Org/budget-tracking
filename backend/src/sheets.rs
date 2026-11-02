@@ -1,7 +1,8 @@
 //! Snapshot export to a Google Sheet owned by the user. A service account with
 //! Editor access to the sheet writes one tab per table the app stores (transactions,
 //! categories, payment methods, repeating rules, change log, Paamonim sync state), so the sheet
-//! is a complete backup. Every tab is cleared and rewritten on each export.
+//! is a complete backup. Each export diffs against what the sheet holds and only
+//! inserts, deletes or edits the rows and cells that changed (so version history stays readable).
 //!
 //! Config: `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (base64 of the key file; raw JSON also accepted)
 //! and `GOOGLE_SHEET_ID`.
@@ -342,6 +343,193 @@ async fn list_sheets(
         .collect())
 }
 
+/// Canonical text of a cell so what we read back from Sheets compares equal to what we wrote.
+fn canon_cell(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => format!("n:{}", n.as_f64().unwrap_or(0.0)),
+        other => format!("b:{other}"),
+    }
+}
+
+fn canon_rows(rows: &[Vec<Value>]) -> Vec<Vec<String>> {
+    rows.iter()
+        .map(|r| {
+            let mut c: Vec<String> = r.iter().map(canon_cell).collect();
+            while c.last().is_some_and(|x| x.is_empty()) {
+                c.pop();
+            }
+            c
+        })
+        .collect()
+}
+
+/// A region where old and new rows differ: `old_len` old rows become `new_len` new rows.
+#[derive(Debug, PartialEq)]
+struct Hunk {
+    old_start: usize,
+    old_len: usize,
+    new_start: usize,
+    new_len: usize,
+}
+
+/// Longest cost we accept for the LCS table before treating the middle as one replaced block.
+const MAX_LCS_CELLS: usize = 4_000_000;
+
+fn diff_hunks(old: &[Vec<String>], new: &[Vec<String>]) -> Vec<Hunk> {
+    let pre = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suf = old[pre..]
+        .iter()
+        .rev()
+        .zip(new[pre..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (o, n) = (&old[pre..old.len() - suf], &new[pre..new.len() - suf]);
+    if o.is_empty() && n.is_empty() {
+        return vec![];
+    }
+    let whole = || {
+        vec![Hunk { old_start: pre, old_len: o.len(), new_start: pre, new_len: n.len() }]
+    };
+    if o.is_empty() || n.is_empty() || o.len().saturating_mul(n.len()) > MAX_LCS_CELLS {
+        return whole();
+    }
+    let w = n.len() + 1;
+    let mut t = vec![0u32; (o.len() + 1) * w];
+    for i in (0..o.len()).rev() {
+        for j in (0..n.len()).rev() {
+            t[i * w + j] = if o[i] == n[j] {
+                t[(i + 1) * w + j + 1] + 1
+            } else {
+                t[(i + 1) * w + j].max(t[i * w + j + 1])
+            };
+        }
+    }
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    let mut cur: Option<Hunk> = None;
+    while i < o.len() || j < n.len() {
+        if i < o.len() && j < n.len() && o[i] == n[j] {
+            hunks.extend(cur.take());
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let h = cur.get_or_insert(Hunk { old_start: pre + i, old_len: 0, new_start: pre + j, new_len: 0 });
+        if j < n.len() && (i == o.len() || t[i * w + j + 1] >= t[(i + 1) * w + j]) {
+            h.new_len += 1;
+            j += 1;
+        } else {
+            h.old_len += 1;
+            i += 1;
+        }
+    }
+    hunks.extend(cur);
+    hunks
+}
+
+fn col_letters(mut c: usize) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.insert(0, b'A' + (c % 26) as u8);
+        if c < 26 {
+            break;
+        }
+        c = c / 26 - 1;
+    }
+    String::from_utf8(s).unwrap()
+}
+
+enum Structural {
+    DeleteRows { start: usize, count: usize },
+    InsertRows { start: usize, count: usize },
+}
+
+impl Structural {
+    fn request(&self, sheet: i64) -> Value {
+        let (k, start, count) = match self {
+            Self::DeleteRows { start, count } => ("deleteDimension", start, count),
+            Self::InsertRows { start, count } => ("insertDimension", start, count),
+        };
+        let range = json!({"sheetId": sheet, "dimension": "ROWS", "startIndex": start, "endIndex": start + count});
+        if k == "insertDimension" {
+            json!({k: {"range": range, "inheritFromBefore": false}})
+        } else {
+            json!({k: {"range": range}})
+        }
+    }
+}
+
+struct Write {
+    a1: String,
+    values: Rows,
+}
+
+struct TabPlan {
+    /// Row inserts/deletes, ordered bottom-to-top so earlier indices stay valid.
+    structural: Vec<Structural>,
+    /// Value writes, in coordinates after the structural changes.
+    writes: Vec<Write>,
+    /// Leftover trailing rows to clear.
+    clear: Option<String>,
+}
+
+fn plan_tab(old_raw: &[Vec<Value>], new: &[Vec<Value>]) -> TabPlan {
+    let (oc, nc) = (canon_rows(old_raw), canon_rows(new));
+    let hunks = diff_hunks(&oc, &nc);
+    let mut plan = TabPlan { structural: vec![], writes: vec![], clear: None };
+    for h in hunks.iter().rev() {
+        let m = h.old_len.min(h.new_len);
+        if h.old_len > m {
+            let start = h.old_start + m;
+            if start + (h.old_len - m) >= oc.len() && h.new_start + h.new_len >= nc.len() {
+                // Trailing leftovers: clear instead of deleting grid rows.
+                plan.clear = Some(format!("A{}:ZZZ", nc.len() + 1));
+            } else {
+                plan.structural.push(Structural::DeleteRows { start, count: h.old_len - m });
+            }
+        }
+        if h.new_len > m && h.old_start + m < oc.len() {
+            plan.structural.push(Structural::InsertRows { start: h.old_start + m, count: h.new_len - m });
+        }
+    }
+    for h in &hunks {
+        let m = h.old_len.min(h.new_len);
+        for r in 0..m {
+            let (a, b) = (&oc[h.old_start + r], &nc[h.new_start + r]);
+            let width = a.len().max(b.len());
+            let diff = |c: usize| a.get(c) != b.get(c);
+            let mut c = 0;
+            while c < width {
+                if !diff(c) {
+                    c += 1;
+                    continue;
+                }
+                let s = c;
+                while c < width && diff(c) {
+                    c += 1;
+                }
+                let row = h.new_start + r + 1;
+                let vals: Vec<Value> =
+                    (s..c).map(|k| new[h.new_start + r].get(k).cloned().unwrap_or(Value::from(""))).collect();
+                plan.writes.push(Write {
+                    a1: format!("{}{row}:{}{row}", col_letters(s), col_letters(c - 1)),
+                    values: vec![vals],
+                });
+            }
+        }
+        let rest = &new[h.new_start + m..h.new_start + h.new_len];
+        for (i, chunk) in rest.chunks(CHUNK_ROWS).enumerate() {
+            plan.writes.push(Write {
+                a1: format!("A{}", h.new_start + m + i * CHUNK_ROWS + 1),
+                values: chunk.to_vec(),
+            });
+        }
+    }
+    plan
+}
+
 /// Serializes exports: the nightly job and a manual click must not race on creating tabs.
 static EXPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -403,29 +591,76 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
     };
     let quoted = |t: &str| format!("'{}'", real(t).replace('\'', "''"));
 
+    // Read what each tab holds now and write only the difference, so the sheet's version
+    // history shows real changes instead of every tab being cleared and rewritten.
     let ranges: Vec<String> = tabs.iter().map(|(t, _)| quoted(t)).collect();
-    check(
-        http.post(format!("{base}/values:batchClear"))
+    let query: Vec<(&str, &str)> = ranges
+        .iter()
+        .map(|r| ("ranges", r.as_str()))
+        .chain([("valueRenderOption", "UNFORMATTED_VALUE")])
+        .collect();
+    let current = check(
+        http.get(format!("{base}/values:batchGet"))
+            .query(&query)
             .bearer_auth(&token)
-            .json(&json!({"ranges": ranges}))
             .send()
             .await?,
     )
     .await?;
-    for (tab, rows) in &tabs {
+
+    let mut structural: Vec<Value> = Vec::new();
+    let mut data: Vec<Value> = Vec::new();
+    let mut clears: Vec<String> = Vec::new();
+    for (i, (tab, rows)) in tabs.iter().enumerate() {
+        let sheet = existing
+            .iter()
+            .find(|(_, e)| same_title(e, tab))
+            .map(|(id, _)| *id)
+            .ok_or_else(|| anyhow!("tab {tab} missing after creation"))?;
+        let old: Rows = current["valueRanges"][i]["values"]
+            .as_array()
+            .map(|a| a.iter().map(|r| r.as_array().cloned().unwrap_or_default()).collect())
+            .unwrap_or_default();
+        let plan = plan_tab(&old, rows);
         let q = quoted(tab);
-        for (i, chunk) in rows.chunks(CHUNK_ROWS).enumerate() {
-            let start = i * CHUNK_ROWS + 1;
-            let range = format!("{q}!A{start}");
-            check(
-                http.put(format!("{base}/values/{range}?valueInputOption=RAW"))
-                    .bearer_auth(&token)
-                    .json(&json!({"range": range, "majorDimension": "ROWS", "values": chunk}))
-                    .send()
-                    .await?,
-            )
-            .await?;
+        structural.extend(plan.structural.iter().map(|r| r.request(sheet)));
+        for w in plan.writes {
+            let range = format!("{q}!{}", w.a1);
+            data.push(json!({"range": range, "majorDimension": "ROWS", "values": w.values}));
         }
+        if let Some(a1) = plan.clear {
+            clears.push(format!("{q}!{a1}"));
+        }
+    }
+    if !structural.is_empty() {
+        check(
+            http.post(format!("{base}:batchUpdate"))
+                .bearer_auth(&token)
+                .json(&json!({"requests": structural}))
+                .send()
+                .await?,
+        )
+        .await?;
+    }
+    for chunk in data.chunks(200) {
+        check(
+            http.post(format!("{base}/values:batchUpdate"))
+                .bearer_auth(&token)
+                .json(&json!({"valueInputOption": "RAW", "data": chunk}))
+                .send()
+                .await?,
+        )
+        .await?;
+    }
+    if !clears.is_empty() {
+        check(
+            http.post(format!("{base}/values:batchClear"))
+                .bearer_auth(&token)
+                .json(&json!({"ranges": clears}))
+                .send()
+                .await?,
+        )
+        .await?;
     }
     Ok(ExportSummary {
         transactions: tabs[0].1.len() - 1,
@@ -456,6 +691,47 @@ mod tests {
             parse_service_account(&b64).unwrap().token_uri,
             "https://oauth2.googleapis.com/token"
         );
+    }
+
+    fn rows(v: &[&[&str]]) -> Vec<Vec<String>> {
+        v.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
+    }
+
+    #[test]
+    fn diff_finds_inserts_deletes_and_edits() {
+        let old = rows(&[&["h"], &["a"], &["b"], &["c"]]);
+        let new = rows(&[&["h"], &["a"], &["x"], &["b"], &["c"]]);
+        assert_eq!(diff_hunks(&old, &new), vec![Hunk { old_start: 2, old_len: 0, new_start: 2, new_len: 1 }]);
+        assert!(diff_hunks(&old, &old).is_empty());
+        let new = rows(&[&["h"], &["a"], &["c"]]);
+        assert_eq!(diff_hunks(&old, &new), vec![Hunk { old_start: 2, old_len: 1, new_start: 2, new_len: 0 }]);
+    }
+
+    #[test]
+    fn plan_writes_only_changed_cells() {
+        let old = vec![vec![json!("h"), json!("v")], vec![json!("a"), json!(1.0)]];
+        let mut new = old.clone();
+        new[1][1] = json!(2);
+        let p = plan_tab(&old, &new);
+        assert!(p.structural.is_empty() && p.clear.is_none());
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].a1, "B2:B2");
+        // Identical content (1.0 vs 1) writes nothing.
+        let same = vec![vec![json!("h"), json!("v")], vec![json!("a"), json!(1)]];
+        let p = plan_tab(&old, &same);
+        assert!(p.writes.is_empty());
+    }
+
+    #[test]
+    fn plan_clears_trailing_and_fills_new_tab() {
+        let old = vec![vec![json!("h")], vec![json!("a")], vec![json!("b")]];
+        let new = vec![vec![json!("h")], vec![json!("a")]];
+        let p = plan_tab(&old, &new);
+        assert_eq!(p.clear.as_deref(), Some("A3:ZZZ"));
+        let p = plan_tab(&[], &new);
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].a1, "A1");
+        assert_eq!(col_letters(26), "AA");
     }
 
     #[tokio::test]
