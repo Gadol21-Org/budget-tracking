@@ -5,16 +5,37 @@
 # Docker network (data in the volume budget-staging-data, nothing published), and NO
 # production settings. The app is started without --env-file, so there is no production
 # MySQL URL, no Google Sheets and no Paamonim credentials, and nothing can reach those.
-# Usage: deploy-staging.sh <image> [reset]     "reset" wipes the data and reseeds it
+# Usage: deploy-staging.sh <image> [reset|teardown]
+#   reset     wipes the data and reseeds it
+#   teardown  removes staging entirely (containers, network, data volume, staging images)
+#             and deploys nothing; safe to run when staging is already down
 set -euo pipefail
 
-image="$1"
+image="${1:-}"
 reset="${2:-}"
 name=budget-staging
 volume=budget-staging-data
 host_port=8083
 network=budget-staging-net
 db=budget-staging-mysql
+
+if [ "$reset" = "teardown" ]; then
+  # Everything below is addressed by the exact staging names (or the staging-* image tag
+  # prefix); nothing is selected by a wildcard that could match production
+  # (budget-tracking, :latest images, its data). Each step tolerates "already gone".
+  docker rm -f "$name" "$db" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+  # Staging images only: tags starting with "staging-" (production uses other tags).
+  docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=*:staging-*' \
+    | grep -E ':staging-[^:]+$' \
+    | xargs -r docker rmi >/dev/null 2>&1 || true
+  # The sample-database image is removed only if nothing else (e.g. another container)
+  # still uses it; docker refuses otherwise.
+  docker rmi mysql:8.4 >/dev/null 2>&1 || true
+  echo "Staging torn down."
+  exit 0
+fi
 
 docker pull "$image"
 docker pull mysql:8.4
