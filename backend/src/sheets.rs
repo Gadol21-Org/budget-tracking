@@ -390,7 +390,12 @@ fn diff_hunks(old: &[Vec<String>], new: &[Vec<String>]) -> Vec<Hunk> {
         return vec![];
     }
     let whole = || {
-        vec![Hunk { old_start: pre, old_len: o.len(), new_start: pre, new_len: n.len() }]
+        vec![Hunk {
+            old_start: pre,
+            old_len: o.len(),
+            new_start: pre,
+            new_len: n.len(),
+        }]
     };
     if o.is_empty() || n.is_empty() || o.len().saturating_mul(n.len()) > MAX_LCS_CELLS {
         return whole();
@@ -416,7 +421,12 @@ fn diff_hunks(old: &[Vec<String>], new: &[Vec<String>]) -> Vec<Hunk> {
             j += 1;
             continue;
         }
-        let h = cur.get_or_insert(Hunk { old_start: pre + i, old_len: 0, new_start: pre + j, new_len: 0 });
+        let h = cur.get_or_insert(Hunk {
+            old_start: pre + i,
+            old_len: 0,
+            new_start: pre + j,
+            new_len: 0,
+        });
         if j < n.len() && (i == o.len() || t[i * w + j + 1] >= t[(i + 1) * w + j]) {
             h.new_len += 1;
             j += 1;
@@ -478,7 +488,11 @@ struct TabPlan {
 fn plan_tab(old_raw: &[Vec<Value>], new: &[Vec<Value>]) -> TabPlan {
     let (oc, nc) = (canon_rows(old_raw), canon_rows(new));
     let hunks = diff_hunks(&oc, &nc);
-    let mut plan = TabPlan { structural: vec![], writes: vec![], clear: None };
+    let mut plan = TabPlan {
+        structural: vec![],
+        writes: vec![],
+        clear: None,
+    };
     for h in hunks.iter().rev() {
         let m = h.old_len.min(h.new_len);
         if h.old_len > m {
@@ -487,11 +501,17 @@ fn plan_tab(old_raw: &[Vec<Value>], new: &[Vec<Value>]) -> TabPlan {
                 // Trailing leftovers: clear instead of deleting grid rows.
                 plan.clear = Some(format!("A{}:ZZZ", nc.len() + 1));
             } else {
-                plan.structural.push(Structural::DeleteRows { start, count: h.old_len - m });
+                plan.structural.push(Structural::DeleteRows {
+                    start,
+                    count: h.old_len - m,
+                });
             }
         }
         if h.new_len > m && h.old_start + m < oc.len() {
-            plan.structural.push(Structural::InsertRows { start: h.old_start + m, count: h.new_len - m });
+            plan.structural.push(Structural::InsertRows {
+                start: h.old_start + m,
+                count: h.new_len - m,
+            });
         }
     }
     for h in &hunks {
@@ -511,8 +531,14 @@ fn plan_tab(old_raw: &[Vec<Value>], new: &[Vec<Value>]) -> TabPlan {
                     c += 1;
                 }
                 let row = h.new_start + r + 1;
-                let vals: Vec<Value> =
-                    (s..c).map(|k| new[h.new_start + r].get(k).cloned().unwrap_or(Value::from(""))).collect();
+                let vals: Vec<Value> = (s..c)
+                    .map(|k| {
+                        new[h.new_start + r]
+                            .get(k)
+                            .cloned()
+                            .unwrap_or(Value::from(""))
+                    })
+                    .collect();
                 plan.writes.push(Write {
                     a1: format!("{}{row}:{}{row}", col_letters(s), col_letters(c - 1)),
                     values: vec![vals],
@@ -619,7 +645,11 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
             .ok_or_else(|| anyhow!("tab {tab} missing after creation"))?;
         let old: Rows = current["valueRanges"][i]["values"]
             .as_array()
-            .map(|a| a.iter().map(|r| r.as_array().cloned().unwrap_or_default()).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|r| r.as_array().cloned().unwrap_or_default())
+                    .collect()
+            })
             .unwrap_or_default();
         let plan = plan_tab(&old, rows);
         let q = quoted(tab);
@@ -694,17 +724,35 @@ mod tests {
     }
 
     fn rows(v: &[&[&str]]) -> Vec<Vec<String>> {
-        v.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
+        v.iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect()
     }
 
     #[test]
     fn diff_finds_inserts_deletes_and_edits() {
         let old = rows(&[&["h"], &["a"], &["b"], &["c"]]);
         let new = rows(&[&["h"], &["a"], &["x"], &["b"], &["c"]]);
-        assert_eq!(diff_hunks(&old, &new), vec![Hunk { old_start: 2, old_len: 0, new_start: 2, new_len: 1 }]);
+        assert_eq!(
+            diff_hunks(&old, &new),
+            vec![Hunk {
+                old_start: 2,
+                old_len: 0,
+                new_start: 2,
+                new_len: 1
+            }]
+        );
         assert!(diff_hunks(&old, &old).is_empty());
         let new = rows(&[&["h"], &["a"], &["c"]]);
-        assert_eq!(diff_hunks(&old, &new), vec![Hunk { old_start: 2, old_len: 1, new_start: 2, new_len: 0 }]);
+        assert_eq!(
+            diff_hunks(&old, &new),
+            vec![Hunk {
+                old_start: 2,
+                old_len: 1,
+                new_start: 2,
+                new_len: 0
+            }]
+        );
     }
 
     #[test]
