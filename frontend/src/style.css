@@ -403,4 +403,5 @@ dialog { overscroll-behavior: contain; }
 .donutlegend.tbl .lrow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
 .donutlegend.tbl .lrow i { margin: 0; }
 .donutlegend.tbl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.donutlegend.tbl .num { text-align: end; justify-self: end; }
+/* Digits keep their left-to-right order even in Hebrew, so a column of them lines up on its right edge (the units digit and the ₪ sign), not the left one. */
+.donutlegend.tbl .num { text-align: right; justify-self: right; }
