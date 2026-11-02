@@ -70,7 +70,7 @@ export function render() {
   renderedView = state.view;
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
-  const banner = state.offline ? el("div", { className: "banner", role: "status", textContent: "אין חיבור: מוצגים הנתונים האחרונים. תנועות חדשות יישמרו וישלחו כשהחיבור יחזור." }) : null;
+  const banner = state.offline ? el("div", { className: "banner", role: "status", textContent: "אין חיבור או שהשרת אינו זמין: מוצגים הנתונים האחרונים. תנועות חדשות יישמרו וישלחו כשהשרת יחזור." }) : null;
   const main = el("main", {}, banner, view);
   main.dataset.view = state.view;
   root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);

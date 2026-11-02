@@ -24,3 +24,18 @@ describe("amounts", () => {
     expect(currencySymbol("XYZ" as Currency)).toBe("XYZ");
   });
 });
+
+describe("gateway failures", () => {
+  const res = (status: number, type = "application/json") => new Response("x", { status, headers: { "content-type": type } });
+  it("treats proxy errors and HTML pages as server unavailable", async () => {
+    const { isGatewayFailure } = await import("../api");
+    expect([502, 503, 504, 521, 530].every((s) => isGatewayFailure(res(s)))).toBe(true);
+    expect(isGatewayFailure(res(200, "text/html"))).toBe(true);
+  });
+  it("leaves real app errors and good responses alone", async () => {
+    const { isGatewayFailure } = await import("../api");
+    expect(isGatewayFailure(res(500))).toBe(false);
+    expect(isGatewayFailure(res(400))).toBe(false);
+    expect(isGatewayFailure(res(200))).toBe(false);
+  });
+});

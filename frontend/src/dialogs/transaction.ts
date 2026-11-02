@@ -381,7 +381,7 @@ export function openTransactionDialog(existing?: Transaction, startAsIncome = fa
       dlg.close();
       await load();
     } catch (e2) {
-      err.textContent = isNetworkError(e2) ? "אין חיבור: בלי חיבור אפשר רק להוסיף תנועה חדשה (לא חוזרת)" : e2 instanceof Error ? e2.message : String(e2);
+      err.textContent = isNetworkError(e2) ? "אין חיבור לשרת: בלי חיבור אפשר רק להוסיף תנועה חדשה (לא חוזרת)" : e2 instanceof Error ? e2.message : String(e2);
       save.disabled = false;
     }
   };
