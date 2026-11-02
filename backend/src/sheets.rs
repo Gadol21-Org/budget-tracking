@@ -246,8 +246,28 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
     }
 
     let json_cell = |v: Option<Value>| v.map(|v| v.to_string()).unwrap_or_default();
-    let mut log = header(&["Id", "At (UTC)", "Kind", "Entity id", "Old", "New"]);
+    // Display names given to the emails that made changes (see api/users.rs).
+    let display_names: std::collections::BTreeMap<String, String> = storage
+        .get_setting("user_display_names")
+        .await?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut log = header(&[
+        "Id",
+        "At (UTC)",
+        "Kind",
+        "Entity id",
+        "Old",
+        "New",
+        "User email",
+        "User name",
+    ]);
     for e in storage.list_log(1_000_000, None).await? {
+        let user_name = e
+            .user_email
+            .as_ref()
+            .and_then(|m| display_names.get(m))
+            .cloned();
         log.push(vec![
             json!(e.id),
             e.at.into(),
@@ -255,6 +275,8 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
             opt(e.entity_id),
             json_cell(e.old).into(),
             json_cell(e.new).into(),
+            opt(e.user_email),
+            opt(user_name),
         ]);
     }
 
