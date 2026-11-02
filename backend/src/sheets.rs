@@ -1,11 +1,12 @@
 //! Snapshot export to a Google Sheet owned by the user. A service account with
-//! Editor access to the sheet writes two tabs: `Transactions` and `Monthly`.
-//! The tabs are rewritten on every export, so the sheet is a readable copy, not a source.
+//! Editor access to the sheet writes one tab per table the app stores (transactions,
+//! categories, payment methods, repeating rules, change log, Paamonim sync state), so the sheet
+//! is a complete backup. Each export diffs against what the sheet holds and only
+//! inserts, deletes or edits the rows and cells that changed (so version history stays readable).
 //!
 //! Config: `GOOGLE_SERVICE_ACCOUNT_JSON_B64` (base64 of the key file; raw JSON also accepted)
 //! and `GOOGLE_SHEET_ID`.
 //!
-//! NOTE: not yet run against Google.
 
 use std::collections::HashMap;
 
@@ -35,7 +36,7 @@ fn default_token_uri() -> String {
 #[derive(Debug, Default, Serialize)]
 pub struct ExportSummary {
     pub transactions: usize,
-    pub monthly_rows: usize,
+    pub tabs: usize,
 }
 
 fn parse_service_account(raw: &str) -> Result<ServiceAccount> {
@@ -95,64 +96,231 @@ fn money(agorot: i64) -> f64 {
     agorot as f64 / 100.0
 }
 
-/// Build the two tabs as rows of cells.
-pub async fn build_tabs(storage: &dyn Storage) -> Result<(Vec<Vec<Value>>, Vec<Vec<Value>>)> {
-    let all = storage.list_categories().await?;
-    // "parent › child" for sub-categories.
-    let cats: HashMap<i64, String> = all
+type Rows = Vec<Vec<Value>>;
+
+fn header(cols: &[&str]) -> Rows {
+    vec![cols.iter().map(|c| Value::from(*c)).collect()]
+}
+
+fn opt<T: Into<Value>>(v: Option<T>) -> Value {
+    v.map(Into::into).unwrap_or(Value::from(""))
+}
+
+/// Build every tab as rows of cells: a complete, restorable copy of what the app stores.
+/// Names are included next to ids for readability; the ids are what link the tabs together.
+pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows)>> {
+    let raw = storage.raw_backup().await?;
+    let cat_names: HashMap<i64, String> = raw
+        .categories
         .iter()
         .map(|c| {
-            let name = match c.parent_id.and_then(|p| all.iter().find(|x| x.id == p)) {
+            let name = match c
+                .parent_id
+                .and_then(|p| raw.categories.iter().find(|x| x.id == p))
+            {
                 Some(p) => format!("{} › {}", p.name, c.name),
                 None => c.name.clone(),
             };
             (c.id, name)
         })
         .collect();
-    let pms: HashMap<i64, String> = storage
-        .list_payment_methods()
-        .await?
-        .into_iter()
-        .map(|p| (p.id, p.name))
+    let pm_names: HashMap<i64, String> = raw
+        .payment_methods
+        .iter()
+        .map(|p| (p.id, p.name.clone()))
         .collect();
     let name = |m: &HashMap<i64, String>, id: Option<i64>| {
         id.and_then(|i| m.get(&i).cloned()).unwrap_or_default()
     };
 
-    let mut tx = vec![[
-        "Date",
-        "Category",
-        "Payment method",
-        "Amount (ILS)",
-        "Note",
-        "Sync",
+    let links: HashMap<i64, (Option<String>, Option<String>)> = raw
+        .tx_links
+        .into_iter()
+        .map(|(id, line, date)| (id, (line, date)))
+        .collect();
+    let mut tx = header(&[
         "Id",
-    ]
-    .map(Value::from)
-    .to_vec()];
+        "Date",
+        "Amount (ILS)",
+        "Amount (agorot)",
+        "Category id",
+        "Category",
+        "Payment method id",
+        "Payment method",
+        "Note",
+        "Sync state",
+        "Recurring series id",
+        "Paamonim line id",
+        "Paamonim line date",
+    ]);
     for t in storage.list_transactions().await? {
+        let (line, mdate) = links.get(&t.id).cloned().unwrap_or_default();
         tx.push(vec![
+            json!(t.id),
             t.date.into(),
-            name(&cats, t.category_id).into(),
-            name(&pms, t.payment_method_id).into(),
             json!(money(t.amount_agorot)),
+            json!(t.amount_agorot),
+            opt(t.category_id),
+            name(&cat_names, t.category_id).into(),
+            opt(t.payment_method_id),
+            name(&pm_names, t.payment_method_id).into(),
             t.note.into(),
-            t.sync_state.into(),
-            t.id.to_string().into(),
+            t.sync_state.as_str().into(),
+            opt(t.recurring_series_id),
+            opt(line),
+            opt(mdate),
         ]);
     }
-    let mut monthly = vec![["Month", "Category", "Total (ILS)", "Count"]
-        .map(Value::from)
-        .to_vec()];
-    for m in storage.monthly_totals().await? {
-        monthly.push(vec![
-            m.month.into(),
-            name(&cats, m.category_id).into(),
-            json!(money(m.total_agorot)),
-            json!(m.count),
+
+    let mut cats = header(&[
+        "Id",
+        "Name",
+        "Parent id",
+        "Parent",
+        "Type",
+        "Paamonim item id",
+        "Deleted",
+        "Merged into id",
+        "Merged into",
+        "Linked to Paamonim category id",
+        "Linked to Paamonim category",
+    ]);
+    for c in &raw.categories {
+        cats.push(vec![
+            json!(c.id),
+            c.name.clone().into(),
+            opt(c.parent_id),
+            name(&cat_names, c.parent_id).into(),
+            (if c.is_income { "income" } else { "expense" }).into(),
+            opt(c.paamonim_item_id.clone()),
+            (if c.deleted { "yes" } else { "" }).into(),
+            opt(c.merged_into),
+            name(&cat_names, c.merged_into).into(),
+            opt(c.linked_to),
+            name(&cat_names, c.linked_to).into(),
         ]);
     }
-    Ok((tx, monthly))
+
+    let mut pms = header(&["Id", "Name", "Paamonim id"]);
+    for p in &raw.payment_methods {
+        pms.push(vec![
+            json!(p.id),
+            p.name.clone().into(),
+            opt(p.paamonim_id.clone()),
+        ]);
+    }
+
+    let mut rec = header(&[
+        "Id",
+        "Series id",
+        "Start month",
+        "End month",
+        "Day",
+        "Amount (ILS)",
+        "Amount (agorot)",
+        "Category id",
+        "Category",
+        "Payment method id",
+        "Payment method",
+        "Note",
+    ]);
+    for r in storage.list_recurring().await? {
+        rec.push(vec![
+            json!(r.id),
+            json!(r.series_id),
+            r.start_month.into(),
+            opt(r.end_month),
+            json!(r.day),
+            json!(money(r.amount_agorot)),
+            json!(r.amount_agorot),
+            opt(r.category_id),
+            name(&cat_names, r.category_id).into(),
+            opt(r.payment_method_id),
+            name(&pm_names, r.payment_method_id).into(),
+            r.note.into(),
+        ]);
+    }
+
+    let mut settled = header(&["Series id", "Month"]);
+    for (series, month) in storage.settled_recurring().await? {
+        settled.push(vec![json!(series), month.into()]);
+    }
+
+    let json_cell = |v: Option<Value>| v.map(|v| v.to_string()).unwrap_or_default();
+    let mut log = header(&[
+        "Id",
+        "At (UTC)",
+        "Kind",
+        "Entity id",
+        "Old",
+        "New",
+        "User email",
+    ]);
+    for e in storage.list_log(1_000_000, None).await? {
+        log.push(vec![
+            json!(e.id),
+            e.at.into(),
+            e.kind.into(),
+            opt(e.entity_id),
+            json_cell(e.old).into(),
+            json_cell(e.new).into(),
+            opt(e.user_email),
+        ]);
+    }
+
+    // Display names given to the emails that made changes (see api/users.rs), kept apart from
+    // the change log so names are not repeated on every row.
+    let display_names: std::collections::BTreeMap<String, String> = storage
+        .get_setting("user_display_names")
+        .await?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut users = header(&["Email", "Display name"]);
+    for (email, name) in display_names {
+        users.push(vec![email.into(), name.into()]);
+    }
+
+    let mut foreign = header(&[
+        "Transaction id",
+        "Currency",
+        "Original amount",
+        "Rate (ILS per unit)",
+        "Rate date",
+        "Estimated",
+    ]);
+    for f in storage.list_tx_fx().await? {
+        foreign.push(vec![
+            json!(f.transaction_id),
+            f.currency.clone().into(),
+            json!(f.orig_minor as f64 / 10f64.powi(crate::fx::decimals(&f.currency) as i32)),
+            json!(f.rate),
+            f.rate_date.into(),
+            json!(f.estimated),
+        ]);
+    }
+
+    let mut deletes = header(&["Paamonim line id", "Date"]);
+    for d in storage.pending_line_deletes().await? {
+        deletes.push(vec![d.line_id.into(), d.date.into()]);
+    }
+
+    let mut meta = header(&["Key", "Value"]);
+    for (k, v) in raw.meta {
+        meta.push(vec![k.into(), v.into()]);
+    }
+
+    Ok(vec![
+        ("Transactions", tx),
+        ("Categories", cats),
+        ("Payment methods", pms),
+        ("Recurring", rec),
+        ("Recurring settled", settled),
+        ("Change log", log),
+        ("Users", users),
+        ("Foreign currency", foreign),
+        ("Paamonim pending deletes", deletes),
+        ("Paamonim meta", meta),
+    ])
 }
 
 async fn check(resp: reqwest::Response) -> Result<Value> {
@@ -164,70 +332,391 @@ async fn check(resp: reqwest::Response) -> Result<Value> {
     Ok(body)
 }
 
+/// Sheet titles are case-insensitive in Google Sheets and may carry stray spaces.
+fn same_title(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
+/// Rows per write request, so a huge change log never becomes one giant body.
+const CHUNK_ROWS: usize = 5000;
+
+async fn list_sheets(
+    http: &reqwest::Client,
+    token: &str,
+    base: &str,
+) -> Result<Vec<(i64, String)>> {
+    let meta = check(
+        http.get(format!("{base}?fields=sheets.properties(sheetId,title)"))
+            .bearer_auth(token)
+            .send()
+            .await?,
+    )
+    .await?;
+    Ok(meta["sheets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            Some((
+                s["properties"]["sheetId"].as_i64()?,
+                s["properties"]["title"].as_str()?.to_string(),
+            ))
+        })
+        .collect())
+}
+
+/// Canonical text of a cell so what we read back from Sheets compares equal to what we wrote.
+fn canon_cell(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => format!("n:{}", n.as_f64().unwrap_or(0.0)),
+        other => format!("b:{other}"),
+    }
+}
+
+fn canon_rows(rows: &[Vec<Value>]) -> Vec<Vec<String>> {
+    rows.iter()
+        .map(|r| {
+            let mut c: Vec<String> = r.iter().map(canon_cell).collect();
+            while c.last().is_some_and(|x| x.is_empty()) {
+                c.pop();
+            }
+            c
+        })
+        .collect()
+}
+
+/// A region where old and new rows differ: `old_len` old rows become `new_len` new rows.
+#[derive(Debug, PartialEq)]
+struct Hunk {
+    old_start: usize,
+    old_len: usize,
+    new_start: usize,
+    new_len: usize,
+}
+
+/// Longest cost we accept for the LCS table before treating the middle as one replaced block.
+const MAX_LCS_CELLS: usize = 4_000_000;
+
+fn diff_hunks(old: &[Vec<String>], new: &[Vec<String>]) -> Vec<Hunk> {
+    let pre = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let suf = old[pre..]
+        .iter()
+        .rev()
+        .zip(new[pre..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (o, n) = (&old[pre..old.len() - suf], &new[pre..new.len() - suf]);
+    if o.is_empty() && n.is_empty() {
+        return vec![];
+    }
+    let whole = || {
+        vec![Hunk {
+            old_start: pre,
+            old_len: o.len(),
+            new_start: pre,
+            new_len: n.len(),
+        }]
+    };
+    if o.is_empty() || n.is_empty() || o.len().saturating_mul(n.len()) > MAX_LCS_CELLS {
+        return whole();
+    }
+    let w = n.len() + 1;
+    let mut t = vec![0u32; (o.len() + 1) * w];
+    for i in (0..o.len()).rev() {
+        for j in (0..n.len()).rev() {
+            t[i * w + j] = if o[i] == n[j] {
+                t[(i + 1) * w + j + 1] + 1
+            } else {
+                t[(i + 1) * w + j].max(t[i * w + j + 1])
+            };
+        }
+    }
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    let mut cur: Option<Hunk> = None;
+    while i < o.len() || j < n.len() {
+        if i < o.len() && j < n.len() && o[i] == n[j] {
+            hunks.extend(cur.take());
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let h = cur.get_or_insert(Hunk {
+            old_start: pre + i,
+            old_len: 0,
+            new_start: pre + j,
+            new_len: 0,
+        });
+        if j < n.len() && (i == o.len() || t[i * w + j + 1] >= t[(i + 1) * w + j]) {
+            h.new_len += 1;
+            j += 1;
+        } else {
+            h.old_len += 1;
+            i += 1;
+        }
+    }
+    hunks.extend(cur);
+    hunks
+}
+
+fn col_letters(mut c: usize) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.insert(0, b'A' + (c % 26) as u8);
+        if c < 26 {
+            break;
+        }
+        c = c / 26 - 1;
+    }
+    String::from_utf8(s).unwrap()
+}
+
+enum Structural {
+    DeleteRows { start: usize, count: usize },
+    InsertRows { start: usize, count: usize },
+}
+
+impl Structural {
+    fn request(&self, sheet: i64) -> Value {
+        let (k, start, count) = match self {
+            Self::DeleteRows { start, count } => ("deleteDimension", start, count),
+            Self::InsertRows { start, count } => ("insertDimension", start, count),
+        };
+        let range = json!({"sheetId": sheet, "dimension": "ROWS", "startIndex": start, "endIndex": start + count});
+        if k == "insertDimension" {
+            json!({k: {"range": range, "inheritFromBefore": false}})
+        } else {
+            json!({k: {"range": range}})
+        }
+    }
+}
+
+struct Write {
+    a1: String,
+    values: Rows,
+}
+
+struct TabPlan {
+    /// Row inserts/deletes, ordered bottom-to-top so earlier indices stay valid.
+    structural: Vec<Structural>,
+    /// Value writes, in coordinates after the structural changes.
+    writes: Vec<Write>,
+    /// Leftover trailing rows to clear.
+    clear: Option<String>,
+}
+
+fn plan_tab(old_raw: &[Vec<Value>], new: &[Vec<Value>]) -> TabPlan {
+    let (oc, nc) = (canon_rows(old_raw), canon_rows(new));
+    let hunks = diff_hunks(&oc, &nc);
+    let mut plan = TabPlan {
+        structural: vec![],
+        writes: vec![],
+        clear: None,
+    };
+    for h in hunks.iter().rev() {
+        let m = h.old_len.min(h.new_len);
+        if h.old_len > m {
+            let start = h.old_start + m;
+            if start + (h.old_len - m) >= oc.len() && h.new_start + h.new_len >= nc.len() {
+                // Trailing leftovers: clear instead of deleting grid rows.
+                plan.clear = Some(format!("A{}:ZZZ", nc.len() + 1));
+            } else {
+                plan.structural.push(Structural::DeleteRows {
+                    start,
+                    count: h.old_len - m,
+                });
+            }
+        }
+        if h.new_len > m && h.old_start + m < oc.len() {
+            plan.structural.push(Structural::InsertRows {
+                start: h.old_start + m,
+                count: h.new_len - m,
+            });
+        }
+    }
+    for h in &hunks {
+        let m = h.old_len.min(h.new_len);
+        for r in 0..m {
+            let (a, b) = (&oc[h.old_start + r], &nc[h.new_start + r]);
+            let width = a.len().max(b.len());
+            let diff = |c: usize| a.get(c) != b.get(c);
+            let mut c = 0;
+            while c < width {
+                if !diff(c) {
+                    c += 1;
+                    continue;
+                }
+                let s = c;
+                while c < width && diff(c) {
+                    c += 1;
+                }
+                let row = h.new_start + r + 1;
+                let vals: Vec<Value> = (s..c)
+                    .map(|k| {
+                        new[h.new_start + r]
+                            .get(k)
+                            .cloned()
+                            .unwrap_or(Value::from(""))
+                    })
+                    .collect();
+                plan.writes.push(Write {
+                    a1: format!("{}{row}:{}{row}", col_letters(s), col_letters(c - 1)),
+                    values: vec![vals],
+                });
+            }
+        }
+        let rest = &new[h.new_start + m..h.new_start + h.new_len];
+        for (i, chunk) in rest.chunks(CHUNK_ROWS).enumerate() {
+            plan.writes.push(Write {
+                a1: format!("A{}", h.new_start + m + i * CHUNK_ROWS + 1),
+                values: chunk.to_vec(),
+            });
+        }
+    }
+    plan
+}
+
+/// Serializes exports: the nightly job and a manual click must not race on creating tabs.
+static EXPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
+    let _guard = EXPORT_LOCK.lock().await;
     let sa = parse_service_account(
         &std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
             .or_else(|_| std::env::var("GOOGLE_SERVICE_ACCOUNT_JSON"))
             .context("GOOGLE_SERVICE_ACCOUNT_JSON_B64 not set")?,
     )?;
     let sheet_id = std::env::var("GOOGLE_SHEET_ID").context("GOOGLE_SHEET_ID not set")?;
-    let (tx, monthly) = build_tabs(storage).await?;
+    let tabs = build_tabs(storage).await?;
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
     let token = access_token(&http, &sa).await?;
     let base = format!("{SHEETS}/{sheet_id}");
 
-    // Create the two tabs if they're missing.
-    let meta = check(
-        http.get(format!("{base}?fields=sheets.properties.title"))
+    // Create the tabs that are missing (matched case-insensitively, so an existing
+    // "transactions" tab is reused and overwritten); drop the old `Monthly` tab.
+    // A tab created by a concurrent or half-finished earlier run is tolerated: on an
+    // "already exists" error we re-read the sheet and try again.
+    let mut attempt = 0;
+    loop {
+        let existing = list_sheets(&http, &token, &base).await?;
+        let mut requests: Vec<Value> = tabs
+            .iter()
+            .filter(|(t, _)| !existing.iter().any(|(_, e)| same_title(e, t)))
+            .map(|(t, _)| json!({"addSheet": {"properties": {"title": t}}}))
+            .collect();
+        if let Some((id, _)) = existing.iter().find(|(_, t)| same_title(t, "Monthly")) {
+            requests.push(json!({"deleteSheet": {"sheetId": id}}));
+        }
+        if requests.is_empty() {
+            break;
+        }
+        let resp = http
+            .post(format!("{base}:batchUpdate"))
+            .bearer_auth(&token)
+            .json(&json!({"requests": requests}))
+            .send()
+            .await?;
+        match check(resp).await {
+            Ok(_) => break,
+            Err(e) if attempt < 2 && e.to_string().contains("already exists") => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Use the sheet's real titles for the ranges (they may differ in case from ours).
+    let existing = list_sheets(&http, &token, &base).await?;
+    let real = |t: &str| -> String {
+        existing
+            .iter()
+            .find(|(_, e)| same_title(e, t))
+            .map(|(_, e)| e.clone())
+            .unwrap_or_else(|| t.to_string())
+    };
+    let quoted = |t: &str| format!("'{}'", real(t).replace('\'', "''"));
+
+    // Read what each tab holds now and write only the difference, so the sheet's version
+    // history shows real changes instead of every tab being cleared and rewritten.
+    let ranges: Vec<String> = tabs.iter().map(|(t, _)| quoted(t)).collect();
+    let query: Vec<(&str, &str)> = ranges
+        .iter()
+        .map(|r| ("ranges", r.as_str()))
+        .chain([("valueRenderOption", "UNFORMATTED_VALUE")])
+        .collect();
+    let current = check(
+        http.get(format!("{base}/values:batchGet"))
+            .query(&query)
             .bearer_auth(&token)
             .send()
             .await?,
     )
     .await?;
-    let existing: Vec<&str> = meta["sheets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|s| s["properties"]["title"].as_str())
-        .collect();
-    let missing: Vec<Value> = ["Transactions", "Monthly"]
-        .iter()
-        .filter(|t| !existing.contains(t))
-        .map(|t| json!({"addSheet": {"properties": {"title": t}}}))
-        .collect();
-    if !missing.is_empty() {
+
+    let mut structural: Vec<Value> = Vec::new();
+    let mut data: Vec<Value> = Vec::new();
+    let mut clears: Vec<String> = Vec::new();
+    for (i, (tab, rows)) in tabs.iter().enumerate() {
+        let sheet = existing
+            .iter()
+            .find(|(_, e)| same_title(e, tab))
+            .map(|(id, _)| *id)
+            .ok_or_else(|| anyhow!("tab {tab} missing after creation"))?;
+        let old: Rows = current["valueRanges"][i]["values"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| r.as_array().cloned().unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let plan = plan_tab(&old, rows);
+        let q = quoted(tab);
+        structural.extend(plan.structural.iter().map(|r| r.request(sheet)));
+        for w in plan.writes {
+            let range = format!("{q}!{}", w.a1);
+            data.push(json!({"range": range, "majorDimension": "ROWS", "values": w.values}));
+        }
+        if let Some(a1) = plan.clear {
+            clears.push(format!("{q}!{a1}"));
+        }
+    }
+    if !structural.is_empty() {
         check(
             http.post(format!("{base}:batchUpdate"))
                 .bearer_auth(&token)
-                .json(&json!({"requests": missing}))
+                .json(&json!({"requests": structural}))
                 .send()
                 .await?,
         )
         .await?;
     }
-
-    for (tab, rows) in [("Transactions", &tx), ("Monthly", &monthly)] {
+    for chunk in data.chunks(200) {
         check(
-            http.post(format!("{base}/values/{tab}:clear"))
+            http.post(format!("{base}/values:batchUpdate"))
                 .bearer_auth(&token)
-                .json(&json!({}))
+                .json(&json!({"valueInputOption": "RAW", "data": chunk}))
                 .send()
                 .await?,
         )
         .await?;
+    }
+    if !clears.is_empty() {
         check(
-            http.put(format!("{base}/values/{tab}!A1?valueInputOption=RAW"))
+            http.post(format!("{base}/values:batchClear"))
                 .bearer_auth(&token)
-                .json(&json!({"range": format!("{tab}!A1"), "majorDimension": "ROWS", "values": rows}))
+                .json(&json!({"ranges": clears}))
                 .send()
                 .await?,
         )
         .await?;
     }
     Ok(ExportSummary {
-        transactions: tx.len() - 1,
-        monthly_rows: monthly.len() - 1,
+        transactions: tabs[0].1.len() - 1,
+        tabs: tabs.len(),
     })
 }
 
@@ -235,6 +724,12 @@ pub async fn export(storage: &dyn Storage) -> Result<ExportSummary> {
 mod tests {
     use super::*;
     use crate::storage::NewTransaction;
+
+    #[test]
+    fn titles_match_ignoring_case_and_spaces() {
+        assert!(same_title("transactions ", "Transactions"));
+        assert!(!same_title("Transactions 2", "Transactions"));
+    }
 
     #[test]
     fn accepts_raw_json_and_base64() {
@@ -250,8 +745,67 @@ mod tests {
         );
     }
 
+    fn rows(v: &[&[&str]]) -> Vec<Vec<String>> {
+        v.iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn diff_finds_inserts_deletes_and_edits() {
+        let old = rows(&[&["h"], &["a"], &["b"], &["c"]]);
+        let new = rows(&[&["h"], &["a"], &["x"], &["b"], &["c"]]);
+        assert_eq!(
+            diff_hunks(&old, &new),
+            vec![Hunk {
+                old_start: 2,
+                old_len: 0,
+                new_start: 2,
+                new_len: 1
+            }]
+        );
+        assert!(diff_hunks(&old, &old).is_empty());
+        let new = rows(&[&["h"], &["a"], &["c"]]);
+        assert_eq!(
+            diff_hunks(&old, &new),
+            vec![Hunk {
+                old_start: 2,
+                old_len: 1,
+                new_start: 2,
+                new_len: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn plan_writes_only_changed_cells() {
+        let old = vec![vec![json!("h"), json!("v")], vec![json!("a"), json!(1.0)]];
+        let mut new = old.clone();
+        new[1][1] = json!(2);
+        let p = plan_tab(&old, &new);
+        assert!(p.structural.is_empty() && p.clear.is_none());
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].a1, "B2:B2");
+        // Identical content (1.0 vs 1) writes nothing.
+        let same = vec![vec![json!("h"), json!("v")], vec![json!("a"), json!(1)]];
+        let p = plan_tab(&old, &same);
+        assert!(p.writes.is_empty());
+    }
+
+    #[test]
+    fn plan_clears_trailing_and_fills_new_tab() {
+        let old = vec![vec![json!("h")], vec![json!("a")], vec![json!("b")]];
+        let new = vec![vec![json!("h")], vec![json!("a")]];
+        let p = plan_tab(&old, &new);
+        assert_eq!(p.clear.as_deref(), Some("A3:ZZZ"));
+        let p = plan_tab(&[], &new);
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].a1, "A1");
+        assert_eq!(col_letters(26), "AA");
+    }
+
     #[tokio::test]
-    async fn tabs_keep_non_round_amounts() {
+    async fn tabs_keep_non_round_amounts_and_all_tables() {
         let s = crate::testdb::fresh().await;
         s.create_transaction(&NewTransaction {
             date: "2026-10-03".into(),
@@ -262,8 +816,12 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, monthly) = build_tabs(&s).await.unwrap();
-        assert_eq!(tx[1][3], json!(-10.5));
-        assert_eq!(monthly[1][2], json!(-10.5));
+        let tabs = build_tabs(&s).await.unwrap();
+        let titles: Vec<_> = tabs.iter().map(|(t, _)| *t).collect();
+        assert!(titles.contains(&"Categories") && titles.contains(&"Recurring"));
+        assert!(!titles.contains(&"Monthly"));
+        let tx = &tabs[0].1;
+        assert_eq!(tx[1][2], json!(-10.5));
+        assert_eq!(tx[1][3], json!(-1050));
     }
 }

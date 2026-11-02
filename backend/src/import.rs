@@ -1,6 +1,6 @@
 //! Initial (and repeatable) import from Paamonim into [`Storage`].
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{Datelike, NaiveDate};
 
 use crate::money::from_shekels;
@@ -155,6 +155,11 @@ async fn fetch_history(client: &Client, from: &str, to: &str) -> Result<Vec<Hist
             .await
             .with_context(|| format!("fetching Paamonim history {s}..{e}"))?;
         let lines = crate::paamonim::parse_history(&html);
+        // Fail closed: a line with no date row (Paamonim omits it for a newest line dated after
+        // today) would otherwise be silently dropped.
+        if html.matches("line_id=").count() != lines.len() {
+            bail!("Paamonim history {s}..{e} has lines that could not be read");
+        }
         tracing::info!("paamonim history {s}..{e}: {} lines", lines.len());
         if lines.is_empty() {
             empty_run += 1;

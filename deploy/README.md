@@ -11,12 +11,15 @@ The data lives in an Oracle **MySQL HeatWave** database (Always Free), not on th
 
 The public https address comes from `cloudflared` on the VM, shared with other services. The app has **no login of its own**, so put **Cloudflare Access** in front of the hostname before exposing it (step 6).
 
+A staging copy with sample data can be deployed from any branch; see [STAGING.md](STAGING.md).
+
 ### Ports on this VM
 
 | Port | Service |
 |---|---|
 | 8080 | (taken by another service on the VM) |
 | 8082 | `budget-tracking` (`host_port` in `deploy.sh`) |
+| 8083 | `budget-staging` (`deploy-staging.sh`) |
 
 ## One-time setup
 

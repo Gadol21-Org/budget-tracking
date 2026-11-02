@@ -6,6 +6,54 @@ use serde::{Deserialize, Serialize};
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 
+/// Where a transaction stands with its Paamonim copy (the `sync_state` column).
+///
+/// `Pending` was never sent; `Modified` was edited after it was sent (the old Paamonim line has
+/// to be replaced); `Verifying` may have been sent but not confirmed, so it is checked before
+/// anything is posted again; `Synced` matches Paamonim; `Error` failed and is retried by hand;
+/// `Skipped` has no place in Paamonim (its category is not linked); `Local` is not mirrored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncState {
+    Pending,
+    Synced,
+    Modified,
+    Verifying,
+    Error,
+    Skipped,
+    Local,
+}
+
+impl SyncState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SyncState::Pending => "pending",
+            SyncState::Synced => "synced",
+            SyncState::Modified => "modified",
+            SyncState::Verifying => "verifying",
+            SyncState::Error => "error",
+            SyncState::Skipped => "skipped",
+            SyncState::Local => "local",
+        }
+    }
+}
+
+impl std::str::FromStr for SyncState {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        Ok(match s {
+            "pending" => SyncState::Pending,
+            "synced" => SyncState::Synced,
+            "modified" => SyncState::Modified,
+            "verifying" => SyncState::Verifying,
+            "error" => SyncState::Error,
+            "skipped" => SyncState::Skipped,
+            "local" => SyncState::Local,
+            other => anyhow::bail!("unknown sync_state {other:?}"),
+        })
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct Transaction {
     pub id: i64,
@@ -14,7 +62,7 @@ pub struct Transaction {
     pub category_id: Option<i64>,
     pub payment_method_id: Option<i64>,
     pub note: String,
-    pub sync_state: String,
+    pub sync_state: SyncState,
     /// Set on a settled occurrence of a repeating transaction.
     pub recurring_series_id: Option<i64>,
 }
@@ -27,6 +75,43 @@ pub struct NewTransaction {
     pub payment_method_id: Option<i64>,
     #[serde(default)]
     pub note: String,
+}
+
+/// The original foreign-currency amount of a transaction whose `amount_agorot` is the shekel
+/// value. Local only: Paamonim and the totals only ever see the shekel amount.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct TxFx {
+    pub transaction_id: i64,
+    /// `USD` or `JPY`.
+    pub currency: String,
+    /// Signed like `amount_agorot`, in the currency's minor unit (cents; whole yen).
+    pub orig_minor: i64,
+    /// Shekels per one unit of the currency.
+    pub rate: f64,
+    /// The day the rate is for (the day it was set, for a manual one).
+    pub rate_date: String,
+    /// The rate is a stand-in (today's or fallback one); it is replaced once the day has closed.
+    pub estimated: bool,
+}
+
+/// One business of the whole business. The `is_general` one holds shared costs.
+#[derive(Serialize, Clone)]
+pub struct Business {
+    pub id: i64,
+    pub name: String,
+    pub is_general: bool,
+}
+
+/// What counts in which business: explicit tags on transactions, and categories whose
+/// transactions count in a business unless tagged otherwise.
+#[derive(Serialize, Default, Clone)]
+pub struct BusinessLinks {
+    /// (transaction id, business id)
+    pub transactions: Vec<(i64, i64)>,
+    /// (category id, business id)
+    pub categories: Vec<(i64, i64)>,
+    /// Categories whose transactions must say which business they belong to.
+    pub required: Vec<i64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -42,6 +127,25 @@ pub struct Category {
     pub is_income: bool,
     /// Top-level categories have none; transactions are normally on the children.
     pub parent_id: Option<i64>,
+    /// Came from Paamonim (a Paamonim category, or an item there for a sub-category).
+    pub from_paamonim: bool,
+    /// On a top-level category made here: the Paamonim top-level category it stands in for.
+    /// Its sub-categories are mirrored as items under that one.
+    pub linked_to: Option<i64>,
+}
+
+impl Category {
+    /// The Paamonim top-level category this top-level category's lines go under, if any.
+    pub fn paamonim_home(&self) -> Option<i64> {
+        if self.parent_id.is_some() {
+            return None;
+        }
+        if self.from_paamonim {
+            Some(self.id)
+        } else {
+            self.linked_to
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -51,6 +155,10 @@ pub struct NewCategory {
     #[serde(default)]
     pub is_income: bool,
     pub parent_id: Option<i64>,
+    /// For a top-level category: the Paamonim top-level category it stands in for. Required
+    /// when there are Paamonim categories of its kind, since Paamonim can't take new ones.
+    #[serde(default)]
+    pub linked_to: Option<i64>,
 }
 
 /// Why a category change was refused; the API maps these to 4xx responses.
@@ -84,6 +192,35 @@ impl std::fmt::Display for CategoryError {
 }
 
 impl std::error::Error for CategoryError {}
+
+/// Everything the plain lists leave out, for a full backup: deleted/merged categories, the
+/// Paamonim ids, which Paamonim line each transaction is linked to, and the mirror metadata.
+#[derive(Default)]
+pub struct RawBackup {
+    pub categories: Vec<RawCategory>,
+    pub payment_methods: Vec<RawPaymentMethod>,
+    /// (transaction id, Paamonim line id, mirror date)
+    pub tx_links: Vec<(i64, Option<String>, Option<String>)>,
+    /// `mirror_meta` key/value pairs.
+    pub meta: Vec<(String, String)>,
+}
+
+pub struct RawCategory {
+    pub id: i64,
+    pub name: String,
+    pub is_income: bool,
+    pub paamonim_item_id: Option<String>,
+    pub parent_id: Option<i64>,
+    pub deleted: bool,
+    pub merged_into: Option<i64>,
+    pub linked_to: Option<i64>,
+}
+
+pub struct RawPaymentMethod {
+    pub id: i64,
+    pub name: String,
+    pub paamonim_id: Option<String>,
+}
 
 /// Per-month, per-category totals, computed from transactions on demand.
 #[derive(Serialize)]
@@ -145,7 +282,7 @@ pub struct ImportSummary {
 #[derive(Debug, Clone)]
 pub struct PendingMirror {
     pub id: i64,
-    pub state: String,
+    pub state: SyncState,
     pub date: String,
     pub amount_agorot: i64,
     pub note: String,
@@ -181,10 +318,47 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>>;
+    /// Set (or with None, clear) the foreign-currency details of a transaction.
+    async fn set_tx_fx(&self, id: i64, fx: Option<&TxFx>) -> anyhow::Result<()>;
+    /// Details of the transactions that still exist and were entered in a foreign currency.
+    async fn list_tx_fx(&self) -> anyhow::Result<Vec<TxFx>>;
+    /// Cached rate (shekels per unit) for a currency on a date (`latest` is the newest fetched).
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>>;
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()>;
+    /// App-wide settings (key/value text), synced across devices.
+    async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>>;
+    async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()>;
+    async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
+    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
+    async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
+    /// Also drops every tag and category link that pointed at it.
+    async fn remove_business(&self, id: i64) -> anyhow::Result<()>;
+    /// Tags of transactions that still exist, and the category links.
+    async fn business_links(&self) -> anyhow::Result<BusinessLinks>;
+    /// Make transactions of `category` count in `business` (None removes the link).
+    async fn set_category_business(
+        &self,
+        category: i64,
+        business: Option<i64>,
+    ) -> anyhow::Result<()>;
+    /// Tag transactions as `business`'s (None removes their tags).
+    async fn set_transactions_business(
+        &self,
+        ids: &[i64],
+        business: Option<i64>,
+    ) -> anyhow::Result<()>;
+    /// Make new transactions in `category` say which business they belong to (or none).
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()>;
+    /// Raw rows for the full Google Sheets backup.
+    async fn raw_backup(&self) -> anyhow::Result<RawBackup>;
     /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>>;
     /// Set `sync_state` (e.g. `verifying` before a request, `error`, `local`).
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()>;
+    async fn set_mirror_state(&self, id: i64, state: SyncState) -> anyhow::Result<()>;
     /// Record that `posted` now exists in Paamonim as `line_id`. The line it replaces (if the
     /// transaction was already linked) is queued for deletion. If the transaction changed
     /// since `posted` was read it becomes `modified` instead of `synced`. Returns false when
@@ -198,6 +372,13 @@ pub trait Storage: Send + Sync {
     async fn detach_mirror(&self, id: i64) -> anyhow::Result<()>;
     /// `error` -> `pending`/`modified`, for a manual retry. False if it wasn't in `error`.
     async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool>;
+    /// Put back in the queue rows skipped (or put in error, when making the item failed) for
+    /// having no Paamonim item although their category is a sub-category of a Paamonim
+    /// category, which can get one. A row never sent has no line, and a category without an
+    /// item means it never got as far as saving one, so sending it again can't duplicate.
+    /// Called at start, so rows left by an earlier version that failed to make the item are
+    /// sent. Returns how many.
+    async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize>;
     /// Lines to delete in Paamonim.
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>>;
     async fn queue_line_delete(&self, line_id: &str, date: &str) -> anyhow::Result<()>;
@@ -232,6 +413,139 @@ pub trait Storage: Send + Sync {
     /// re-import neither recreates them nor loses where their lines now belong; local-only
     /// ones are deleted outright. Use [`Storage::delete_category`], which validates.
     async fn remove_categories(&self, ids: &[i64], move_to: Option<i64>) -> anyhow::Result<()>;
+    /// Raw: set the Paamonim category a top-level category made here stands in for. Use
+    /// [`Storage::create_category`] or [`Storage::link_category_to`], which validate.
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()>;
+    /// Raw: put a sub-category under another top-level category; its transactions and rules
+    /// stay on it. Use [`Storage::move_category`], which validates.
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> anyhow::Result<()>;
+
+    /// Check `linked_to` for a top-level category of kind `is_income` (other than `own`).
+    /// Required when there is a Paamonim top-level category of that kind to link to.
+    fn check_link(
+        &self,
+        all: &[Category],
+        own: Option<i64>,
+        is_income: bool,
+        linked_to: Option<i64>,
+    ) -> Result<(), CategoryError> {
+        let candidate = |c: &&Category| {
+            c.parent_id.is_none()
+                && c.from_paamonim
+                && c.is_income == is_income
+                && Some(c.id) != own
+        };
+        match linked_to {
+            Some(l) => {
+                if !all.iter().filter(candidate).any(|c| c.id == l) {
+                    return Err(CategoryError::Invalid(
+                        "link to a Paamonim top-level category of the same kind".into(),
+                    ));
+                }
+            }
+            None => {
+                if all.iter().any(|c| candidate(&c)) {
+                    return Err(CategoryError::Invalid(
+                        "choose the Paamonim category this category belongs to".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Change the Paamonim category a top-level category made here stands in for. Refused
+    /// while one of its sub-categories is an item in Paamonim, whose place there is fixed.
+    async fn link_category_to(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        let all = self.list_categories().await?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
+        if cat.parent_id.is_some() || cat.from_paamonim {
+            return Err(CategoryError::Invalid(
+                "only a top-level category made here can be linked".into(),
+            )
+            .into());
+        }
+        if cat.linked_to == linked_to {
+            return Ok(());
+        }
+        self.check_link(&all, Some(id), cat.is_income, linked_to)?;
+        if all
+            .iter()
+            .any(|c| c.parent_id == Some(id) && c.from_paamonim)
+        {
+            return Err(CategoryError::Invalid(
+                "a sub-category of this category is an item in Paamonim; move it out first".into(),
+            )
+            .into());
+        }
+        self.set_category_link(id, linked_to).await
+    }
+
+    /// Put sub-category `id` under top-level category `to`, with its transactions and rules.
+    /// A sub-category that is an item in Paamonim can only move to a category that goes under
+    /// the same Paamonim category, so nothing changes there.
+    async fn move_category(&self, id: i64, to: i64) -> anyhow::Result<()> {
+        let all = self.list_categories().await?;
+        let cat = all
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or(CategoryError::NotFound)?;
+        let Some(from) = cat.parent_id.and_then(|p| all.iter().find(|c| c.id == p)) else {
+            return Err(CategoryError::Invalid("only a sub-category can be moved".into()).into());
+        };
+        let target = all.iter().find(|c| c.id == to).ok_or_else(|| {
+            CategoryError::Invalid("the category to move to was not found".into())
+        })?;
+        if target.parent_id.is_some() {
+            return Err(CategoryError::Invalid("move it under a top-level category".into()).into());
+        }
+        if target.is_income != cat.is_income {
+            return Err(CategoryError::Invalid(
+                "cannot move between income and expense categories".into(),
+            )
+            .into());
+        }
+        if target.id == from.id {
+            return Ok(());
+        }
+        if cat.from_paamonim && target.paamonim_home() != from.paamonim_home() {
+            return Err(CategoryError::Invalid(
+                "this sub-category is an item in Paamonim; it can only move to a category \
+                 linked to the same Paamonim category"
+                    .into(),
+            )
+            .into());
+        }
+        if target.paamonim_home() != from.paamonim_home()
+            && self.list_transactions().await?.iter().any(|t| {
+                t.category_id == Some(id)
+                    && matches!(
+                        t.sync_state,
+                        SyncState::Synced | SyncState::Modified | SyncState::Verifying
+                    )
+            })
+        {
+            return Err(CategoryError::Invalid(
+                "some of its lines are already in Paamonim under another category; it can only \
+                 move to a category linked to the same Paamonim category"
+                    .into(),
+            )
+            .into());
+        }
+        if all
+            .iter()
+            .any(|c| c.parent_id == Some(to) && c.name == cat.name)
+        {
+            return Err(CategoryError::Invalid(
+                "the target category already has a sub-category with this name".into(),
+            )
+            .into());
+        }
+        self.set_category_parent(id, to).await
+    }
 
     async fn create_category(&self, c: &NewCategory) -> anyhow::Result<i64> {
         let name = c.name.trim();
@@ -253,8 +567,17 @@ pub trait Storage: Send + Sync {
                 }
                 parent.is_income
             }
-            None => c.is_income,
+            None => {
+                self.check_link(&all, None, c.is_income, c.linked_to)?;
+                c.is_income
+            }
         };
+        if c.parent_id.is_some() && c.linked_to.is_some() {
+            return Err(CategoryError::Invalid(
+                "a sub-category takes its parent's Paamonim category".into(),
+            )
+            .into());
+        }
         if all
             .iter()
             .any(|o| o.parent_id == c.parent_id && o.is_income == is_income && o.name == name)
@@ -263,7 +586,11 @@ pub trait Storage: Send + Sync {
                 CategoryError::Invalid("a category with this name already exists".into()).into(),
             );
         }
-        self.insert_category(name, is_income, c.parent_id).await
+        let id = self.insert_category(name, is_income, c.parent_id).await?;
+        if c.linked_to.is_some() {
+            self.set_category_link(id, c.linked_to).await?;
+        }
+        Ok(id)
     }
 
     /// Delete a category together with its sub-categories. Their transactions go to
@@ -275,6 +602,18 @@ pub trait Storage: Send + Sync {
             .iter()
             .find(|c| c.id == id)
             .ok_or(CategoryError::NotFound)?;
+        let linking: Vec<&str> = all
+            .iter()
+            .filter(|c| c.linked_to == Some(id))
+            .map(|c| c.name.as_str())
+            .collect();
+        if !linking.is_empty() {
+            return Err(CategoryError::Invalid(format!(
+                "categories linked to this one in Paamonim: {}; link them elsewhere first",
+                linking.join(", ")
+            ))
+            .into());
+        }
         // Sub-categories first, so a parent is never removed while children point at it.
         let mut ids: Vec<i64> = all
             .iter()
@@ -361,6 +700,7 @@ pub trait Storage: Send + Sync {
         _series_id: i64,
         _month: &str,
         _t: Option<&NewTransaction>,
+        _fx: Option<&TxFx>,
     ) -> anyhow::Result<bool> {
         anyhow::bail!("repeating transactions are not supported by this storage backend")
     }
@@ -374,6 +714,10 @@ pub trait Storage: Send + Sync {
         _limit: usize,
         _before_id: Option<i64>,
     ) -> anyhow::Result<Vec<LogEntry>> {
+        Ok(Vec::new())
+    }
+    /// Distinct emails that appear on recorded changes, sorted.
+    async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())
     }
     /// Delete entries stamped before `before` (UTC, `YYYY-MM-DDTHH:MM:SSZ`); returns how many.
@@ -440,6 +784,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn business_tags_and_links_follow_their_rows() {
+        let s = crate::testdb::fresh().await;
+        let a = s.insert_business("A", false).await.unwrap();
+        let g = s.insert_business("General", true).await.unwrap();
+        let t1 = s
+            .create_transaction(&tx("2026-10-03", -100, None))
+            .await
+            .unwrap();
+        let t2 = s
+            .create_transaction(&tx("2026-10-04", -200, None))
+            .await
+            .unwrap();
+        s.set_transactions_business(&[t1, t2], Some(a))
+            .await
+            .unwrap();
+        s.set_category_business(7, Some(g)).await.unwrap();
+        let l = s.business_links().await.unwrap();
+        assert_eq!(l.transactions.len(), 2);
+        assert_eq!(l.categories, vec![(7, g)]);
+        // A deleted transaction drops out of the tags.
+        s.delete_transaction(t1).await.unwrap();
+        assert_eq!(
+            s.business_links().await.unwrap().transactions,
+            vec![(t2, a)]
+        );
+        s.set_transactions_business(&[t2], None).await.unwrap();
+        assert!(s.business_links().await.unwrap().transactions.is_empty());
+        // Removing a business drops what pointed at it.
+        s.set_transactions_business(&[t2], Some(a)).await.unwrap();
+        s.remove_business(a).await.unwrap();
+        s.remove_business(g).await.unwrap();
+        let l = s.business_links().await.unwrap();
+        assert!(l.transactions.is_empty() && l.categories.is_empty());
+        assert!(s.list_businesses().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn editing_a_synced_line_flags_it_modified() {
         let s = crate::testdb::fresh().await;
         let id = s
@@ -451,8 +832,8 @@ mod tests {
             .unwrap();
         let t = &s.list_transactions().await.unwrap()[0];
         assert_eq!(
-            (t.date.as_str(), t.amount_agorot, t.sync_state.as_str()),
-            ("2026-10-04", -2000, "pending")
+            (t.date.as_str(), t.amount_agorot, t.sync_state),
+            ("2026-10-04", -2000, SyncState::Pending)
         );
         mark(&s, id, "77").await;
         s.update_transaction(id, &tx("2026-10-05", -2500, None))
@@ -460,7 +841,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             s.list_transactions().await.unwrap()[0].sync_state,
-            "modified"
+            SyncState::Modified
         );
     }
 
@@ -558,11 +939,142 @@ mod tests {
         assert_eq!(s.monthly_totals().await.unwrap()[0].total_agorot, 2025);
     }
 
+    /// Paamonim income category `ci:1` with items משכורת (`i:7`) and בונוס (`i:8`).
+    async fn with_income() -> (MySqlStorage, i64, i64, i64) {
+        let s = crate::testdb::fresh().await;
+        let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: name.into(),
+            is_income: true,
+            parent_key: parent.map(str::to_string),
+        };
+        let batch = ImportBatch {
+            categories: vec![
+                cat("ci:1", "הכנסות", None),
+                cat("i:7", "משכורת", Some("ci:1")),
+                cat("i:8", "בונוס", Some("ci:1")),
+            ],
+            ..Default::default()
+        };
+        s.import_paamonim(&batch).await.unwrap();
+        let cats = s.list_categories().await.unwrap();
+        let id = |n: &str| cats.iter().find(|c| c.name == n).unwrap().id;
+        (s, id("הכנסות"), id("משכורת"), id("בונוס"))
+    }
+
+    fn top(name: &str, linked_to: Option<i64>) -> NewCategory {
+        NewCategory {
+            name: name.into(),
+            is_income: true,
+            parent_id: None,
+            linked_to,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_top_level_category_must_be_linked_to_a_paamonim_one() {
+        let (s, income, salary, _) = with_income().await;
+        let err = s.create_category(&top("עומר", None)).await.unwrap_err();
+        assert!(err.to_string().contains("Paamonim category"));
+        // Not to a sub-category, and not across kinds.
+        assert!(s.create_category(&top("עומר", Some(salary))).await.is_err());
+        let exp = NewCategory {
+            is_income: false,
+            ..top("x", Some(income))
+        };
+        // No Paamonim expense categories: an expense top-level needs no link, and can't
+        // take an income one.
+        assert!(s.create_category(&exp).await.is_err());
+        let id = s.create_category(&top("עומר", Some(income))).await.unwrap();
+        let made = s.list_categories().await.unwrap();
+        let made = made.iter().find(|c| c.id == id).unwrap();
+        assert_eq!((made.linked_to, made.from_paamonim), (Some(income), false));
+        // Neither can be deleted from under the link.
+        assert!(s.delete_category(income, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_sub_category_moves_with_its_lines_and_keeps_its_place_on_reimport() {
+        let (s, income, salary, bonus) = with_income().await;
+        let omer = s.create_category(&top("עומר", Some(income))).await.unwrap();
+        let wife = s.create_category(&top("אשתי", Some(income))).await.unwrap();
+        let t = s
+            .create_transaction(&NewTransaction {
+                date: "2026-10-01".into(),
+                amount_agorot: 1_000_000,
+                category_id: Some(salary),
+                payment_method_id: None,
+                note: String::new(),
+            })
+            .await
+            .unwrap();
+        s.move_category(salary, wife).await.unwrap();
+        s.move_category(bonus, omer).await.unwrap();
+        let parent =
+            |cats: &[Category], id: i64| cats.iter().find(|c| c.id == id).unwrap().parent_id;
+        let cats = s.list_categories().await.unwrap();
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
+        let tx = s.list_transactions().await.unwrap();
+        assert_eq!(
+            tx.iter().find(|x| x.id == t).unwrap().category_id,
+            Some(salary)
+        );
+        // A re-import leaves them where they were moved.
+        let cat = |key: &str, name: &str, parent: Option<&str>| ImportCategory {
+            key: key.into(),
+            name: name.into(),
+            is_income: true,
+            parent_key: parent.map(str::to_string),
+        };
+        s.import_paamonim(&ImportBatch {
+            categories: vec![
+                cat("ci:1", "הכנסות", None),
+                cat("i:7", "משכורת", Some("ci:1")),
+                cat("i:8", "בונוס", Some("ci:1")),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let cats = s.list_categories().await.unwrap();
+        assert_eq!(
+            (parent(&cats, salary), parent(&cats, bonus)),
+            (Some(wife), Some(omer))
+        );
+        // Back under the Paamonim category is fine too.
+        s.move_category(bonus, income).await.unwrap();
+        // A Paamonim item can't move to a category that isn't linked to its Paamonim category.
+        let other = s
+            .create_category(&NewCategory {
+                is_income: false,
+                ..top("הוצאה", None)
+            })
+            .await
+            .unwrap();
+        assert!(s.move_category(salary, other).await.is_err());
+        // The link can't change while a Paamonim item sits under it.
+        assert!(s.link_category_to(wife, None).await.is_err());
+        // A name the target already has is refused.
+        let dup = s
+            .create_category(&NewCategory {
+                parent_id: Some(omer),
+                ..top("משכורת", None)
+            })
+            .await
+            .unwrap();
+        assert!(dup > 0);
+        assert!(s.move_category(salary, omer).await.is_err());
+    }
+
     fn new_cat(name: &str, parent_id: Option<i64>, is_income: bool) -> NewCategory {
         NewCategory {
             name: name.into(),
             is_income,
             parent_id,
+            linked_to: None,
         }
     }
 
@@ -705,8 +1217,8 @@ mod tests {
         assert_eq!(
             states,
             [
-                (Some(b), "modified".to_string()),
-                (Some(b), "pending".to_string())
+                (Some(b), SyncState::Pending),
+                (Some(b), SyncState::Modified)
             ]
         );
     }
@@ -797,6 +1309,8 @@ mod tests {
             category_id: Some(a),
             payment_method_id: None,
             note: String::new(),
+            currency: None,
+            orig_minor: None,
         };
         let first = s.insert_recurring(None, &rule("2026-01")).await.unwrap();
         s.insert_recurring(Some(first), &rule("2026-06"))

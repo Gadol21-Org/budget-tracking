@@ -29,6 +29,10 @@ pub mod kind {
     pub const CATEGORY_CREATE: &str = "category_create";
     /// Also covers the move of its transactions and rules to another category.
     pub const CATEGORY_DELETE: &str = "category_delete";
+    /// A top-level category linked to another Paamonim category.
+    pub const CATEGORY_LINK: &str = "category_link";
+    /// A sub-category moved under another top-level category.
+    pub const CATEGORY_MOVE: &str = "category_move";
     pub const RECURRING_CREATE: &str = "recurring_create";
     pub const RECURRING_UPDATE: &str = "recurring_update";
     pub const RECURRING_CANCEL: &str = "recurring_cancel";
@@ -48,6 +52,8 @@ pub struct NewLogEntry {
     pub entity_id: Option<i64>,
     pub old: Option<Value>,
     pub new: Option<Value>,
+    /// Who made the change (Cloudflare Access email), when known.
+    pub user_email: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -58,6 +64,23 @@ pub struct LogEntry {
     pub entity_id: Option<i64>,
     pub old: Option<Value>,
     pub new: Option<Value>,
+    /// Who made the change; `None` for older entries, background work, or no Access header.
+    pub user_email: Option<String>,
+}
+
+tokio::task_local! {
+    /// The signed-in user of the request being served, set by the HTTP layer.
+    pub static ACTOR: Option<String>;
+}
+
+/// The email Cloudflare Access put on the request, if any (never assumed present).
+pub fn actor_from_header(v: Option<&axum::http::HeaderValue>) -> Option<String> {
+    let s = v?.to_str().ok()?.trim().to_lowercase();
+    (s.contains('@') && s.len() <= 254).then_some(s)
+}
+
+fn current_actor() -> Option<String> {
+    ACTOR.try_with(|a| a.clone()).ok().flatten()
 }
 
 pub fn now() -> String {
@@ -90,6 +113,7 @@ pub async fn record(
         entity_id,
         old,
         new,
+        user_email: current_actor(),
     };
     if let Err(e) = db.log_append(&entry).await {
         tracing::warn!("writing the change log failed: {e}");
@@ -220,11 +244,72 @@ impl Storage for Logged {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
         self.0.list_payment_methods().await
     }
+    // Businesses are a local view over the data, not logged.
+    async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {
+        self.0.list_businesses().await
+    }
+    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64> {
+        self.0.insert_business(name, is_general).await
+    }
+    async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()> {
+        self.0.rename_business(id, name).await
+    }
+    async fn remove_business(&self, id: i64) -> anyhow::Result<()> {
+        self.0.remove_business(id).await
+    }
+    async fn set_tx_fx(&self, id: i64, fx: Option<&crate::storage::TxFx>) -> anyhow::Result<()> {
+        self.0.set_tx_fx(id, fx).await
+    }
+    async fn list_tx_fx(&self) -> anyhow::Result<Vec<crate::storage::TxFx>> {
+        self.0.list_tx_fx().await
+    }
+    async fn get_fx_rate(&self, currency: &str, date: &str) -> anyhow::Result<Option<f64>> {
+        self.0.get_fx_rate(currency, date).await
+    }
+    async fn put_fx_rate(&self, currency: &str, date: &str, rate: f64) -> anyhow::Result<()> {
+        self.0.put_fx_rate(currency, date, rate).await
+    }
+    async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        self.0.get_setting(key).await
+    }
+    async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.0.set_setting(key, value).await
+    }
+    async fn business_links(&self) -> anyhow::Result<crate::storage::BusinessLinks> {
+        self.0.business_links().await
+    }
+    async fn set_category_business(
+        &self,
+        category: i64,
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.0.set_category_business(category, business).await
+    }
+    async fn set_transactions_business(
+        &self,
+        ids: &[i64],
+        business: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.0.set_transactions_business(ids, business).await
+    }
+    async fn set_category_business_required(
+        &self,
+        category: i64,
+        required: bool,
+    ) -> anyhow::Result<()> {
+        self.0
+            .set_category_business_required(category, required)
+            .await
+    }
     // Mirroring only changes sync bookkeeping, not the user's data: forwarded, not logged.
     async fn pending_mirrors(&self) -> anyhow::Result<Vec<PendingMirror>> {
         self.0.pending_mirrors().await
     }
-    async fn set_mirror_state(&self, id: i64, state: &str) -> anyhow::Result<()> {
+    async fn set_mirror_state(
+        &self,
+        id: i64,
+        state: crate::storage::SyncState,
+    ) -> anyhow::Result<()> {
         self.0.set_mirror_state(id, state).await
     }
     async fn mark_mirrored(&self, posted: &PendingMirror, line_id: &str) -> anyhow::Result<bool> {
@@ -238,6 +323,12 @@ impl Storage for Logged {
     }
     async fn retry_mirror(&self, id: i64) -> anyhow::Result<bool> {
         self.0.retry_mirror(id).await
+    }
+    async fn requeue_skipped_sub_categories(&self) -> anyhow::Result<usize> {
+        self.0.requeue_skipped_sub_categories().await
+    }
+    async fn raw_backup(&self) -> anyhow::Result<crate::storage::RawBackup> {
+        self.0.raw_backup().await
     }
     async fn pending_line_deletes(&self) -> anyhow::Result<Vec<LineDelete>> {
         self.0.pending_line_deletes().await
@@ -336,6 +427,50 @@ impl Storage for Logged {
         self.0.remove_categories(ids, move_to).await
     }
 
+    async fn set_category_link(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        self.0.set_category_link(id, linked_to).await
+    }
+
+    async fn set_category_parent(&self, id: i64, parent_id: i64) -> anyhow::Result<()> {
+        self.0.set_category_parent(id, parent_id).await
+    }
+
+    async fn link_category_to(&self, id: i64, linked_to: Option<i64>) -> anyhow::Result<()> {
+        let cats = self.0.list_categories().await?;
+        self.0.link_category_to(id, linked_to).await?;
+        if let Some(cat) = cats.iter().find(|c| c.id == id) {
+            if cat.linked_to != linked_to {
+                self.log(
+                    kind::CATEGORY_LINK,
+                    Some(id),
+                    Some(json!({ "name": cat.name, "linked_to": category_path(&cats, cat.linked_to) })),
+                    Some(json!({ "name": cat.name, "linked_to": category_path(&cats, linked_to) })),
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn move_category(&self, id: i64, to: i64) -> anyhow::Result<()> {
+        let cats = self.0.list_categories().await?;
+        self.0.move_category(id, to).await?;
+        if let Some(cat) = cats.iter().find(|c| c.id == id) {
+            if cat.parent_id != Some(to) {
+                self.log(
+                    kind::CATEGORY_MOVE,
+                    Some(id),
+                    Some(
+                        json!({ "name": cat.name, "parent": category_path(&cats, cat.parent_id) }),
+                    ),
+                    Some(json!({ "name": cat.name, "parent": category_path(&cats, Some(to)) })),
+                )
+                .await;
+            }
+        }
+        Ok(())
+    }
+
     async fn create_category(&self, c: &NewCategory) -> anyhow::Result<i64> {
         let id = self.0.create_category(c).await?;
         if let Ok(cats) = self.0.list_categories().await {
@@ -344,6 +479,7 @@ impl Storage for Logged {
                     "name": made.name,
                     "is_income": made.is_income,
                     "parent": category_path(&cats, made.parent_id),
+                    "linked_to": category_path(&cats, made.linked_to),
                 });
                 self.log(kind::CATEGORY_CREATE, Some(id), None, Some(new))
                     .await;
@@ -424,6 +560,7 @@ impl Storage for Logged {
         series_id: i64,
         month: &str,
         t: Option<&NewTransaction>,
+        fx: Option<&crate::storage::TxFx>,
     ) -> anyhow::Result<bool> {
         let scheduled = self
             .0
@@ -433,7 +570,10 @@ impl Storage for Logged {
             .filter(|s| s.series_id == series_id)
             .flat_map(|s| crate::recurring::occurrences(std::slice::from_ref(s), month))
             .find(|o| &o.date[..7] == month);
-        let settled = self.0.settle_recurring_month(series_id, month, t).await?;
+        let settled = self
+            .0
+            .settle_recurring_month(series_id, month, t, fx)
+            .await?;
         if settled {
             if let Some(n) = self.names().await {
                 let old = scheduled.as_ref().map(|o| n.occurrence(o));
@@ -474,6 +614,9 @@ impl Storage for Logged {
     async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
         self.0.prune_log(before).await
     }
+    async fn log_users(&self) -> anyhow::Result<Vec<String>> {
+        self.0.log_users().await
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +642,7 @@ mod tests {
             name: name.into(),
             is_income: false,
             parent_id: parent,
+            linked_to: None,
         }
     }
 
@@ -577,6 +721,8 @@ mod tests {
             category_id: None,
             payment_method_id: None,
             note: "rent".into(),
+            currency: None,
+            orig_minor: None,
         };
         let series = recurring::create(&db, &rule("2026-01")).await.unwrap();
         recurring::settle_month(
@@ -584,6 +730,7 @@ mod tests {
             series,
             "2026-03",
             &tx("2026-03-05", -700, None, "rent"),
+            None,
         )
         .await
         .unwrap();
@@ -620,6 +767,8 @@ mod tests {
             category_id: None,
             payment_method_id: None,
             note: String::new(),
+            currency: None,
+            orig_minor: None,
         };
         let today = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
         let series = recurring::create(&db, &rule("2026-01", -500))
@@ -663,6 +812,7 @@ mod tests {
     async fn pruning_drops_only_entries_older_than_a_year() {
         let db = db().await;
         let at = |s: &str| NewLogEntry {
+            user_email: None,
             at: s.into(),
             kind: "transaction_create".into(),
             entity_id: None,
