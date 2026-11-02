@@ -33,12 +33,13 @@ export interface Ctx {
   setCmp: (c: Cmp) => void;
   setPeriod: (p: Period) => void;
   openList: (categoryId: number) => void;
+  /** Open a category (and sub-category) where the category breakdown lives: the summary. */
+  openCategory: (cat: number | null, sub?: number) => void;
   openDialog: (build: (close: () => void) => HTMLElement) => void;
 }
 
 const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
-  ["cats", "🧩", "קטגוריות"],
   ["trends", "📈", "מגמות"],
   ["changes", "🔀", "מה השתנה"],
   ["fixed", "📌", "קבוע ומשתנה"],
@@ -298,12 +299,14 @@ function donut(parts: { value: number; color: string }[], center: string, label 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
 
 export function insightsView(ctx: Ctx): HTMLElement {
+  // The category breakdown moved to the summary; "cats" only remains as the drill-down marker in history entries.
+  const dash: Exclude<Dash, "cats"> = ctx.ins.dash === "cats" ? "overview" : ctx.ins.dash;
   const chips = el(
     "div",
     { className: "chips", role: "tablist" },
     ...DASHES.map(([id, ico, label]) => {
       const b = el("button", { className: "chip", type: "button", textContent: `${ico} ${label}` });
-      b.setAttribute("aria-pressed", String(ctx.ins.dash === id));
+      b.setAttribute("aria-pressed", String(dash === id));
       b.onclick = () => ctx.navigate({ dash: id, cat: undefined, sub: undefined }, "replace");
       return b;
     }),
@@ -311,12 +314,11 @@ export function insightsView(ctx: Ctx): HTMLElement {
   // With six chips the open one can sit off-screen: bring it into view after the page is laid out.
   requestAnimationFrame(() => chips.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ inline: "center", block: "nearest" }));
   const base = basePeriods(ctx.period, ctx.ins.cmp);
-  const cmpBtn = el("button", { className: "cmpbtn", type: "button", textContent: `${base.label} ▾` });
-  cmpBtn.onclick = () => openCompareDialog(ctx);
+  const cmpBtn = compareButton(ctx, base.label);
   const partial = isPartial(ctx.period);
-  const body = { overview, cats, trends, changes, fixed, rhythm }[ctx.ins.dash](ctx, base.label);
-  body.classList.add("dash", `dash-${ctx.ins.dash}`);
-  const hasCompare = ctx.ins.dash !== "trends" && ctx.ins.dash !== "fixed";
+  const body = { overview, trends, changes, fixed, rhythm }[dash](ctx, base.label);
+  body.classList.add("dash", `dash-${dash}`);
+  const hasCompare = dash !== "trends" && dash !== "fixed";
   return el(
     "div",
     {},
@@ -326,6 +328,12 @@ export function insightsView(ctx: Ctx): HTMLElement {
     hasCompare && partial && el("div", { className: "partialnote", textContent: "התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה. לתמונה מלאה בחרו חודש שהסתיים." }),
     body,
   );
+}
+
+function compareButton(ctx: Ctx, label: string): HTMLElement {
+  const b = el("button", { className: "cmpbtn", type: "button", textContent: `${label} ▾` });
+  b.onclick = () => openCompareDialog(ctx);
+  return b;
 }
 
 function openCompareDialog(ctx: Ctx) {
@@ -454,9 +462,8 @@ const catColor = (ctx: Ctx, id: number | null): string => {
   return i < 0 ? OTHER_COLOR : colorAt(i);
 };
 
-const cats: Body = (ctx, baseLabel) => {
-  if (ctx.ins.cat !== undefined && ctx.ins.sub !== undefined) return subDetail(ctx);
-  if (ctx.ins.cat !== undefined) return catDetail(ctx, baseLabel);
+/** The donut and the category list of one side; `heading` replaces the default hint above the list. */
+function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const side = sideOf(ctx), S = SIDES[side];
   const cur = aggregate(ctx, ctx.period, side);
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p, side));
@@ -468,43 +475,51 @@ const cats: Body = (ctx, baseLabel) => {
     { className: "donutlegend" },
     ...rows.map(([id, g]) => el("div", {}, el("i", { style: `background:${catColor(ctx, id)}` }), `${catName(ctx, id)} `, el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
   );
-  const switcher = el("div", { className: "seg sidesw", role: "group" }, ...(Object.keys(SIDES) as Side[]).map((k) => {
-    const b = el("button", { type: "button", textContent: SIDES[k].title });
-    b.setAttribute("aria-pressed", String(k === side));
-    b.onclick = () => k !== side && ctx.navigate({ dash: "cats", side: k }, "replace");
-    return b;
-  }));
+  if (rows.length === 0) return el("div", {}, heading ?? null, el("div", { className: "empty", textContent: S.empty }));
   return el(
     "div",
-    {},
-    switcher,
-    rows.length === 0
-      ? el("div", { className: "empty", textContent: S.empty })
-      : el(
-          "div",
-          { className: "catsgrid" },
-          el("div", { className: "card donutcard" }, svgBox(donut(parts, formatShekelsWhole(cur.sideTotal), S.title)), legend),
-          el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
+    { className: "catsgrid" },
+    // On the summary the heading (with the comparison chip) leads the section; in the old tab it sat between donut and list.
+    heading ?? null,
+    el("div", { className: "card donutcard" }, svgBox(donut(parts, formatShekelsWhole(cur.sideTotal), S.title)), legend),
+    heading ? null : el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
+    el(
+      "div",
+      { className: "card rows" },
+      ...rows.map(([id, g]) => {
+        const was = bases.reduce((s, b) => s + (b.groups.get(id)?.total ?? 0), 0) / bases.length;
+        return clickable(
           el(
             "div",
-            { className: "card rows" },
-            ...rows.map(([id, g]) => {
-              const was = bases.reduce((s, b) => s + (b.groups.get(id)?.total ?? 0), 0) / bases.length;
-              return clickable(
-                el(
-                  "div",
-                  { className: "row" },
-                  el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(ctx, id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%;background:${catColor(ctx, id)}` }))),
-                  el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, S.higherIsBad), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
-                  el("span", { className: "chev muted", textContent: "‹" }),
-                ),
-                () => ctx.navigate({ dash: "cats", cat: id, sub: undefined }, "push"),
-              );
-            }),
+            { className: "row" },
+            el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(ctx, id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%;background:${catColor(ctx, id)}` }))),
+            el("div", { className: "amt" }, money(g.total), el("div", {}, delta(g.total, was, S.higherIsBad), " ", el("span", { className: "muted num", textContent: `${Math.round((g.total / cur.sideTotal) * 100)}%` }))),
+            el("span", { className: "chev muted", textContent: "‹" }),
           ),
-        ),
+          () => ctx.navigate({ dash: "cats", cat: id, sub: undefined }, "push"),
+        );
+      }),
+    ),
   );
-};
+}
+
+/**
+ * The category breakdown shown on the summary page, for the side in `ctx.ins.side`: the donut and list with
+ * the comparison, or, once a category is open, its drill-down (and a sub-category's). The month bar and the
+ * income/expense cards stay with the summary.
+ */
+export function summaryCategories(ctx: Ctx): HTMLElement {
+  const base = basePeriods(ctx.period, ctx.ins.cmp);
+  const S = SIDES[sideOf(ctx)];
+  const body =
+    ctx.ins.cat !== undefined && ctx.ins.sub !== undefined
+      ? subDetail(ctx)
+      : ctx.ins.cat !== undefined
+        ? catDetail(ctx, base.label)
+        : catsList(ctx, el("h2", { className: "sumhead" }, el("span", { textContent: `${S.title} לפי קטגוריה` }), compareButton(ctx, base.label)));
+  body.classList.add("dash", "dash-cats");
+  return el("div", {}, ctx.ins.cat === undefined && isPartial(ctx.period) && el("div", { className: "partialnote", textContent: "התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה." }), body);
+}
 
 function crumbs(ctx: Ctx, ...parts: { text: string; to?: Partial<InsightsNav> }[]): HTMLElement {
   const nodes: Child[] = [];
@@ -580,7 +595,7 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   return el(
     "div",
     {},
-    crumbs(ctx, { text: "קטגוריות", to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id) }),
+    crumbs(ctx, { text: `${SIDES[side].title} לפי קטגוריה`, to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id) }),
     el(
       "div",
       { className: "kpis" },
@@ -613,7 +628,7 @@ function subDetail(ctx: Ctx): HTMLElement {
   return el(
     "div",
     {},
-    crumbs(ctx, { text: "קטגוריות", to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id), to: { cat: id, sub: undefined } }, { text: catName(ctx, sub) }),
+    crumbs(ctx, { text: `${SIDES[side].title} לפי קטגוריה`, to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id), to: { cat: id, sub: undefined } }, { text: catName(ctx, sub) }),
     el(
       "div",
       { className: "kpis" },
@@ -736,7 +751,7 @@ const changes: Body = (ctx, baseLabel) => {
       el("div", { className: "amt" }, el("span", { className: "num", style: `color:${color}`, textContent: `${grow ? "+" : "−"}${formatShekelsWhole(Math.abs(i.d))}` }), i.was === 0 && el("div", { className: "delta flat", textContent: "חדש" })),
       el("span", { className: "chev muted", textContent: "‹" }),
     );
-    return clickable(r, () => ctx.navigate({ dash: "cats", cat: i.top, sub: i.sub }, "push"));
+    return clickable(r, () => ctx.openCategory(i.top, i.sub));
   };
   return el(
     "div",

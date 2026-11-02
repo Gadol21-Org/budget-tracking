@@ -1,5 +1,5 @@
 import { el } from "./ui";
-import { insightsView, type Cmp } from "./insights";
+import { insightsView, type Cmp, type Ctx } from "./insights";
 import { currenciesView } from "./currencies";
 import { businessDashboard, businessesView } from "./business";
 import { type View, root, state } from "./state";
@@ -25,6 +25,14 @@ export function nav(): HTMLElement {
         }
         Object.assign(state.insights, { cat: undefined, sub: undefined });
       }
+      if (view === "month") {
+        // Tapping the open tab goes back up from a category to the summary itself.
+        if (state.view === "month") {
+          if (state.insights.cat !== undefined) navigateInsights({}, "push");
+          return;
+        }
+        Object.assign(state.insights, { cat: undefined, sub: undefined });
+      }
       go(view);
     };
     return b;
@@ -32,8 +40,9 @@ export function nav(): HTMLElement {
   return el("nav", { className: "nav" }, item("month", "📊", "סיכום"), item("list", "📋", "תנועות"), item("insights", "📈", "תובנות"), item("settings", "⚙️", "הגדרות"));
 }
 
-export function insightsScreen(): HTMLElement {
-  return insightsView({
+/** What the dashboards (and the summary's category breakdown) need from the app. */
+export function insightsCtx(): Ctx {
+  return {
     txs: state.txs,
     cats: state.cats,
     period: state.period,
@@ -43,8 +52,18 @@ export function insightsScreen(): HTMLElement {
     setCmp: (c: Cmp) => ((state.insights.cmp = c), render()),
     setPeriod: (p) => ((state.period = p), render()),
     openList: showCategory,
+    // Categories open on the summary page: a new history entry, so back returns to where the tap came from.
+    openCategory: (cat, sub) => {
+      Object.assign(state.insights, { dash: "cats", side: "expense", cat, sub });
+      state.kind = "expense";
+      go("month");
+    },
     openDialog,
-  });
+  };
+}
+
+export function insightsScreen(): HTMLElement {
+  return insightsView(insightsCtx());
 }
 
 export function businessScreen(): HTMLElement {
