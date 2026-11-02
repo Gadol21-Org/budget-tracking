@@ -1,10 +1,11 @@
 import { clickable, dateField, el } from "../ui";
 import { MONTHS, shift, title as periodTitle, type Period } from "../period";
 import { businessOf, summaryFigures } from "../business";
-import { go, showCategory, trackDialog } from "../nav";
+import { go, trackDialog } from "../nav";
 import { state } from "../state";
-import { render } from "../render";
-import { catById, catName, inPeriod, money } from "../selectors";
+import { insightsCtx, render } from "../render";
+import { summaryCategories } from "../insights";
+import { inPeriod, money } from "../selectors";
 
 export function monthBar(): HTMLElement {
   // RTL: the first element is on the right and goes back in time, the last (left) goes forward.
@@ -128,21 +129,10 @@ export function monthView(): HTMLElement {
     card.classList.toggle("selected", state.kind === kind);
     return clickable(card, () => ((state.kind = kind), render()));
   };
-  const isIncome = state.kind === "income";
-  const sign = isIncome ? 1 : -1;
-
-  // Group the chosen side (expenses or income) by top-level category; sub-categories are listed under their parent.
-  const groups = new Map<number | null, { total: number; kids: Map<number | null, number> }>();
-  for (const t of txs.filter((t) => t.amount_agorot * sign > 0)) {
-    const own = catById(t.category_id);
-    const top = own?.parent_id ?? t.category_id;
-    const g = groups.get(top) ?? { total: 0, kids: new Map() };
-    g.total += t.amount_agorot * sign;
-    if (top !== t.category_id) g.kids.set(t.category_id, (g.kids.get(t.category_id) ?? 0) + t.amount_agorot * sign);
-    groups.set(top, g);
-  }
-  const rows = [...groups.entries()].sort((a, b) => b[1].total - a[1].total);
-  const max = rows[0]?.[1].total ?? 1;
+  // The category breakdown (and the drill-down into a category) comes from the insights code; the cards above choose its side.
+  if (state.insights.cat !== undefined) state.kind = state.insights.side ?? state.kind;
+  else state.insights.side = state.kind;
+  if (state.insights.cat !== undefined) return el("div", {}, monthBar(), summaryCategories(insightsCtx()));
 
   return el(
     "div",
@@ -150,35 +140,6 @@ export function monthView(): HTMLElement {
     monthBar(),
     el("div", { className: "stats" }, stat("הכנסות", money(income, "income"), "income"), stat("הוצאות", money(-expense, "expense"), "expense"), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
     businessCard(),
-    el("h2", { textContent: isIncome ? "הכנסות לפי קטגוריה" : "הוצאות לפי קטגוריה" }),
-    rows.length === 0
-      ? el("div", { className: "empty", textContent: isIncome ? "אין הכנסות בתקופה זו" : "אין הוצאות בתקופה זו" })
-      : el(
-          "div",
-          { className: "card rows" },
-          ...rows.map(([id, g]) =>
-            el(
-              "div",
-              {},
-              clickable(
-                el(
-                  "div",
-                  { className: "row" },
-                  el("div", { className: "grow" }, el("div", { className: "name", textContent: catName(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (g.total / max) * 100)}%` }))),
-                  money(g.total),
-                ),
-                () => showCategory(id),
-              ),
-              ...[...g.kids.entries()]
-                .sort((a, b) => b[1] - a[1])
-                .map(([kid, total]) =>
-                  clickable(
-                    el("div", { className: "row sub" }, el("div", { className: "grow muted", textContent: catName(kid) }), money(total)),
-                    () => showCategory(kid),
-                  ),
-                ),
-            ),
-          ),
-        ),
+    summaryCategories(insightsCtx()),
   );
 }

@@ -154,12 +154,18 @@ export async function loadHistory(from: string): Promise<void> {
 /** The earliest day the screen shown needs: its period, and for the dashboards the months they compare with. */
 export function neededFrom(): string {
   let from = bounds(state.period).from;
+  const cmp = state.insights.cmp;
   if (state.view === "insights" || state.view === "business") {
-    const cmp = state.insights.cmp;
     // Trends show 12 months; a year earlier is the "same period last year"; an average looks back n periods.
     const avgBack = state.view === "insights" && cmp.kind === "avg" ? cmp.n * (state.period.kind === "year" ? 12 : 1) : 0;
     from = `${addMonths(from.slice(0, 7), -12 - avgBack)}-01`;
     if (state.view === "insights" && cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
+  } else if (state.view === "month") {
+    // The summary's category breakdown compares with other periods, and an open category shows 12 months.
+    const unit = state.period.kind === "year" ? 12 : 1;
+    const back = cmp.kind === "avg" ? cmp.n * unit : unit;
+    from = `${addMonths(from.slice(0, 7), -(back + (state.insights.cat !== undefined ? 12 : 0)))}-01`;
+    if (cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
   }
   return from;
 }

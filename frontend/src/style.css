@@ -394,3 +394,14 @@ dialog { overscroll-behavior: contain; }
 .row[data-i] { transition: transform .12s; }
 .row.dragging { transition: none !important; }
 .curlist { max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; margin-top: 8px; }
+
+/* Summary: the category section header carries the comparison chip. */
+.sumhead { display: flex; align-items: center; gap: 8px; }
+.sumhead .cmpbtn { margin-inline-start: auto; font-weight: 400; }
+/* Donut legend as a table: swatch, name, amount, share. The rows share the columns, so the numbers line up. */
+.donutlegend.tbl { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; column-gap: 8px; row-gap: 3px; align-items: center; }
+.donutlegend.tbl .lrow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+.donutlegend.tbl .lrow i { margin: 0; }
+.donutlegend.tbl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Digits keep their left-to-right order even in Hebrew, so a column of them lines up on its right edge (the units digit and the ₪ sign), not the left one. */
+.donutlegend.tbl .num { text-align: right; justify-self: right; }
