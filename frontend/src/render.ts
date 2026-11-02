@@ -7,6 +7,7 @@ import { go, goBack, manageCtx, navigateInsights, openDialog, showCategory } fro
 import { monthBar, monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
+import { peopleView } from "./views/people";
 import { categoriesView } from "./views/categories";
 import { settingsView } from "./views/settings";
 import { openTransactionDialog } from "./dialogs/transaction";
@@ -14,7 +15,7 @@ import { openTransactionDialog } from "./dialogs/transaction";
 export function nav(): HTMLElement {
   const item = (view: View, ico: string, label: string) => {
     const b = el("button", {}, el("span", { className: "ico", textContent: ico }), label);
-    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses" || state.view === "currencies")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
+    if (state.view === view || (view === "settings" && (state.view === "log" || state.view === "categories" || state.view === "businesses" || state.view === "currencies" || state.view === "people")) || (view === "month" && state.view === "business")) b.setAttribute("aria-current", "page");
     b.onclick = () => {
       if (view === "insights") {
         if (state.view === "insights") {
@@ -62,7 +63,7 @@ export function businessScreen(): HTMLElement {
 export let renderedView: View | undefined;
 
 export function render() {
-  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()), currencies: () => currenciesView({ back: () => goBack("settings") }) }[state.view]();
+  const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()), currencies: () => currenciesView({ back: () => goBack("settings") }), people: peopleView }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   const entering = renderedView !== state.view;
   if (entering) window.scrollTo(0, 0);

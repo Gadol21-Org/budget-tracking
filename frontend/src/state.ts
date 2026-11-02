@@ -1,9 +1,9 @@
 import { type InsightsNav, type InsightsState } from "./insights";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
-import { type Category, type Fx, type LogEntry, type RecurringSegment, type Transaction } from "./api";
+import { type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people";
 
 export const root = document.getElementById("app")!;
 
@@ -25,6 +25,8 @@ export const state = {
   /** Change log entries loaded so far (newest first) and whether older ones remain. */
   log: [] as LogEntry[],
   logMore: false,
+  /** Emails seen on recorded changes, with display names. */
+  logUsers: [] as LogUser[],
   /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */
   mirror: false,
   /** sync_state of each transaction at the last load, to notice lines that just got saved. */

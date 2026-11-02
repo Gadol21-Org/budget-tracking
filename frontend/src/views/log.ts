@@ -76,6 +76,9 @@ export function logLines(e: LogEntry): HTMLElement[] {
   return [...values(e.old), ...values(e.new)];
 }
 
+/** The display name given to an email, else the email itself. */
+export const userLabel = (email: string) => state.logUsers.find((u) => u.email === email)?.name || email;
+
 export function logEntryRow(e: LogEntry): HTMLElement {
   const [ico, label] = LOG_KINDS[e.kind] ?? ["•", e.kind];
   const snap = (e.new ?? e.old) as Record<string, unknown> | null;
@@ -89,6 +92,7 @@ export function logEntryRow(e: LogEntry): HTMLElement {
       "div",
       { className: "grow" },
       el("div", { className: "logtitle" }, label, what ? el("span", { className: "muted", textContent: ` · ${what}` }) : null),
+      e.user_email ? el("div", { className: "logline muted", textContent: `👤 ${userLabel(e.user_email)}` }) : null,
       ...logLines(e),
     ),
     el("span", { className: "muted logtime", textContent: time }),
@@ -132,6 +136,7 @@ export function logView(): HTMLElement {
 }
 
 export async function openLog() {
+  state.logUsers = await api.logUsers().catch(() => []);
   state.log = await api.log(undefined, LOG_PAGE);
   state.logMore = state.log.length === LOG_PAGE;
   go("log");

@@ -150,6 +150,14 @@ export interface LogEntry {
   entity_id: number | null;
   old: Record<string, unknown> | null;
   new: Record<string, unknown> | null;
+  /** Who made the change (Cloudflare Access email); null for older entries or when the header was absent. */
+  user_email?: string | null;
+}
+
+/** An email that made a recorded change, with the display name given to it ("" if none). */
+export interface LogUser {
+  email: string;
+  name: string;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -162,6 +170,8 @@ export const api = {
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>
     request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),
+  logUsers: () => request<LogUser[]>("/api/log/users"),
+  setLogUserName: (email: string, name: string) => request<void>("/api/log/users", { method: "PUT", body: JSON.stringify({ email, name }) }),
   transactions: () => request<Transaction[]>("/api/transactions"),
   categories: () => request<Category[]>("/api/categories"),
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),

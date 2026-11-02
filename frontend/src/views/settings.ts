@@ -3,6 +3,7 @@ import { api } from "../api";
 import { load } from "../sync";
 import { businessesLinkCard, categoriesLinkCard, currenciesLinkCard } from "./categories";
 import { openLog } from "./log";
+import { openPeople } from "./people";
 
 export function settingsView(): HTMLElement {
   const out = el("div", { className: "note muted" });
@@ -42,6 +43,7 @@ export function settingsView(): HTMLElement {
     businessesLinkCard(),
     currenciesLinkCard(),
     historyCard(),
+    peopleLinkCard(),
   );
 }
 
@@ -53,6 +55,18 @@ export function historyCard(): HTMLElement {
     { className: "card" },
     el("h2", { textContent: "היסטוריית שינויים" }),
     el("p", { className: "muted", textContent: "כל הוספה, עריכה ומחיקה של תנועות, קטגוריות והוצאות חוזרות, עם הערכים לפני ואחרי. נשמרת שנה אחת." }),
+    el("div", { className: "actions", style: "justify-content:flex-start" }, open),
+  );
+}
+
+export function peopleLinkCard(): HTMLElement {
+  const open = el("button", { className: "btn", textContent: "ניהול שמות" });
+  open.onclick = () => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"));
+  return el(
+    "div",
+    { className: "card" },
+    el("h2", { textContent: "שמות משתמשים" }),
+    el("p", { className: "muted", textContent: "מי ביצע כל שינוי נרשם בהיסטוריה לפי כתובת האימייל. אפשר לתת לכל כתובת שם תצוגה." }),
     el("div", { className: "actions", style: "justify-content:flex-start" }, open),
   );
 }
