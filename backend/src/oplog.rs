@@ -52,6 +52,8 @@ pub struct NewLogEntry {
     pub entity_id: Option<i64>,
     pub old: Option<Value>,
     pub new: Option<Value>,
+    /// Who made the change (Cloudflare Access email), when known.
+    pub user_email: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -62,6 +64,23 @@ pub struct LogEntry {
     pub entity_id: Option<i64>,
     pub old: Option<Value>,
     pub new: Option<Value>,
+    /// Who made the change; `None` for older entries, background work, or no Access header.
+    pub user_email: Option<String>,
+}
+
+tokio::task_local! {
+    /// The signed-in user of the request being served, set by the HTTP layer.
+    pub static ACTOR: Option<String>;
+}
+
+/// The email Cloudflare Access put on the request, if any (never assumed present).
+pub fn actor_from_header(v: Option<&axum::http::HeaderValue>) -> Option<String> {
+    let s = v?.to_str().ok()?.trim().to_lowercase();
+    (s.contains('@') && s.len() <= 254).then_some(s)
+}
+
+fn current_actor() -> Option<String> {
+    ACTOR.try_with(|a| a.clone()).ok().flatten()
 }
 
 pub fn now() -> String {
@@ -94,6 +113,7 @@ pub async fn record(
         entity_id,
         old,
         new,
+        user_email: current_actor(),
     };
     if let Err(e) = db.log_append(&entry).await {
         tracing::warn!("writing the change log failed: {e}");
@@ -594,6 +614,9 @@ impl Storage for Logged {
     async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
         self.0.prune_log(before).await
     }
+    async fn log_users(&self) -> anyhow::Result<Vec<String>> {
+        self.0.log_users().await
+    }
 }
 
 #[cfg(test)]
@@ -790,6 +813,7 @@ mod tests {
     async fn pruning_drops_only_entries_older_than_a_year() {
         let db = db();
         let at = |s: &str| NewLogEntry {
+            user_email: None,
             at: s.into(),
             kind: "transaction_create".into(),
             entity_id: None,

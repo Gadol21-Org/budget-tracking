@@ -67,7 +67,8 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
              kind TEXT NOT NULL,
              entity_id INTEGER,
              old_value TEXT,
-             new_value TEXT
+             new_value TEXT,
+             user_email TEXT                     -- Cloudflare Access email; NULL if unknown
          );
          -- Businesses (sub-businesses of one whole business) and which transactions and
          -- categories count in them. Local only: nothing here is mirrored to Paamonim.
@@ -169,6 +170,12 @@ pub fn open(path: &str) -> anyhow::Result<Connection> {
             "ALTER TABLE recurring ADD COLUMN currency TEXT;
              ALTER TABLE recurring ADD COLUMN orig_minor INTEGER;",
         )?;
+    }
+    let has_log_user = conn
+        .prepare("SELECT 1 FROM pragma_table_info('change_log') WHERE name = 'user_email'")?
+        .exists([])?;
+    if !has_log_user {
+        conn.execute("ALTER TABLE change_log ADD COLUMN user_email TEXT", [])?;
     }
     Ok(conn)
 }

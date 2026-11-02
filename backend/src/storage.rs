@@ -733,6 +733,10 @@ pub trait Storage: Send + Sync {
     ) -> anyhow::Result<Vec<LogEntry>> {
         Ok(Vec::new())
     }
+    /// Distinct emails that appear on recorded changes, sorted.
+    async fn log_users(&self) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
     /// Delete entries stamped before `before` (UTC, `YYYY-MM-DDTHH:MM:SSZ`); returns how many.
     async fn prune_log(&self, _before: &str) -> anyhow::Result<usize> {
         Ok(0)
@@ -1794,14 +1798,15 @@ impl Storage for SqliteStorage {
 
     async fn log_append(&self, e: &NewLogEntry) -> anyhow::Result<()> {
         self.0.lock().unwrap().execute(
-            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value, user_email)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 e.at,
                 e.kind,
                 e.entity_id,
                 e.old.as_ref().map(|v| v.to_string()),
-                e.new.as_ref().map(|v| v.to_string())
+                e.new.as_ref().map(|v| v.to_string()),
+                e.user_email
             ],
         )?;
         Ok(())
@@ -1814,7 +1819,7 @@ impl Storage for SqliteStorage {
     ) -> anyhow::Result<Vec<LogEntry>> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, at, kind, entity_id, old_value, new_value FROM change_log
+            "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log
              WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt
@@ -1826,9 +1831,21 @@ impl Storage for SqliteStorage {
                     entity_id: r.get(3)?,
                     old: r.get::<_, Option<String>>(4)?.and_then(|s| s.parse().ok()),
                     new: r.get::<_, Option<String>>(5)?.and_then(|s| s.parse().ok()),
+                    user_email: r.get(6)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    async fn log_users(&self) -> anyhow::Result<Vec<String>> {
+        let conn = self.0.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT user_email FROM change_log WHERE user_email IS NOT NULL ORDER BY user_email",
+        )?;
+        let rows = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
         Ok(rows)
     }
 

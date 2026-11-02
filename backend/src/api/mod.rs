@@ -4,6 +4,7 @@ mod error;
 mod mirroring;
 mod repeating;
 mod transactions;
+mod users;
 
 pub(crate) use mirroring::{mirroring_enabled, run_mirror};
 
@@ -156,6 +157,10 @@ pub(crate) fn router(db: Db) -> Router {
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(
+            "/api/log/users",
+            get(users::list_users).put(users::set_user_name),
+        )
+        .route(
             "/api/import/paamonim",
             axum::routing::post(mirroring::import_paamonim),
         )
@@ -171,4 +176,5 @@ pub(crate) fn router(db: Db) -> Router {
         )
         .with_state(db)
         .fallback(assets::static_handler)
+        .layer(axum::middleware::from_fn(users::with_actor))
 }

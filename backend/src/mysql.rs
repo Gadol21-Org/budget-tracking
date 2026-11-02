@@ -93,6 +93,7 @@ const SCHEMA: [&str; 15] = [
          entity_id BIGINT NULL,
          old_value TEXT NULL,
          new_value TEXT NULL,
+         user_email VARCHAR(254) NULL,
          INDEX idx_change_log_at (at)
      )",
     "CREATE TABLE IF NOT EXISTS businesses (
@@ -193,6 +194,10 @@ impl MySqlStorage {
             .execute(&pool)
             .await;
         let _ = sqlx::query("ALTER TABLE recurring ADD COLUMN orig_minor BIGINT NULL")
+            .execute(&pool)
+            .await;
+        // Log entries written before changes recorded who made them; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE change_log ADD COLUMN user_email VARCHAR(254) NULL")
             .execute(&pool)
             .await;
         Ok(Self { pool })
@@ -1349,14 +1354,15 @@ impl Storage for MySqlStorage {
 
     async fn log_append(&self, e: &NewLogEntry) -> Result<()> {
         sqlx::query(
-            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO change_log (at, kind, entity_id, old_value, new_value, user_email)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&e.at)
         .bind(&e.kind)
         .bind(e.entity_id)
         .bind(e.old.as_ref().map(|v| v.to_string()))
         .bind(e.new.as_ref().map(|v| v.to_string()))
+        .bind(&e.user_email)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1364,7 +1370,7 @@ impl Storage for MySqlStorage {
 
     async fn list_log(&self, limit: usize, before_id: Option<i64>) -> Result<Vec<LogEntry>> {
         let rows = sqlx::query(
-            "SELECT id, at, kind, entity_id, old_value, new_value FROM change_log
+            "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log
              WHERE id < ? ORDER BY id DESC LIMIT ?",
         )
         .bind(before_id.unwrap_or(i64::MAX))
@@ -1384,9 +1390,19 @@ impl Storage for MySqlStorage {
                     entity_id: r.try_get("entity_id")?,
                     old: json("old_value")?,
                     new: json("new_value")?,
+                    user_email: r.try_get("user_email")?,
                 })
             })
             .collect()
+    }
+
+    async fn log_users(&self) -> Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT user_email FROM change_log WHERE user_email IS NOT NULL ORDER BY user_email",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     async fn prune_log(&self, before: &str) -> Result<usize> {
