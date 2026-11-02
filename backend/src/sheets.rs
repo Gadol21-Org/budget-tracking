@@ -246,7 +246,15 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
     }
 
     let json_cell = |v: Option<Value>| v.map(|v| v.to_string()).unwrap_or_default();
-    let mut log = header(&["Id", "At (UTC)", "Kind", "Entity id", "Old", "New"]);
+    let mut log = header(&[
+        "Id",
+        "At (UTC)",
+        "Kind",
+        "Entity id",
+        "Old",
+        "New",
+        "User email",
+    ]);
     for e in storage.list_log(1_000_000, None).await? {
         log.push(vec![
             json!(e.id),
@@ -255,7 +263,20 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
             opt(e.entity_id),
             json_cell(e.old).into(),
             json_cell(e.new).into(),
+            opt(e.user_email),
         ]);
+    }
+
+    // Display names given to the emails that made changes (see api/users.rs), kept apart from
+    // the change log so names are not repeated on every row.
+    let display_names: std::collections::BTreeMap<String, String> = storage
+        .get_setting("user_display_names")
+        .await?
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut users = header(&["Email", "Display name"]);
+    for (email, name) in display_names {
+        users.push(vec![email.into(), name.into()]);
     }
 
     let mut foreign = header(&[
@@ -294,6 +315,7 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         ("Recurring", rec),
         ("Recurring settled", settled),
         ("Change log", log),
+        ("Users", users),
         ("Foreign currency", foreign),
         ("Paamonim pending deletes", deletes),
         ("Paamonim meta", meta),
