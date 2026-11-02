@@ -153,8 +153,9 @@ export function neededFrom(): string {
 /** Called by every render: fetch older months in the background when the screen reaches before the loaded ones. */
 export function ensureHistory() {
   // Fetch whole years at a time, so paging back month by month costs one request a year.
-  const from = `${neededFrom().slice(0, 4)}-01-01`;
-  if (state.loadedFrom === undefined || from >= state.loadedFrom || extending || historyFailed) return;
+  const needed = neededFrom();
+  if (state.loadedFrom === undefined || needed >= state.loadedFrom || extending || historyFailed) return;
+  const from = `${needed.slice(0, 4)}-01-01`;
   state.loadingOlder = true;
   void loadHistory(from);
 }
