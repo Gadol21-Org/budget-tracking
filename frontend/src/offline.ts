@@ -1,4 +1,4 @@
-import type { Category, Fx, Occurrence, RecurringSegment, Transaction, TxInput } from "./api";
+import type { BusinessData, Category, Fx, Occurrence, RecurringSegment, Transaction, TxInput } from "./api";
 
 /** Offline support: the last data fetched from the server, and new transactions waiting to be sent.
  * Both live in IndexedDB (with persistent storage requested, so the browser does not evict them). */
@@ -11,6 +11,8 @@ export interface Snapshot {
   mirror: boolean;
   /** Foreign-currency details of the transactions. */
   fx?: Fx[];
+  /** The businesses and what is linked to them (missing in copies saved before businesses were kept). */
+  biz?: BusinessData;
   /** The transactions are those dated this day or later (YYYY-MM-DD). Missing: all of them. */
   from?: string;
   savedAt: number;

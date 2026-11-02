@@ -26,12 +26,12 @@ export async function flushQueue() {
   }
 }
 
-export type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx">;
+export type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx" | "biz">;
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export async function fetchAll(from?: string): Promise<ServerData & { log?: LogEntry[] }> {
-  const [cats, txs, recurring, occurrences, log, mirror, fx] = await Promise.all([
+  const [cats, txs, recurring, occurrences, log, mirror, fx, biz] = await Promise.all([
     api.categories(),
     api.transactions(from || undefined),
     api.recurring(),
@@ -39,8 +39,10 @@ export async function fetchAll(from?: string): Promise<ServerData & { log?: LogE
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
     api.mirrorStatus().catch(() => ({ enabled: false })),
     api.foreign().catch((e) => (isNetworkError(e) ? Promise.reject(e) : undefined)),
+    // Businesses are optional: a failure leaves the last ones in place.
+    api.businesses().catch(() => undefined),
   ]);
-  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx };
+  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx, biz };
 }
 
 export async function load() {
@@ -66,12 +68,6 @@ export async function load() {
     state.offline = true;
   }
   state.loadedFrom = loadedFrom;
-  // Businesses are optional: a failure (or being offline) leaves the last ones in place.
-  try {
-    state.biz = toBizData(await api.businesses());
-  } catch {
-    /* keep what we had */
-  }
   await loadEnabledCurrencies();
   await apply(data);
 }
@@ -88,6 +84,8 @@ export async function showCached(): Promise<boolean> {
 async function apply(data: ServerData & { log?: LogEntry[] }) {
   const { cats, recurring, occurrences, log } = data;
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
+  // Businesses come with the offline copy too, so the business card shows at once; a missing one keeps what we had.
+  if (data.biz) state.biz = toBizData(data.biz);
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();
   // A queued foreign line has no shekel amount yet: the server converts it when it is sent.
