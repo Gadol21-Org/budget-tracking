@@ -46,7 +46,7 @@ export async function fetchAll(from?: string): Promise<ServerData & { log?: LogE
 export async function load() {
   await flushQueue();
   let data: ServerData & { log?: LogEntry[] };
-  // The window opens on the last 24 months; older months already fetched for the screen shown stay loaded.
+  // The window opens on the last 3 months; older months already fetched for the screen shown stay loaded.
   const winFrom = windowStart(todayIso());
   const from = state.loadedFrom !== undefined && state.loadedFrom < winFrom ? state.loadedFrom : winFrom;
   let loadedFrom = from;

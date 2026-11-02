@@ -73,9 +73,9 @@ export function render() {
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
   const banner = state.offline ? el("div", { className: "banner", role: "status", textContent: "אין חיבור או שהשרת אינו זמין: מוצגים הנתונים האחרונים. תנועות חדשות יישמרו וישלחו כשהשרת יחזור." }) : null;
-  // Offline, only the last two years are on the device: say so instead of showing an empty period.
+  // Offline, only the last three months are on the device: say so instead of showing an empty period.
   const missing = state.offline && state.loadedFrom !== undefined && neededFrom() < state.loadedFrom;
-  const gap = missing ? el("div", { className: "banner", role: "status", textContent: "חודשים ישנים זמינים רק עם חיבור לשרת. כאן מוצגות רק 24 החודשים האחרונים." }) : null;
+  const gap = missing ? el("div", { className: "banner", role: "status", textContent: "חודשים ישנים זמינים רק עם חיבור לשרת. כאן מוצגים רק 3 החודשים האחרונים." }) : null;
   const older = state.loadingOlder ? el("div", { className: "banner", role: "status", textContent: "טוען חודשים קודמים…" }) : null;
   const main = el("main", {}, banner, gap, older, view);
   main.dataset.view = state.view;

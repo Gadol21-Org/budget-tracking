@@ -56,7 +56,7 @@ export const MONTHS = Array.from({ length: 12 }, (_, i) =>
 );
 
 /** How many months back (including the current one) the app loads on open; older ones are fetched when a screen needs them. */
-export const WINDOW_MONTHS = 24;
+export const WINDOW_MONTHS = 3;
 
 /** First day of the loaded window, for a `today` of YYYY-MM-DD. */
 export const windowStart = (today: string) => `${addMonths(today.slice(0, 7), 1 - WINDOW_MONTHS)}-01`;
