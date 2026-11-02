@@ -76,10 +76,11 @@ export function render() {
   // Offline, only the last three months are on the device: say so instead of showing an empty period.
   const missing = state.offline && state.loadedFrom !== undefined && neededFrom() < state.loadedFrom;
   const gap = missing ? el("div", { className: "banner", role: "status", textContent: "חודשים ישנים זמינים רק עם חיבור לשרת. כאן מוצגים רק 3 החודשים האחרונים." }) : null;
-  const older = state.loadingOlder ? el("div", { className: "banner", role: "status", textContent: "טוען חודשים קודמים…" }) : null;
-  const main = el("main", {}, banner, gap, older, view);
+  // A floating label, not part of the page: nothing moves when it appears or goes.
+  const older = state.loadingOlder ? el("div", { className: "loading-toast", role: "status", textContent: "טוען חודשים קודמים…" }) : null;
+  const main = el("main", {}, banner, gap, view);
   main.dataset.view = state.view;
-  root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);
+  root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab, ...(older ? [older] : []));
   // Transactions open focused on the latest day that actually happened; upcoming days stay reachable above.
   if (entering && state.view === "list") document.getElementById("now-anchor")?.scrollIntoView({ block: "start" });
 }
