@@ -187,7 +187,8 @@ export const api = {
     request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),
   logUsers: () => request<LogUser[]>("/api/log/users"),
   setLogUserName: (email: string, name: string) => request<void>("/api/log/users", { method: "PUT", body: JSON.stringify({ email, name }) }),
-  transactions: () => request<Transaction[]>("/api/transactions"),
+  /** Transactions dated `from` (YYYY-MM-DD) or later; all of them without it. */
+  transactions: (from?: string) => request<Transaction[]>(`/api/transactions${from ? `?from=${from}` : ""}`),
   categories: () => request<Category[]>("/api/categories"),
   monthlyTotals: () => request<MonthlyTotal[]>("/api/monthly-totals"),
   /** Foreign-currency details of transactions (stand-in rates of closed days are replaced first). */

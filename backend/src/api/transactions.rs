@@ -9,11 +9,28 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize)]
+pub(crate) struct ListQuery {
+    /// Only transactions dated this day (YYYY-MM-DD) or later; all of them when absent.
+    from: Option<String>,
+}
+
 pub(crate) async fn list_transactions(
     State(db): State<Db>,
+    Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<Transaction>>, ApiError> {
+    if let Some(from) = &q.from {
+        chrono::NaiveDate::parse_from_str(from, "%Y-%m-%d").map_err(|_| {
+            ApiError::new(StatusCode::BAD_REQUEST, "from must be YYYY-MM-DD".into())
+        })?;
+    }
     settle(&db).await?;
-    db.list_transactions().await.map(Json).map_err(internal)
+    match q.from {
+        Some(from) => db.list_transactions_from(&from).await,
+        None => db.list_transactions().await,
+    }
+    .map(Json)
+    .map_err(internal)
 }
 
 /// A transaction as sent by the app. Shekel entries carry `amount_agorot`. A foreign one

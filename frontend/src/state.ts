@@ -12,6 +12,10 @@ export const state = {
   period: monthOf(new Date().toISOString().slice(0, 10)) as Period,
   /** Stored transactions plus the generated occurrences of repeating ones. */
   txs: [] as Transaction[],
+  /** Stored transactions are loaded from this day (YYYY-MM-DD) on; "" means all of them; undefined before the first load. */
+  loadedFrom: undefined as string | undefined,
+  /** Older months are being fetched because the screen shown reaches before the loaded ones. */
+  loadingOlder: false,
   recurring: [] as RecurringSegment[],
   cats: [] as Category[],
   /** Which side of the summary's category breakdown is shown. */

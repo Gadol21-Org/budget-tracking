@@ -31,7 +31,8 @@ export function openPeriodDialog() {
   const dlg = el("dialog");
   const thisYear = new Date().getFullYear();
   const dataYears = state.txs.map((t) => Number(t.date.slice(0, 4)));
-  const minYear = Math.min(thisYear, ...dataYears);
+  // Older years are not loaded until visited, so the picker always offers a decade back.
+  const minYear = Math.min(thisYear - 10, ...dataYears);
   const maxYear = Math.max(thisYear, ...dataYears);
   const years = Array.from({ length: maxYear - minYear + 1 }, (_, i) => maxYear - i);
   const yearSelect = (value: number) =>

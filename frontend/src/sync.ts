@@ -4,6 +4,7 @@ import { loadEnabledCurrencies } from "./currencies";
 import { api, type Fx, type LogEntry, type Transaction } from "./api";
 import { state } from "./state";
 import { LOG_PAGE } from "./views/log";
+import { addMonths, bounds, windowStart } from "./period";
 import { render } from "./render";
 
 /** States of a line whose change is on its way to Paamonim. */
@@ -27,10 +28,12 @@ export async function flushQueue() {
 
 export type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx">;
 
-export async function fetchAll(): Promise<ServerData & { log?: LogEntry[] }> {
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+export async function fetchAll(from?: string): Promise<ServerData & { log?: LogEntry[] }> {
   const [cats, txs, recurring, occurrences, log, mirror, fx] = await Promise.all([
     api.categories(),
-    api.transactions(),
+    api.transactions(from || undefined),
     api.recurring(),
     api.occurrences(),
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
@@ -43,18 +46,26 @@ export async function fetchAll(): Promise<ServerData & { log?: LogEntry[] }> {
 export async function load() {
   await flushQueue();
   let data: ServerData & { log?: LogEntry[] };
+  // The window opens on the last 24 months; older months already fetched for the screen shown stay loaded.
+  const winFrom = windowStart(todayIso());
+  const from = state.loadedFrom !== undefined && state.loadedFrom < winFrom ? state.loadedFrom : winFrom;
+  let loadedFrom = from;
   try {
-    data = await fetchAll();
+    data = await fetchAll(from);
     state.offline = false;
-    void saveSnapshot({ ...data, savedAt: Date.now() });
+    historyFailed = false;
+    // The offline copy is only the window, replaced whole each time, so it can never drift from the server.
+    void saveSnapshot({ ...data, txs: data.txs.filter((t) => t.date >= winFrom), from: winFrom, savedAt: Date.now() });
     requestPersistence();
   } catch (e) {
     // Offline: show what was last seen (if anything) instead of an error.
     const snap = isNetworkError(e) ? await loadSnapshot() : undefined;
     if (!snap) throw e;
     data = snap;
+    loadedFrom = snap.from ?? "";
     state.offline = true;
   }
+  state.loadedFrom = loadedFrom;
   const { cats, recurring, occurrences, log } = data;
   // Businesses are optional: a failure (or being offline) leaves the last ones in place.
   try {
@@ -99,6 +110,53 @@ export async function load() {
   }));
   state.txs = [...txs, ...generated];
   render();
+}
+
+let historyFailed = false;
+let extending: Promise<void> | undefined;
+
+/** Make sure stored transactions are loaded back to `from` (YYYY-MM-DD), fetching the older months if not. */
+export async function loadHistory(from: string): Promise<void> {
+  while (extending) await extending;
+  if (state.loadedFrom === undefined || from >= state.loadedFrom) return;
+  extending = (async () => {
+    state.loadingOlder = true;
+    try {
+      const older = await api.transactions(from || undefined);
+      // Everything stored we hold is dated after `from`, so the fetched list replaces it.
+      state.txs = [...older, ...state.txs.filter((t) => t.id <= 0 || t.upcoming)];
+      state.loadedFrom = from;
+    } catch {
+      historyFailed = true; // offline or server down: show what we have, no retry loop
+    } finally {
+      state.loadingOlder = false;
+      extending = undefined;
+      render();
+    }
+  })();
+  await extending;
+}
+
+/** The earliest day the screen shown needs: its period, and for the dashboards the months they compare with. */
+export function neededFrom(): string {
+  let from = bounds(state.period).from;
+  if (state.view === "insights" || state.view === "business") {
+    const cmp = state.insights.cmp;
+    // Trends show 12 months; a year earlier is the "same period last year"; an average looks back n periods.
+    const avgBack = state.view === "insights" && cmp.kind === "avg" ? cmp.n * (state.period.kind === "year" ? 12 : 1) : 0;
+    from = `${addMonths(from.slice(0, 7), -12 - avgBack)}-01`;
+    if (state.view === "insights" && cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
+  }
+  return from;
+}
+
+/** Called by every render: fetch older months in the background when the screen reaches before the loaded ones. */
+export function ensureHistory() {
+  // Fetch whole years at a time, so paging back month by month costs one request a year.
+  const from = `${neededFrom().slice(0, 4)}-01-01`;
+  if (state.loadedFrom === undefined || from >= state.loadedFrom || extending || historyFailed) return;
+  state.loadingOlder = true;
+  void loadHistory(from);
 }
 
 /** Note lines that went from in flight to saved (✅ for a moment), and keep checking while any

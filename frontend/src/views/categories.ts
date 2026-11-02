@@ -3,7 +3,7 @@ import { bizName, openCategoryBusinessDialog } from "../business";
 import { api, type Category } from "../api";
 import { state } from "../state";
 import { go, goBack, manageCtx, openDialog } from "../nav";
-import { load } from "../sync";
+import { load, loadHistory } from "../sync";
 import { catPath } from "../selectors";
 import { render } from "../render";
 
@@ -284,8 +284,8 @@ export function categoriesCard(): HTMLElement {
       state.biz.businesses.length > 0 && iconBtn("💼", "עסק של הקטגוריה", () => openCategoryBusinessDialog(manageCtx(), c)),
       !sub && !c.from_paamonim && iconBtn("🔗", "קטגוריה בפעמונים", () => openLinkCategoryDialog(c)),
       !sub && iconBtn("+", "הוספת תת-קטגוריה", () => openAddCategoryDialog(c.is_income, c.id)),
-      sub && iconBtn("⇄", "העברה לקטגוריה אחרת", () => openMoveCategoryDialog(c)),
-      iconBtn("🗑", "מחיקה", () => openDeleteCategoryDialog(c)),
+      sub && iconBtn("⇄", "העברה לקטגוריה אחרת", async () => (await loadHistory(""), openMoveCategoryDialog(c))),
+      iconBtn("🗑", "מחיקה", async () => (await loadHistory(""), openDeleteCategoryDialog(c))),
     );
   const rows = ofKind
     .filter((c) => c.parent_id == null)

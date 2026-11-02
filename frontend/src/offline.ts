@@ -11,6 +11,8 @@ export interface Snapshot {
   mirror: boolean;
   /** Foreign-currency details of the transactions. */
   fx?: Fx[];
+  /** The transactions are those dated this day or later (YYYY-MM-DD). Missing: all of them. */
+  from?: string;
   savedAt: number;
 }
 

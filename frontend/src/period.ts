@@ -55,6 +55,12 @@ export const MONTHS = Array.from({ length: 12 }, (_, i) =>
   new Date(2000, i, 1).toLocaleDateString("he-IL", { month: "long" }),
 );
 
+/** How many months back (including the current one) the app loads on open; older ones are fetched when a screen needs them. */
+export const WINDOW_MONTHS = 24;
+
+/** First day of the loaded window, for a `today` of YYYY-MM-DD. */
+export const windowStart = (today: string) => `${addMonths(today.slice(0, 7), 1 - WINDOW_MONTHS)}-01`;
+
 /** Whole months from `from` to `to` (both YYYY-MM); negative if `to` is earlier. */
 export const monthsBetween = (from: string, to: string) => (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5)) - Number(from.slice(5));
 
