@@ -160,8 +160,23 @@ export interface LogUser {
   name: string;
 }
 
+/** The proxy in front of the app answered instead of the app (bad gateway, tunnel down, ...): same as offline. */
+export class ServerUnavailableError extends TypeError {
+  constructor(status: number) {
+    super(`Server unavailable (${status})`);
+  }
+}
+
+/** 502/503/504 and Cloudflare's 52x come from the proxy, never from this app; an HTML page in place of JSON
+ * is a proxy or login page. A plain 500 is a real app error and is shown as such. */
+export function isGatewayFailure(res: Response): boolean {
+  if ([502, 503, 504].includes(res.status) || (res.status >= 520 && res.status <= 530)) return true;
+  return res.ok && (res.headers.get("content-type") ?? "").includes("text/html");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { cache: "no-store", headers: { "Content-Type": "application/json" }, ...init });
+  if (isGatewayFailure(res)) throw new ServerUnavailableError(res.status);
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? (undefined as T) : res.json();
 }
