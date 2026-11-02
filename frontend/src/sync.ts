@@ -163,7 +163,7 @@ export function neededFrom(): string {
   } else if (state.view === "month") {
     // The summary's category breakdown compares with other periods, and an open category shows 12 months.
     const unit = state.period.kind === "year" ? 12 : 1;
-    const back = cmp.kind === "avg" ? cmp.n * unit : cmp.kind === "yoy" ? 12 : unit;
+    const back = cmp.kind === "avg" ? cmp.n * unit : unit;
     from = `${addMonths(from.slice(0, 7), -(back + (state.insights.cat !== undefined ? 12 : 0)))}-01`;
     if (cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
   }

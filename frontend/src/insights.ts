@@ -8,7 +8,7 @@ import { clickable, el, type Child } from "./ui";
 export type Side = "expense" | "income";
 export type Dash = "overview" | "cats" | "trends" | "changes" | "fixed" | "rhythm";
 /** What the selected period is compared with. */
-export type Cmp = { kind: "prev" } | { kind: "avg"; n: number } | { kind: "yoy" } | { kind: "custom"; period: Period };
+export type Cmp = { kind: "prev" } | { kind: "avg"; n: number } | { kind: "custom"; period: Period };
 /** Which insights screen is open: a dashboard, and inside "cats" optionally a category and a sub-category. */
 export interface InsightsNav {
   dash: Dash;
@@ -58,7 +58,6 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 
 const addDays = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 const daysIn = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 864e5) + 1;
-const yearBack = (iso: string, n: number) => `${Number(iso.slice(0, 4)) - n}${iso.slice(4)}`;
 
 /** The period(s) the selected one is compared with, and how to word it. Several periods are averaged. */
 export function basePeriods(p: Period, c: Cmp): { label: string; periods: Period[] } {
@@ -69,7 +68,6 @@ export function basePeriods(p: Period, c: Cmp): { label: string; periods: Period
       const periods = Array.from({ length: c.n }, (_, i) => shift(p, -(i + 1))!);
       return { label: `מול ממוצע ${c.n} החודשים שלפני`, periods };
     }
-    if (kind === "yoy") return { label: "מול אותו חודש אשתקד", periods: [shift(p, -12)!] };
     return { label: "מול החודש הקודם", periods: [shift(p, -1)!] };
   }
   if (p.kind === "year") {
@@ -79,7 +77,6 @@ export function basePeriods(p: Period, c: Cmp): { label: string; periods: Period
   const len = daysIn(p.from, p.to);
   const before = (k: number): Period => ({ kind: "range", from: addDays(p.from, -len * k), to: addDays(p.from, -len * (k - 1) - 1) });
   if (kind === "avg") return { label: `מול ממוצע ${c.n} הטווחים שלפני`, periods: Array.from({ length: c.n }, (_, i) => before(i + 1)) };
-  if (kind === "yoy") return { label: "מול אותו טווח אשתקד", periods: [{ kind: "range", from: yearBack(p.from, 1), to: yearBack(p.to, 1) }] };
   return { label: "מול הטווח הקודם", periods: [before(1)] };
 }
 
@@ -347,7 +344,6 @@ function openCompareDialog(ctx: Ctx) {
       ["avg6", `ממוצע 6 ה${unit} שלפני`],
       ["avg12", `ממוצע 12 ה${unit} שלפני`],
     ];
-    if (p.kind !== "year") options.push(["yoy", p.kind === "month" ? "אותו חודש אשתקד" : "אותו טווח אשתקד"]);
     if (p.kind !== "range") options.push(["custom", p.kind === "month" ? "חודש אחר…" : "שנה אחרת…"]);
     const sel = el("select", {}, ...options.map(([v, t]) => el("option", { value: v, textContent: t })));
     sel.value = cur.kind === "avg" ? `avg${cur.n}` : cur.kind;
@@ -376,7 +372,7 @@ function openCompareDialog(ctx: Ctx) {
         if (!period) return;
         ctx.setCmp({ kind: "custom", period });
       } else if (v.startsWith("avg")) ctx.setCmp({ kind: "avg", n: Number(v.slice(3)) });
-      else ctx.setCmp({ kind: v as "prev" | "yoy" });
+      else ctx.setCmp({ kind: "prev" });
       close();
     };
     return form;
