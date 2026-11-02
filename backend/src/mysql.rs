@@ -1032,6 +1032,18 @@ impl Storage for MySqlStorage {
         rows.iter().map(tx_from_row).collect()
     }
 
+    async fn list_transactions_from(&self, from: &str) -> Result<Vec<Transaction>> {
+        let rows = sqlx::query(
+            "SELECT id, date, amount_agorot, category_id, payment_method_id, note, sync_state,
+                    recurring_series_id
+             FROM transactions WHERE date >= ? ORDER BY date DESC, id DESC",
+        )
+        .bind(from)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(tx_from_row).collect()
+    }
+
     async fn create_transaction(&self, t: &NewTransaction) -> Result<i64> {
         let res = sqlx::query(
             "INSERT INTO transactions (date, amount_agorot, category_id, payment_method_id, note)

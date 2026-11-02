@@ -10,6 +10,7 @@ import { logView } from "./views/log";
 import { peopleView } from "./views/people";
 import { categoriesView } from "./views/categories";
 import { settingsView } from "./views/settings";
+import { ensureHistory, neededFrom } from "./sync";
 import { openTransactionDialog } from "./dialogs/transaction";
 
 export function nav(): HTMLElement {
@@ -63,6 +64,7 @@ export function businessScreen(): HTMLElement {
 export let renderedView: View | undefined;
 
 export function render() {
+  ensureHistory();
   const view = { month: monthView, list: listView, insights: insightsScreen, log: logView, categories: categoriesView, settings: settingsView, business: businessScreen, businesses: () => businessesView(manageCtx()), currencies: () => currenciesView({ back: () => goBack("settings") }), people: peopleView }[state.view]();
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   const entering = renderedView !== state.view;
@@ -71,9 +73,14 @@ export function render() {
   const fab = el("button", { className: "fab", title: "הוספת תנועה", textContent: "+" });
   fab.onclick = () => openTransactionDialog();
   const banner = state.offline ? el("div", { className: "banner", role: "status", textContent: "אין חיבור או שהשרת אינו זמין: מוצגים הנתונים האחרונים. תנועות חדשות יישמרו וישלחו כשהשרת יחזור." }) : null;
-  const main = el("main", {}, banner, view);
+  // Offline, only the last three months are on the device: say so instead of showing an empty period.
+  const missing = state.offline && state.loadedFrom !== undefined && neededFrom() < state.loadedFrom;
+  const gap = missing ? el("div", { className: "banner", role: "status", textContent: "חודשים ישנים זמינים רק עם חיבור לשרת. כאן מוצגים רק 3 החודשים האחרונים." }) : null;
+  // A floating label, not part of the page: nothing moves when it appears or goes.
+  const older = state.loadingOlder ? el("div", { className: "loading-toast", role: "status", textContent: "טוען חודשים קודמים…" }) : null;
+  const main = el("main", {}, banner, gap, view);
   main.dataset.view = state.view;
-  root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab);
+  root.replaceChildren(el("div", { className: "shell" }, nav(), main), fab, ...(older ? [older] : []));
   // Transactions open focused on the latest day that actually happened; upcoming days stay reachable above.
   if (entering && state.view === "list") document.getElementById("now-anchor")?.scrollIntoView({ block: "start" });
 }

@@ -394,6 +394,13 @@ pub trait Storage: Send + Sync {
     /// Idempotent: lookups are upserted by key, transactions skipped if their line id exists.
     async fn import_paamonim(&self, batch: &ImportBatch) -> anyhow::Result<ImportSummary>;
     async fn list_transactions(&self) -> anyhow::Result<Vec<Transaction>>;
+    /// Transactions dated `from` (YYYY-MM-DD) or later, newest first. Backends should filter
+    /// in the database; this fallback filters after reading everything.
+    async fn list_transactions_from(&self, from: &str) -> anyhow::Result<Vec<Transaction>> {
+        let mut all = self.list_transactions().await?;
+        all.retain(|t| t.date.as_str() >= from);
+        Ok(all)
+    }
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64>;
     async fn delete_transaction(&self, id: i64) -> anyhow::Result<()>;
     /// Local edit. A line already in Paamonim is flagged `modified` so mirroring replaces it.
@@ -818,6 +825,28 @@ mod tests {
         let l = s.business_links().await.unwrap();
         assert!(l.transactions.is_empty() && l.categories.is_empty());
         assert!(s.list_businesses().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_only_transactions_from_a_date_on() {
+        let s = crate::testdb::fresh().await;
+        for d in ["2024-01-05", "2025-06-30", "2025-07-01", "2026-10-03"] {
+            s.create_transaction(&tx(d, -1000, None)).await.unwrap();
+        }
+        let dates = |v: Vec<Transaction>| v.into_iter().map(|t| t.date).collect::<Vec<_>>();
+        assert_eq!(
+            dates(s.list_transactions_from("2025-07-01").await.unwrap()),
+            ["2026-10-03", "2025-07-01"]
+        );
+        assert_eq!(
+            s.list_transactions_from("2000-01-01").await.unwrap().len(),
+            4
+        );
+        assert!(s
+            .list_transactions_from("2027-01-01")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

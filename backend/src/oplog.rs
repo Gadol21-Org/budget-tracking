@@ -367,6 +367,10 @@ impl Storage for Logged {
         self.0.list_transactions().await
     }
 
+    async fn list_transactions_from(&self, from: &str) -> anyhow::Result<Vec<Transaction>> {
+        self.0.list_transactions_from(from).await
+    }
+
     async fn create_transaction(&self, t: &NewTransaction) -> anyhow::Result<i64> {
         let id = self.0.create_transaction(t).await?;
         if let Some(n) = self.names().await {
