@@ -292,7 +292,7 @@ form.add label[hidden] { display: none; }
   background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--brand); border-radius: var(--radius);
   padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 45;
 }
-.update-banner button { background: var(--brand); color: var(--brand-contrast); border: 0; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 600; }
+.update-banner button { background: var(--brand); color: var(--brand-contrast); border: 0; border-radius: 999px; padding: 8px 18px; font: inherit; font-weight: 600; }
 
 /* "Loading earlier months": floats over the screen (above the nav bar, clear of the month title) so the content does not jump; fades in only if the fetch takes a moment. */
 .loading-toast {
