@@ -409,3 +409,4 @@ dialog { overscroll-behavior: contain; }
 .donutlegend .lrow.sel { font-weight: 700; background: color-mix(in srgb, var(--brand) 10%, transparent); border-radius: 6px; }
 /* While one slice is picked, the other legend lines fade with their slices. */
 .donutlegend .lrow.dim { opacity: .45; }
+.filterbar .crumbs { margin-bottom: 0; }

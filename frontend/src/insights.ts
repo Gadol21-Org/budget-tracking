@@ -589,6 +589,13 @@ function crumbs(ctx: Ctx, ...parts: { text: string; to?: Partial<InsightsNav> }[
   return el("div", { className: "crumbs" }, ...nodes);
 }
 
+/** The breadcrumb of an open category (or sub-category), shown in the summary's top bar. */
+export function drillCrumbs(ctx: Ctx): HTMLElement {
+  const id = ctx.ins.cat!, sub = ctx.ins.sub;
+  const root = { text: `${SIDES[sideOf(ctx)].title} לפי קטגוריה`, to: { cat: undefined, sub: undefined } };
+  return sub === undefined ? crumbs(ctx, root, { text: catName(ctx, id) }) : crumbs(ctx, root, { text: catName(ctx, id), to: { cat: id, sub: undefined } }, { text: catName(ctx, sub) });
+}
+
 /** The monthly chart of one category or sub-category. */
 function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string): { node: HTMLElement; avg: number } {
   const months = monthsEnding(ctx.period);
@@ -636,7 +643,6 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   return el(
     "div",
     {},
-    crumbs(ctx, { text: `${SIDES[side].title} לפי קטגוריה`, to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id) }),
     el(
       "div",
       { className: "kpis" },
@@ -669,7 +675,6 @@ function subDetail(ctx: Ctx): HTMLElement {
   return el(
     "div",
     {},
-    crumbs(ctx, { text: `${SIDES[side].title} לפי קטגוריה`, to: { cat: undefined, sub: undefined } }, { text: catName(ctx, id), to: { cat: id, sub: undefined } }, { text: catName(ctx, sub) }),
     el(
       "div",
       { className: "kpis" },
