@@ -285,7 +285,7 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
 function donut(parts: { value: number; color: string }[], caption: { title: string; total: string }, sel: number | null = null, tip = ""): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
   const R = 56, c = 70, cy = 78;
-  const gap = 1.6, rr = 2.5, e = gap / 2 + rr;
+  const gap = 1.6, rr = 2.5, e = gap / 2 + rr, seamW = 1;
   const pt = (a: number, rad: number) => `${(c + rad * Math.cos(a)).toFixed(2)},${(cy + rad * Math.sin(a)).toFixed(2)}`;
   let a0 = -Math.PI / 2;
   let paths = "";
@@ -310,7 +310,14 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
       // Slices too thin (or too big) to round: a plain wedge, parted from its neighbours by a clean line drawn on top.
       const big = a1 - a0 > Math.PI ? 1 : 0;
       paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}"/>`;
-      seams += `<path d="M${c},${cy} L${pt(a0, R + 1)} M${c},${cy} L${pt(a1, R + 1)}" stroke="var(--surface)" stroke-width="${gap}" fill="none" style="pointer-events:none"/>`;
+      // A seam is never wider than a quarter of the thinner neighbour at the rim, so slivers keep their colour.
+      const spans = parts.map((q) => (q.value > 0 ? Math.min(0.9999, q.value / total) * 2 * Math.PI : 0));
+      const n = parts.length, own = a1 - a0;
+      const seam = (ang: number, other: number) => {
+        const w = Math.min(seamW, 0.25 * R * Math.min(own, other > 0 ? other : own));
+        return `<path d="M${c},${cy} L${pt(ang, R + 1)}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" fill="none" style="pointer-events:none"/>`;
+      };
+      seams += seam(a0, spans[(i + n - 1) % n]) + seam(a1, spans[(i + 1) % n]);
     }
     if (on && share >= 0.07) labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
     if (i === sel && tip) {
