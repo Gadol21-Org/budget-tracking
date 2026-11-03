@@ -1,10 +1,11 @@
 import { clickable, dateField, el } from "../ui";
 import { MONTHS, shift, title as periodTitle, type Period } from "../period";
 import { businessOf, summaryFigures } from "../business";
-import { go, trackDialog } from "../nav";
+import { go, goBack, trackDialog } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { summaryCategories } from "../insights";
+import { categoryName } from "../categories";
 import { inPeriod, money } from "../selectors";
 
 export function monthBar(): HTMLElement {
@@ -119,6 +120,16 @@ export function businessCard(): HTMLElement | null {
   return clickable(card, open);
 }
 
+/** The top bar of a category drill-down: back to the level above (the summary, or the category when a sub-category is open). */
+function drillBackBar(): HTMLElement {
+  const sub = state.insights.sub !== undefined;
+  const label = sub ? categoryName(state.cats, state.insights.cat ?? null) : "סיכום";
+  const back = el("button", { className: "btn", textContent: `→ ${label}`, title: sub ? "חזרה לקטגוריה" : "חזרה לסיכום" });
+  back.onclick = () => goBack("month");
+  const name = categoryName(state.cats, (sub ? state.insights.sub : state.insights.cat) ?? null);
+  return el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, el("div", { className: "name", textContent: name })));
+}
+
 export function monthView(): HTMLElement {
   const txs = inPeriod();
   const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
@@ -132,7 +143,7 @@ export function monthView(): HTMLElement {
   // The category breakdown (and the drill-down into a category) comes from the insights code; the cards above choose its side.
   if (state.insights.cat !== undefined) state.kind = state.insights.side ?? state.kind;
   else state.insights.side = state.kind;
-  if (state.insights.cat !== undefined) return el("div", {}, monthBar(), summaryCategories(insightsCtx()));
+  if (state.insights.cat !== undefined) return el("div", {}, drillBackBar(), monthBar(), summaryCategories(insightsCtx()));
 
   return el(
     "div",
