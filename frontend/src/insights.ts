@@ -277,10 +277,10 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-/** The donut as SVG. The slice `sel` is pulled out a little and the centre shows its name and amount instead of the total. */
+/** The donut as SVG. The slice `sel` grows outward a little (the others stay put) and the centre shows its name and amount instead of the total. */
 function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות", sel: number | null = null): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
-  const R = 56, r = 36, c = 70, pull = 6;
+  const R = 56, r = 36, c = 70, grow = 7;
   let a0 = -Math.PI / 2;
   let paths = "";
   parts.forEach((p, i) => {
@@ -288,9 +288,8 @@ function donut(parts: { value: number; color: string }[], center: string, label 
     const a1 = a0 + Math.min(0.9999, p.value / total) * 2 * Math.PI;
     const big = a1 - a0 > Math.PI ? 1 : 0;
     const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${c + rad * Math.sin(a)}`;
-    const mid = (a0 + a1) / 2;
-    const out = i === sel ? ` transform="translate(${(pull * Math.cos(mid)).toFixed(2)} ${(pull * Math.sin(mid)).toFixed(2)})"` : "";
-    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${p.color}"${out}/>`;
+    const out = i === sel ? R + grow : R;
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, out)} A${out},${out} 0 ${big} 1 ${pt(a1, out)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${p.color}"/>`;
     a0 = a1;
   });
   const name = label.length > 14 ? `${label.slice(0, 13)}…` : label;
