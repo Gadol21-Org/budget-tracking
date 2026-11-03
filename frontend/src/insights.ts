@@ -277,10 +277,10 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-/** The donut as SVG. The slice `sel` grows outward a little (the others stay put) and the centre shows its name and amount instead of the total. */
+/** The donut as SVG. While a slice `sel` is picked, the others turn grey (nothing moves) and the centre shows its name and amount instead of the total. */
 function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות", sel: number | null = null): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
-  const R = 56, r = 36, c = 70, grow = 7;
+  const R = 56, r = 36, c = 70;
   let a0 = -Math.PI / 2;
   let paths = "";
   parts.forEach((p, i) => {
@@ -288,8 +288,8 @@ function donut(parts: { value: number; color: string }[], center: string, label 
     const a1 = a0 + Math.min(0.9999, p.value / total) * 2 * Math.PI;
     const big = a1 - a0 > Math.PI ? 1 : 0;
     const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${c + rad * Math.sin(a)}`;
-    const out = i === sel ? R + grow : R;
-    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, out)} A${out},${out} 0 ${big} 1 ${pt(a1, out)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${p.color}"/>`;
+    const fill = sel == null || i === sel ? p.color : "#d3d8df";
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${fill}" stroke="${fill}" stroke-width="0.6"/>`;
     a0 = a1;
   });
   const name = label.length > 14 ? `${label.slice(0, 13)}…` : label;
@@ -470,7 +470,7 @@ function legendRow(color: string, name: string, value: number, total: number, on
 }
 
 /**
- * A card with a donut and its legend. Tapping a slice or a legend line pulls that slice out and shows its name and
+ * A card with a donut and its legend. Tapping a slice or a legend line greys out the other slices and shows its name and
  * amount in the middle; tapping it again puts it back.
  */
 function donutCard(items: { name: string; value: number; color: string }[], total: number, title: string): HTMLElement {
@@ -479,7 +479,10 @@ function donutCard(items: { name: string; value: number; color: string }[], tota
   const lines = items.map((x, i) => legendRow(x.color, x.name, x.value, total, () => pick(i)));
   const draw = () => {
     box.innerHTML = donut(items, sel == null ? formatShekelsWhole(total) : formatShekelsWhole(items[sel].value), sel == null ? title : items[sel].name, sel);
-    lines.forEach((l, i) => l.classList.toggle("sel", i === sel));
+    lines.forEach((l, i) => {
+      l.classList.toggle("sel", i === sel);
+      l.classList.toggle("dim", sel != null && i !== sel);
+    });
   };
   const pick = (i: number) => {
     sel = sel === i ? null : i;
