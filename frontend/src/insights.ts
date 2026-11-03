@@ -277,20 +277,23 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות"): string {
+/** The donut as SVG. While a slice `sel` is picked, the others turn grey (nothing moves) and the centre shows its name and amount instead of the total. */
+function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות", sel: number | null = null): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
   const R = 56, r = 36, c = 70;
   let a0 = -Math.PI / 2;
   let paths = "";
-  for (const p of parts) {
-    if (p.value <= 0) continue;
+  parts.forEach((p, i) => {
+    if (p.value <= 0) return;
     const a1 = a0 + Math.min(0.9999, p.value / total) * 2 * Math.PI;
     const big = a1 - a0 > Math.PI ? 1 : 0;
     const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${c + rad * Math.sin(a)}`;
-    paths += `<path d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${p.color}"/>`;
+    const fill = sel == null || i === sel ? p.color : "#d3d8df";
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${fill}" stroke="${fill}" stroke-width="0.6"/>`;
     a0 = a1;
-  }
-  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(label)}</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
+  });
+  const name = label.length > 14 ? `${label.slice(0, 13)}…` : label;
+  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(name)}</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
@@ -466,6 +469,33 @@ function legendRow(color: string, name: string, value: number, total: number, on
   return onTap ? clickable(row, onTap) : row;
 }
 
+/**
+ * A card with a donut and its legend. Tapping a slice or a legend line greys out the other slices and shows its name and
+ * amount in the middle; tapping it again puts it back.
+ */
+function donutCard(items: { name: string; value: number; color: string }[], total: number, title: string): HTMLElement {
+  let sel: number | null = null;
+  const box = svgBox("");
+  const lines = items.map((x, i) => legendRow(x.color, x.name, x.value, total, () => pick(i)));
+  const draw = () => {
+    box.innerHTML = donut(items, sel == null ? formatShekelsWhole(total) : formatShekelsWhole(items[sel].value), sel == null ? title : items[sel].name, sel);
+    lines.forEach((l, i) => {
+      l.classList.toggle("sel", i === sel);
+      l.classList.toggle("dim", sel != null && i !== sel);
+    });
+  };
+  const pick = (i: number) => {
+    sel = sel === i ? null : i;
+    draw();
+  };
+  box.addEventListener("click", (e) => {
+    const hit = (e.target as Element).closest("[data-i]");
+    if (hit) pick(Number((hit as HTMLElement).dataset.i));
+  });
+  draw();
+  return el("div", { className: "card donutcard" }, box, el("div", { className: "donutlegend tbl" }, ...lines));
+}
+
 /** The donut and the category list of one side; `heading` replaces the default hint above the list. */
 function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const side = sideOf(ctx), S = SIDES[side];
@@ -473,15 +503,13 @@ function catsList(ctx: Ctx, heading?: HTMLElement): HTMLElement {
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p, side));
   const rows = [...cur.groups.entries()].sort((a, b) => b[1].total - a[1].total);
   const max = rows[0]?.[1].total ?? 1;
-  const parts = rows.map(([id, g]) => ({ value: g.total, color: catColor(ctx, id) }));
-  const legend = el("div", { className: "donutlegend tbl" }, ...rows.map(([id, g]) => legendRow(catColor(ctx, id), catName(ctx, id), g.total, cur.sideTotal)));
   if (rows.length === 0) return el("div", {}, heading ?? null, el("div", { className: "empty", textContent: S.empty }));
   return el(
     "div",
     { className: "catsgrid" },
     // On the summary the heading (with the comparison chip) leads the section; in the old tab it sat between donut and list.
     heading ?? null,
-    el("div", { className: "card donutcard" }, svgBox(donut(parts, formatShekelsWhole(cur.sideTotal), S.title)), legend),
+    donutCard(rows.map(([id, g]) => ({ name: catName(ctx, id), value: g.total, color: catColor(ctx, id) })), cur.sideTotal, S.title),
     heading ? null : el("h2", { textContent: "הקשה על קטגוריה פותחת אותה" }),
     el(
       "div",
@@ -576,15 +604,8 @@ function catDetail(ctx: Ctx, baseLabel: string): HTMLElement {
   const listBtn = el("button", { type: "button", className: "btn", textContent: `הצגת התנועות של ${catName(ctx, id)} ‹` });
   listBtn.onclick = () => id != null && ctx.openList(id);
   // Pie of the sub-categories (what is booked on the category itself shows as a grey slice).
-  const slices = [...kids.map(([k, v], i) => ({ name: catName(ctx, k), value: v, color: colorAt(i), open: () => ctx.navigate({ dash: "cats", cat: id, sub: k }, "push") })), ...(g.direct > 0 && kids.length > 0 ? [{ name: "ללא תת-קטגוריה", value: g.direct, color: OTHER_COLOR, open: undefined as (() => void) | undefined }] : [])];
-  const pie = kids.length
-    ? el(
-        "div",
-        { className: "card donutcard" },
-        svgBox(donut(slices.map((x) => ({ value: x.value, color: x.color })), formatShekelsWhole(g.total), S.title)),
-        el("div", { className: "donutlegend tbl" }, ...slices.map((x) => legendRow(x.color, x.name, x.value, g.total, x.open))),
-      )
-    : null;
+  const slices = [...kids.map(([k, v], i) => ({ name: catName(ctx, k), value: v, color: colorAt(i) })), ...(g.direct > 0 && kids.length > 0 ? [{ name: "ללא תת-קטגוריה", value: g.direct, color: OTHER_COLOR }] : [])];
+  const pie = kids.length ? donutCard(slices, g.total, S.title) : null;
   return el(
     "div",
     {},
