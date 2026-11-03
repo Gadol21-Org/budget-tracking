@@ -321,8 +321,11 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
       const spans = parts.map((q) => (q.value > 0 ? Math.min(0.9999, q.value / total) * 2 * Math.PI : 0));
       const n = parts.length, own = a1 - a0;
       const seam = (ang: number, other: number) => {
-        const w = Math.min(seamW, 0.25 * R * Math.min(own, other > 0 ? other : own));
-        return `<path d="M${c},${cy} L${pt(ang, R + 1)}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" fill="none" style="pointer-events:none"/>`;
+        const m = Math.min(own, other > 0 ? other : own);
+        const w = Math.min(seamW, 0.25 * R * m);
+        // Close to the centre a sliver is narrower than the seam: start the seam where it still takes at most half the sliver.
+        const r0 = Math.min(R, w / m);
+        return `<path d="M${(c + r0 * Math.cos(ang)).toFixed(2)},${(cy + r0 * Math.sin(ang)).toFixed(2)} L${pt(ang, R + 1)}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" fill="none" style="pointer-events:none"/>`;
       };
       seams += seam(a0, spans[(i + n - 1) % n]) + seam(a1, spans[(i + 1) % n]);
     }
