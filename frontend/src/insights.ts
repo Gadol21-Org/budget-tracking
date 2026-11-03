@@ -308,7 +308,7 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
       return;
     }
     const apex = e / Math.sin(half);
-    if (share < 0.5 && apex < R * 0.45) {
+    if (share < 0.5 && apex < R * 0.1) {
       // Inset the wedge, then stroke it with its own colour: the corners come out rounded and the gaps stay `gap` wide.
       const ro = R - rr, d = Math.asin(e / ro);
       const big = a1 - a0 - 2 * d > Math.PI ? 1 : 0;
