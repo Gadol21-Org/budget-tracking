@@ -277,23 +277,50 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-/** The donut as SVG. While a slice `sel` is picked, the others turn grey (nothing moves) and the centre shows its name and amount instead of the total. */
-function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות", sel: number | null = null): string {
+/**
+ * The chart as SVG, in the style of Canva's pie charts: a solid pie of rounded slices separated by thin gaps, with the
+ * share written on the bigger ones. While a slice `sel` is picked the others turn grey and a dark bubble with `tip`
+ * (its name and amount) points at it. The caption underneath is the title and the total.
+ */
+function donut(parts: { value: number; color: string }[], caption: { title: string; total: string }, sel: number | null = null, tip = ""): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
-  const R = 56, r = 36, c = 70;
+  const R = 56, c = 70, cy = 78;
+  const gap = 1.1;
+  const pt = (a: number, rad: number) => `${(c + rad * Math.cos(a)).toFixed(2)},${(cy + rad * Math.sin(a)).toFixed(2)}`;
   let a0 = -Math.PI / 2;
   let paths = "";
+  let labels = "";
+  let bubble = "";
   parts.forEach((p, i) => {
     if (p.value <= 0) return;
-    const a1 = a0 + Math.min(0.9999, p.value / total) * 2 * Math.PI;
+    const share = p.value / total;
+    const a1 = a0 + Math.min(0.9999, share) * 2 * Math.PI;
+    const mid = (a0 + a1) / 2;
+    const on = sel == null || i === sel;
+    const color = on ? p.color : "#d3d8df";
+    if (share >= 0.9999) {
+      // A single category is the whole pie: a plain circle, with no seam.
+      paths += `<circle data-i="${i}" style="cursor:pointer" cx="${c}" cy="${cy}" r="${R}" fill="${color}"/>`;
+      if (on) labels += `<text x="${c}" y="${cy + 3}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">100%</text>`;
+      a0 = a1;
+      return;
+    }
+    // Plain wedges parted by a surface-coloured outline; on a thin slice the outline shrinks so the slice keeps its colour.
     const big = a1 - a0 > Math.PI ? 1 : 0;
-    const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${c + rad * Math.sin(a)}`;
-    const fill = sel == null || i === sel ? p.color : "#d3d8df";
-    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${fill}" stroke="${fill}" stroke-width="0.6"/>`;
+    const w = Math.min(gap, 0.2 * R * (a1 - a0));
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" stroke-linejoin="round"/>`;
+    if (on && share >= 0.07) labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
+    if (i === sel && tip) {
+      // The bubble sits above the picture, never on it; its tip points down toward the slice. The slice itself gets a same-coloured outline so a sliver stays visible.
+      const w = Math.min(136, 12 + tip.length * 5.2), h = 15;
+      const px = c + R * Math.cos(mid);
+      const x = Math.max(w / 2 + 2, Math.min(140 - w / 2 - 2, px)), tx = Math.max(x - w / 2 + 8, Math.min(x + w / 2 - 8, px));
+      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><text x="${x.toFixed(1)}" y="11.3" text-anchor="middle" font-size="8.5" font-weight="600" fill="#fff">${esc(tip)}</text></g>`;
+    }
     a0 = a1;
   });
-  const name = label.length > 14 ? `${label.slice(0, 13)}…` : label;
-  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(name)}</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
+  const title = caption.title.length > 22 ? `${caption.title.slice(0, 21)}…` : caption.title;
+  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
@@ -478,7 +505,7 @@ function donutCard(items: { name: string; value: number; color: string }[], tota
   const box = svgBox("");
   const lines = items.map((x, i) => legendRow(x.color, x.name, x.value, total, () => pick(i)));
   const draw = () => {
-    box.innerHTML = donut(items, sel == null ? formatShekelsWhole(total) : formatShekelsWhole(items[sel].value), sel == null ? title : items[sel].name, sel);
+    box.innerHTML = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `${items[sel].name}: ${formatShekelsWhole(items[sel].value)}`);
     lines.forEach((l, i) => {
       l.classList.toggle("sel", i === sel);
       l.classList.toggle("dim", sel != null && i !== sel);
