@@ -285,19 +285,17 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
 function donut(parts: { value: number; color: string }[], caption: { title: string; total: string }, sel: number | null = null, tip = ""): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
   const R = 56, c = 70, cy = 78;
-  const gap = 1.6, rr = 2.5, e = gap / 2 + rr, seamW = 1;
+  const gap = 1.1;
   const pt = (a: number, rad: number) => `${(c + rad * Math.cos(a)).toFixed(2)},${(cy + rad * Math.sin(a)).toFixed(2)}`;
   let a0 = -Math.PI / 2;
   let paths = "";
   let labels = "";
   let bubble = "";
-  let seams = "";
   parts.forEach((p, i) => {
     if (p.value <= 0) return;
     const share = p.value / total;
     const a1 = a0 + Math.min(0.9999, share) * 2 * Math.PI;
     const mid = (a0 + a1) / 2;
-    const half = (a1 - a0) / 2;
     const on = sel == null || i === sel;
     const color = on ? p.color : "#d3d8df";
     if (share >= 0.9999) {
@@ -307,28 +305,10 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
       a0 = a1;
       return;
     }
-    const apex = e / Math.sin(half);
-    if (share < 0.5 && apex < R * 0.1) {
-      // Inset the wedge, then stroke it with its own colour: the corners come out rounded and the gaps stay `gap` wide.
-      const ro = R - rr, d = Math.asin(e / ro);
-      const big = a1 - a0 - 2 * d > Math.PI ? 1 : 0;
-      paths += `<path data-i="${i}" style="cursor:pointer" d="M${(c + apex * Math.cos(mid)).toFixed(2)},${(cy + apex * Math.sin(mid)).toFixed(2)} L${pt(a0 + d, ro)} A${ro},${ro} 0 ${big} 1 ${pt(a1 - d, ro)}Z" fill="${color}" stroke="${color}" stroke-width="${2 * rr}" stroke-linejoin="round"/>`;
-    } else {
-      // Slices too thin (or too big) to round: a plain wedge, parted from its neighbours by a clean line drawn on top.
-      const big = a1 - a0 > Math.PI ? 1 : 0;
-      paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}"/>`;
-      // A seam is never wider than a quarter of the thinner neighbour at the rim, so slivers keep their colour.
-      const spans = parts.map((q) => (q.value > 0 ? Math.min(0.9999, q.value / total) * 2 * Math.PI : 0));
-      const n = parts.length, own = a1 - a0;
-      const seam = (ang: number, other: number) => {
-        const m = Math.min(own, other > 0 ? other : own);
-        const w = Math.min(seamW, 0.25 * R * m);
-        // Close to the centre a sliver is narrower than the seam: start the seam where it still takes at most half the sliver.
-        const r0 = Math.min(R, w / m);
-        return `<path d="M${(c + r0 * Math.cos(ang)).toFixed(2)},${(cy + r0 * Math.sin(ang)).toFixed(2)} L${pt(ang, R + 1)}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" fill="none" style="pointer-events:none"/>`;
-      };
-      seams += seam(a0, spans[(i + n - 1) % n]) + seam(a1, spans[(i + 1) % n]);
-    }
+    // Plain wedges parted by a surface-coloured outline; on a thin slice the outline shrinks so the slice keeps its colour.
+    const big = a1 - a0 > Math.PI ? 1 : 0;
+    const w = Math.min(gap, 0.2 * R * (a1 - a0));
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}" stroke="var(--surface)" stroke-width="${w.toFixed(2)}" stroke-linejoin="round"/>`;
     if (on && share >= 0.07) labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
     if (i === sel && tip) {
       // The bubble sits above the picture, never on it; its tip points down toward the slice. The slice itself gets a same-coloured outline so a sliver stays visible.
@@ -340,7 +320,7 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
     a0 = a1;
   });
   const title = caption.title.length > 22 ? `${caption.title.slice(0, 21)}…` : caption.title;
-  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${seams}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
+  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
