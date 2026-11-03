@@ -300,6 +300,13 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
     const half = (a1 - a0) / 2;
     const on = sel == null || i === sel;
     const color = on ? p.color : "#d3d8df";
+    if (share >= 0.9999) {
+      // A single category is the whole pie: a plain circle, with no seam.
+      paths += `<circle data-i="${i}" style="cursor:pointer" cx="${c}" cy="${cy}" r="${R}" fill="${color}"/>`;
+      if (on) labels += `<text x="${c}" y="${cy + 3}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">100%</text>`;
+      a0 = a1;
+      return;
+    }
     const apex = e / Math.sin(half);
     if (share < 0.5 && apex < R * 0.45) {
       // Inset the wedge, then stroke it with its own colour: the corners come out rounded and the gaps stay `gap` wide.
