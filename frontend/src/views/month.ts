@@ -4,7 +4,7 @@ import { businessOf, summaryFigures } from "../business";
 import { go, goBack, trackDialog } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
-import { summaryCategories } from "../insights";
+import { drillCrumbs, summaryCategories } from "../insights";
 import { categoryName } from "../categories";
 import { inPeriod, money } from "../selectors";
 
@@ -126,8 +126,7 @@ function drillBackBar(): HTMLElement {
   const label = sub ? categoryName(state.cats, state.insights.cat ?? null) : "סיכום";
   const back = el("button", { className: "btn", textContent: `→ ${label}`, title: sub ? "חזרה לקטגוריה" : "חזרה לסיכום" });
   back.onclick = () => goBack("month");
-  const name = categoryName(state.cats, (sub ? state.insights.sub : state.insights.cat) ?? null);
-  return el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, el("div", { className: "name", textContent: name })));
+  return el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, drillCrumbs(insightsCtx())));
 }
 
 export function monthView(): HTMLElement {
