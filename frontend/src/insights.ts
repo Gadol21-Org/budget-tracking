@@ -277,23 +277,32 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
   );
 }
 
-/** The donut as SVG. While a slice `sel` is picked, the others turn grey (nothing moves) and the centre shows its name and amount instead of the total. */
+/**
+ * The chart as SVG: a solid pie with thin gaps between the slices and the share written on the bigger ones, and the
+ * name and amount underneath (the total, or the picked slice's). While a slice `sel` is picked the others turn grey.
+ */
 function donut(parts: { value: number; color: string }[], center: string, label = "הוצאות", sel: number | null = null): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
-  const R = 56, r = 36, c = 70;
+  const R = 62, c = 70, cy = 68;
   let a0 = -Math.PI / 2;
   let paths = "";
+  let labels = "";
   parts.forEach((p, i) => {
     if (p.value <= 0) return;
-    const a1 = a0 + Math.min(0.9999, p.value / total) * 2 * Math.PI;
+    const share = p.value / total;
+    const a1 = a0 + Math.min(0.9999, share) * 2 * Math.PI;
     const big = a1 - a0 > Math.PI ? 1 : 0;
-    const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${c + rad * Math.sin(a)}`;
-    const fill = sel == null || i === sel ? p.color : "#d3d8df";
-    paths += `<path data-i="${i}" style="cursor:pointer" d="M${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)} L${pt(a1, r)} A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${fill}" stroke="${fill}" stroke-width="0.6"/>`;
+    const pt = (a: number, rad: number) => `${c + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`;
+    const on = sel == null || i === sel;
+    paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${on ? p.color : "#d3d8df"}" stroke="var(--surface)" stroke-width="1.5" stroke-linejoin="round"/>`;
+    if (on && share >= 0.07) {
+      const mid = (a0 + a1) / 2;
+      labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
+    }
     a0 = a1;
   });
-  const name = label.length > 14 ? `${label.slice(0, 13)}…` : label;
-  return `<svg viewBox="0 0 140 140" width="132" role="img">${paths}<text x="70" y="66" text-anchor="middle" font-size="9" fill="var(--muted)">${esc(name)}</text><text x="70" y="82" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
+  const name = label.length > 22 ? `${label.slice(0, 21)}…` : label;
+  return `<svg viewBox="0 0 140 168" width="132" role="img">${paths}${labels}<text x="70" y="149" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(name)}</text><text x="70" y="162" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(center)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
