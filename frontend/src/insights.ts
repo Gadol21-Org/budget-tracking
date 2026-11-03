@@ -284,13 +284,14 @@ function lineChart(values: number[], labels: string[], color: string, ghost?: nu
  */
 function donut(parts: { value: number; color: string }[], caption: { title: string; total: string }, sel: number | null = null, tip = ""): string {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;
-  const R = 58, c = 70, cy = 76;
+  const R = 56, c = 70, cy = 78;
   const gap = 1.6, rr = 2.5, e = gap / 2 + rr;
   const pt = (a: number, rad: number) => `${(c + rad * Math.cos(a)).toFixed(2)},${(cy + rad * Math.sin(a)).toFixed(2)}`;
   let a0 = -Math.PI / 2;
   let paths = "";
   let labels = "";
   let bubble = "";
+  let seams = "";
   parts.forEach((p, i) => {
     if (p.value <= 0) return;
     const share = p.value / total;
@@ -306,22 +307,23 @@ function donut(parts: { value: number; color: string }[], caption: { title: stri
       const big = a1 - a0 - 2 * d > Math.PI ? 1 : 0;
       paths += `<path data-i="${i}" style="cursor:pointer" d="M${(c + apex * Math.cos(mid)).toFixed(2)},${(cy + apex * Math.sin(mid)).toFixed(2)} L${pt(a0 + d, ro)} A${ro},${ro} 0 ${big} 1 ${pt(a1 - d, ro)}Z" fill="${color}" stroke="${color}" stroke-width="${2 * rr}" stroke-linejoin="round"/>`;
     } else {
-      // Slices too thin (or too big) to inset: a plain wedge with a surface-coloured outline.
+      // Slices too thin (or too big) to round: a plain wedge, parted from its neighbours by a clean line drawn on top.
       const big = a1 - a0 > Math.PI ? 1 : 0;
-      paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}" stroke="var(--surface)" stroke-width="${gap + 0.4}" stroke-linejoin="round"/>`;
+      paths += `<path data-i="${i}" style="cursor:pointer" d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${big} 1 ${pt(a1, R)}Z" fill="${color}"/>`;
+      seams += `<path d="M${c},${cy} L${pt(a0, R + 1)} M${c},${cy} L${pt(a1, R + 1)}" stroke="var(--surface)" stroke-width="${gap}" fill="none" style="pointer-events:none"/>`;
     }
     if (on && share >= 0.07) labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
     if (i === sel && tip) {
-      // The bubble sits above the slice's middle and stays inside the picture.
+      // The bubble sits above the picture, never on it; its tip points down toward the slice. The slice itself gets a same-coloured outline so a sliver stays visible.
       const w = Math.min(136, 12 + tip.length * 5.2), h = 15;
-      const px = c + 0.6 * R * Math.cos(mid), py = cy + 0.6 * R * Math.sin(mid);
-      const x = Math.max(w / 2 + 2, Math.min(140 - w / 2 - 2, px)), y = Math.max(2, py - h - 7);
-      bubble = `<g style="pointer-events:none"><rect x="${(x - w / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(px - 4).toFixed(1)},${(y + h).toFixed(1)} L${px.toFixed(1)},${(y + h + 5).toFixed(1)} L${(px + 4).toFixed(1)},${(y + h).toFixed(1)}Z" fill="#1f2a30"/><text x="${x.toFixed(1)}" y="${(y + 10.3).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="600" fill="#fff">${esc(tip)}</text></g>`;
+      const px = c + R * Math.cos(mid);
+      const x = Math.max(w / 2 + 2, Math.min(140 - w / 2 - 2, px)), tx = Math.max(x - w / 2 + 8, Math.min(x + w / 2 - 8, px));
+      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><text x="${x.toFixed(1)}" y="11.3" text-anchor="middle" font-size="8.5" font-weight="600" fill="#fff">${esc(tip)}</text></g>`;
     }
     a0 = a1;
   });
   const title = caption.title.length > 22 ? `${caption.title.slice(0, 21)}…` : caption.title;
-  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
+  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${seams}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
 }
 
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
