@@ -6,7 +6,8 @@ import { businessChips, businessRequired, bizName, categoryBusiness } from "../b
 import { LRM, pickerCurrencies } from "../currencies";
 import { api, currencyInfo, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction, type TxInput } from "../api";
 import { root, state } from "../state";
-import { combo, menuButton } from "../widgets";
+import { combo } from "../widgets";
+import { menuButton } from "../components/MenuButton";
 import { catById, catPath, showPeriodFor } from "../selectors";
 import { load } from "../sync";
 import { trackDialog } from "../nav";

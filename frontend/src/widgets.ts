@@ -3,18 +3,6 @@ import { contains } from "./period";
 import { go } from "./nav";
 import { root } from "./state";
 
-/** A button that opens a small menu of choices above it. */
-export function menuButton(label: string, items: [string, () => void][], className = "btn"): HTMLElement {
-  const menu = el("div", { className: "menu", hidden: true }, ...items.map(([text, run]) => {
-    const item = el("button", { type: "button", textContent: text });
-    item.onclick = () => ((menu.hidden = true), run());
-    return item;
-  }));
-  const button = el("button", { type: "button", className, textContent: `${label} ▾` });
-  button.onclick = () => (menu.hidden = !menu.hidden);
-  return el("div", { className: "menuwrap" }, button, menu);
-}
-
 /**
  * When a pick list (category, sub-category, currency) opens with the keyboard up, make the page as tall as the visible area
  * above the keyboard (as the browser reports it) and scroll the field's label to the top, so the list under the field is

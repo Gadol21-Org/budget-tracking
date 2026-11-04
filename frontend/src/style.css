@@ -193,6 +193,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 
 /* Drop-down menu opening above its button (used by the repeating-charge dialog). */
 .menuwrap { position: relative; }
+.menuhost { display: contents; }
 .menu { position: absolute; bottom: calc(100% + 6px); inset-inline-end: 0; z-index: 5; display: flex; flex-direction: column;
   min-width: max-content; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
   box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
