@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactElement, useEffect, useRef, useState } from "react";
 import { api, type Category } from "../api";
 import { bizName } from "../business";
 import { openCategoryBusinessDialog } from "./business";
 import { BackButton } from "../components/BackButton";
 import { DialogForm } from "../components/DialogForm";
-import { mountReact } from "../components/mount";
 import { openReactDialog } from "../components/openReactDialog";
 import { goBack, manageCtx } from "../nav";
 import { render } from "../render";
@@ -162,15 +161,15 @@ export const openMoveCategoryDialog = (cat: Category) => openReactDialog((close)
 
 export const openDeleteCategoryDialog = (cat: Category) => openReactDialog((close) => <DeleteCategoryForm cat={cat} close={close} />);
 
-export function categoriesView(): HTMLElement {
-  return mountReact(
+export function categoriesView(): ReactElement {
+  return (
     <div>
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <BackButton onClick={() => goBack("settings")} />
       </div>
       <h1>קטגוריות</h1>
       <CategoriesCard />
-    </div>,
+    </div>
   );
 }
 

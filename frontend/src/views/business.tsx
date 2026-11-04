@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import { api, type Business, type Category, type Transaction } from "../api";
 import {
   type BizCtx,
@@ -17,7 +17,6 @@ import { BusinessChips } from "../components/BusinessChips";
 import { DialogForm } from "../components/DialogForm";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
-import { mountReact } from "../components/mount";
 import { openReactDialog } from "../components/openReactDialog";
 import { formatShekelsWhole, shortMonth } from "../format";
 import { contains, shift, title as periodTitle } from "../period";
@@ -307,8 +306,8 @@ function Compare({ ctx }: { ctx: BizCtx }) {
 const BODIES = { overview: Overview, trends: Trends, cats: Categories, compare: Compare };
 
 /** The business dashboards: scope (the whole business or one of its businesses) and four tabs. */
-export function businessDashboard(ctx: BizCtx): HTMLElement {
-  return mountReact(<BusinessDashboard ctx={ctx} />);
+export function businessDashboard(ctx: BizCtx): ReactElement {
+  return <BusinessDashboard ctx={ctx} />;
 }
 
 function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
@@ -401,8 +400,8 @@ function NameForm({ ctx, existing, close }: { ctx: ManageCtx; existing?: Busines
 
 const openNameDialog = (ctx: ManageCtx, existing?: Business) => openReactDialog((close) => <NameForm ctx={ctx} existing={existing} close={close} />);
 
-export function businessesView(ctx: ManageCtx): HTMLElement {
-  return mountReact(<Businesses ctx={ctx} />);
+export function businessesView(ctx: ManageCtx): ReactElement {
+  return <Businesses ctx={ctx} />;
 }
 
 function Businesses({ ctx }: { ctx: ManageCtx }) {

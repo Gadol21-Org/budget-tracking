@@ -1,7 +1,7 @@
+import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
 import { bizName, businessOf } from "../business";
 import { Money } from "../components/Money";
-import { mountReact } from "../components/mount";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
 import { dequeue } from "../offline";
@@ -93,8 +93,8 @@ const BIZ_FILTERS = [
   ["none", "ללא עסק"],
 ] as const;
 
-export function listView(): HTMLElement {
-  return mountReact(<ListScreen />);
+export function listView(): ReactElement {
+  return <ListScreen />;
 }
 
 function ListScreen() {

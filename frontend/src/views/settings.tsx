@@ -1,14 +1,13 @@
-import { useState } from "react";
+import { type ReactElement, useState } from "react";
 import { api } from "../api";
 import { LinkCard } from "../components/LinkCard";
-import { mountReact } from "../components/mount";
 import { go } from "../nav";
 import { load } from "../sync";
 import { openLog } from "./log";
 import { openPeople } from "./people";
 
-export function settingsView(): HTMLElement {
-  return mountReact(<Settings />);
+export function settingsView(): ReactElement {
+  return <Settings />;
 }
 
 function Settings() {

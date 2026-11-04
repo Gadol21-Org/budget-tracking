@@ -4,9 +4,8 @@ import { api, type LogEntry } from "../api";
 import { go, goBack } from "../nav";
 import { state } from "../state";
 import { render } from "../render";
-import { useState } from "react";
+import { type ReactElement, useState } from "react";
 import { BackButton } from "../components/BackButton";
-import { mountReact } from "../components/mount";
 
 export const LOG_PAGE = 100;
 
@@ -112,8 +111,8 @@ function LogEntryRow({ e }: { e: LogEntry }) {
   );
 }
 
-export function logView(): HTMLElement {
-  return mountReact(<LogScreen />);
+export function logView(): ReactElement {
+  return <LogScreen />;
 }
 
 const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");

@@ -1,7 +1,7 @@
+import { type ReactElement } from "react";
 import { MonthBar } from "../components/MonthBar";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
-import { mountReact } from "../components/mount";
 import { openReactDialog } from "../components/openReactDialog";
 import { PeriodForm } from "../dialogs/PeriodForm";
 import { shift } from "../period";
@@ -103,11 +103,11 @@ function Stat({ label, agorot, cls, kind }: { label: string; agorot: number; cls
   );
 }
 
-export function monthView(): HTMLElement {
+export function monthView(): ReactElement {
   // The category breakdown (and the drill-down into a category) comes from the insights code; the cards above choose its side.
   if (state.insights.cat !== undefined) state.kind = state.insights.side ?? state.kind;
   else state.insights.side = state.kind;
-  return mountReact(<MonthScreen />);
+  return <MonthScreen />;
 }
 
 function MonthScreen() {

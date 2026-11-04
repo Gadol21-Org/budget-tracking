@@ -1,7 +1,6 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactElement, useEffect, useRef, useState } from "react";
 import { api, currencyInfo, type Currency } from "../api";
 import { BackButton } from "../components/BackButton";
-import { mountReact } from "../components/mount";
 import { LRM, enabledCurrencies, loadEnabledCurrencies, rememberCurrencies, supportedCurrencies } from "../currencies";
 
 export interface CurrenciesCtx {
@@ -10,8 +9,8 @@ export interface CurrenciesCtx {
 }
 
 /** The settings page: add currencies from the full list and put the added ones in order. */
-export function currenciesView(ctx: CurrenciesCtx): HTMLElement {
-  return mountReact(<CurrenciesScreen back={ctx.back} />);
+export function currenciesView(ctx: CurrenciesCtx): ReactElement {
+  return <CurrenciesScreen back={ctx.back} />;
 }
 
 const reorder = (list: Currency[], from: number, to: number) => {

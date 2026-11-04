@@ -1,8 +1,7 @@
-import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import { type Transaction } from "../api";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
-import { mountReact } from "../components/mount";
 import { openReactDialog } from "../components/openReactDialog";
 import { formatShekelsWhole, longMonth, shortMonth } from "../format";
 import { type BarOpts, barChart, donut, lineChart } from "../insights/charts";
@@ -148,8 +147,8 @@ const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; s
 // ---- Shared frame (chips, compare-to, partial note) ------------------------------------------
 
 /** The insights screen: a row of dashboards to pick from, the comparison, and the open dashboard. */
-export function insightsView(ctx: Ctx): HTMLElement {
-  return mountReact(<InsightsScreen ctx={ctx} />);
+export function insightsView(ctx: Ctx): ReactElement {
+  return <InsightsScreen ctx={ctx} />;
 }
 
 const BODIES = { overview: Overview, trends: Trends, changes: Changes, fixed: Fixed, rhythm: Rhythm };

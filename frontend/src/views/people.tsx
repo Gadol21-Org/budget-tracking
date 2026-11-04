@@ -1,14 +1,13 @@
-import { useState } from "react";
+import { type ReactElement, useState } from "react";
 import { api, type LogUser } from "../api";
 import { BackButton } from "../components/BackButton";
-import { mountReact } from "../components/mount";
 import { go, goBack } from "../nav";
 import { render } from "../render";
 import { state } from "../state";
 
 /** Emails that made a recorded change, each with an editable display name shown in the change history. */
-export function peopleView(): HTMLElement {
-  return mountReact(<People users={state.logUsers} />);
+export function peopleView(): ReactElement {
+  return <People users={state.logUsers} />;
 }
 
 function People({ users }: { users: LogUser[] }) {
