@@ -138,11 +138,11 @@ export function openMapping(o: SumitOverview, done: () => void, only?: string[])
     ok.onclick = () => (close(), done());
     return el(
       "form",
-      { className: "add", method: "dialog" },
+      { className: "add", method: "dialog", style: "justify-content:flex-start" },
       el("h2", { textContent: "קבלות מ-Sumit: מוצרים" }),
       el("h3", { textContent: only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "עסק וקטגוריה לכל מוצר" }),
       ...(rows.length ? rows : [el("div", { className: "note muted", textContent: "מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרים מעסקים או מקטגוריות שונים תתפצל לכמה תנועות." })]),
       el("div", { className: "actions" }, ok),
     );
-  });
+  }, "fullpage");
 }

@@ -78,9 +78,9 @@ export function manageCtx() {
   return { biz: state.biz, cats: state.cats, txs: state.txs, openDialog, reload: load, back: () => goBack("settings") };
 }
 
-/** Open a modal built by `build`, which gets a way to close it. */
-export function openDialog(build: (close: () => void) => HTMLElement) {
-  const dlg = el("dialog");
+/** Open a modal built by `build`, which gets a way to close it. `className: "fullpage"` for forms with pick lists, which need room above the keyboard. */
+export function openDialog(build: (close: () => void) => HTMLElement, className = "") {
+  const dlg = el("dialog", { className });
   dlg.append(build(() => dlg.close()));
   dlg.addEventListener("close", () => dlg.remove());
   document.body.append(dlg);
