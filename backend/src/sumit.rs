@@ -52,7 +52,6 @@ pub struct Config {
     api_key: String,
     pub monthly_limit: u32,
     pub hours: Vec<u32>,
-    pub start_date: Option<NaiveDate>,
 }
 
 impl std::fmt::Debug for Config {
@@ -88,8 +87,6 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_LIMIT),
             hours,
-            start_date: env_nonempty("SUMIT_START_DATE")
-                .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
         }))
     }
 }
@@ -149,7 +146,7 @@ pub fn slot_key(slot: DateTime<Utc>) -> String {
 // ---------------------------------------------------------------------------------------------
 // Sumit API
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocSummary {
     pub id: i64,
     pub number: Option<i64>,
@@ -160,7 +157,7 @@ pub struct DocSummary {
     pub doc_type: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocItem {
     pub name: String,
     pub quantity: f64,
@@ -341,8 +338,9 @@ pub struct State {
     pub seen: Vec<i64>,
     /// Date of the newest receipt seen: the next list call starts a few days before it.
     pub last_date: Option<String>,
-    /// First poll looks back to this day.
-    pub since: Option<String>,
+    /// Highest Sumit document id that was already looked at: only newer receipts are imported.
+    /// Unset until the first successful poll, which only records it (a baseline).
+    pub watermark: Option<i64>,
     pub last_slot: Option<String>,
     pub last_poll_at: Option<String>,
     pub last_error: Option<String>,
@@ -352,6 +350,36 @@ pub struct State {
     /// Product names seen on receipts (for the mapping screen).
     #[serde(default)]
     pub products: BTreeSet<String>,
+    /// Receipts that could not be imported yet because a product has no income sub-category to
+    /// go to. They are retried (without calling Sumit) whenever the mapping changes.
+    #[serde(default)]
+    pub held: BTreeMap<i64, Held>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Held {
+    pub doc: DocSummary,
+    pub items: Vec<DocItem>,
+    /// Products that have no usable category.
+    pub need: Vec<String>,
+}
+
+/// An imported transaction must be on a category with no sub-categories of its own: a
+/// category that has sub-categories only groups them.
+#[derive(Debug)]
+pub struct NeedsCategory(pub Vec<String>);
+
+impl std::fmt::Display for NeedsCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no income sub-category set for: {}", self.0.join(", "))
+    }
+}
+
+impl std::error::Error for NeedsCategory {}
+
+/// Is `id` an income category that transactions may be put on (it has no sub-categories)?
+pub fn is_usable_category(cats: &[crate::storage::Category], id: i64) -> bool {
+    cats.iter().any(|c| c.id == id && c.is_income) && !cats.iter().any(|c| c.parent_id == Some(id))
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -565,18 +593,34 @@ pub async fn import_receipt(
     }
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
+    let usable = |c: i64| is_usable_category(&cats, c);
+    let default = category.filter(|c| usable(*c));
     let rule_of = |name: &str| {
         let r = map.get(&product_key(name)).copied().unwrap_or_default();
         (
             r.business_id.filter(|b| known.iter().any(|k| k.id == *b)),
-            r.category_id
-                .filter(|c| cats.iter().any(|k| k.id == *c && k.is_income))
-                .or(category),
+            r.category_id.filter(|c| usable(*c)).or(default),
         )
     };
+    let missing: Vec<String> = if items.is_empty() {
+        if default.is_none() {
+            vec![String::new()]
+        } else {
+            Vec::new()
+        }
+    } else {
+        items
+            .iter()
+            .filter(|i| rule_of(&i.name).1.is_none())
+            .map(|i| i.name.clone())
+            .collect()
+    };
+    if !missing.is_empty() {
+        return Err(NeedsCategory(missing).into());
+    }
     let biz_of = |name: &str| rule_of(name).0;
     let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
-    let parts = split_total(total, &priced, (None, category));
+    let parts = split_total(total, &priced, (None, default));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
     for ((b, cat), amount) in &parts {
@@ -672,6 +716,8 @@ async fn flush_sheet(recs: &mut [ReceiptRecord]) {
 
 #[derive(Debug, Default, Serialize)]
 pub struct PollSummary {
+    /// The first poll: existing receipts were only noted, nothing was imported.
+    pub baseline: bool,
     pub new_receipts: usize,
     pub transactions: usize,
     pub calls: u32,
@@ -685,25 +731,23 @@ pub async fn poll_once(
     cfg: &Config,
     now: DateTime<Utc>,
 ) -> Result<PollSummary> {
+    retry_held(db, now).await?;
     let mut state: State = load(db, STATE_KEY).await?;
     let today = now.with_timezone(&Jerusalem).date_naive();
-    if state.since.is_none() {
-        let since = cfg.start_date.unwrap_or(today - Duration::days(1));
-        state.since = Some(since.to_string());
+    let baseline = state.watermark.is_none() && state.seen.is_empty();
+    if state.watermark.is_none() {
+        // Receipts imported before the watermark existed.
+        state.watermark = state.seen.iter().max().copied();
     }
-    let since = state
-        .since
-        .as_deref()
-        .and_then(|d| d.parse::<NaiveDate>().ok())
-        .unwrap_or(today);
-    // A few days before the newest receipt, in case one was dated back; seen ones are skipped.
+    // A few days before the newest receipt, in case one was dated back.
     let from = match state
         .last_date
         .as_deref()
         .and_then(|d| d.parse::<NaiveDate>().ok())
     {
-        Some(d) => (d - Duration::days(3)).max(since),
-        None => since,
+        _ if baseline => today - Duration::days(60),
+        Some(d) => d - Duration::days(3),
+        None => today - Duration::days(14),
     };
     let result = run_poll(
         db,
@@ -711,8 +755,11 @@ pub async fn poll_once(
         cfg,
         now,
         &mut state,
-        from,
-        today + Duration::days(1),
+        Window {
+            baseline,
+            from,
+            to: today + Duration::days(1),
+        },
     )
     .await;
     state.last_poll_at = Some(now.to_rfc3339());
@@ -726,15 +773,23 @@ pub async fn poll_once(
     result
 }
 
+/// Which receipts a poll asks Sumit for.
+struct Window {
+    /// First poll: only record where things stand.
+    baseline: bool,
+    from: NaiveDate,
+    to: NaiveDate,
+}
+
 async fn run_poll(
     db: &dyn Storage,
     api: &dyn SumitApi,
     cfg: &Config,
     now: DateTime<Utc>,
     state: &mut State,
-    from: NaiveDate,
-    to: NaiveDate,
+    window: Window,
 ) -> Result<PollSummary> {
+    let Window { baseline, from, to } = window;
     let mut summary = PollSummary::default();
     let mut docs: Vec<DocSummary> = Vec::new();
     for page in 0..MAX_PAGES {
@@ -746,17 +801,25 @@ async fn run_poll(
             break;
         }
     }
-    let seen: BTreeSet<i64> = state.seen.iter().copied().collect();
-    let mut fresh: Vec<DocSummary> = docs
+    let receipts: Vec<DocSummary> = docs
         .into_iter()
-        .filter(|d| RECEIPT_TYPES.contains(&d.doc_type) && !seen.contains(&d.id))
+        .filter(|d| RECEIPT_TYPES.contains(&d.doc_type))
         .collect();
-    fresh.sort_by_key(|d| (d.date, d.id));
-    fresh.dedup_by_key(|d| d.id);
-    if fresh.is_empty() {
+    if baseline {
+        // First poll: remember where things stand, import nothing.
+        state.watermark = Some(receipts.iter().map(|d| d.id).max().unwrap_or(0));
+        state.last_date = receipts.iter().map(|d| d.date.to_string()).max();
+        summary.baseline = true;
         return Ok(summary);
     }
-    let category: Option<i64> = load::<Option<i64>>(db, CATEGORY_KEY).await?;
+    let seen: BTreeSet<i64> = state.seen.iter().copied().collect();
+    let watermark = state.watermark.unwrap_or(0);
+    let mut fresh: Vec<DocSummary> = receipts
+        .into_iter()
+        .filter(|d| d.id > watermark && !seen.contains(&d.id) && !state.held.contains_key(&d.id))
+        .collect();
+    fresh.sort_by_key(|d| d.id);
+    fresh.dedup_by_key(|d| d.id);
     let mut recs: Vec<ReceiptRecord> = load(db, RECEIPTS_KEY).await?;
     let mut notices: Vec<Notice> = load(db, NOTICES_KEY).await?;
     let mut failed: Option<anyhow::Error> = None;
@@ -775,37 +838,109 @@ async fn run_poll(
                 }
             }
         };
-        let map = product_map(db).await?;
-        let imported = import_receipt(db, &doc, &items, category, &map).await?;
-        for i in &items {
-            if !i.name.is_empty() {
-                state.products.insert(i.name.clone());
-            }
-        }
-        state.seen.push(doc.id);
         state.failures.remove(&doc.id);
-        let d = doc.date.to_string();
-        if state.last_date.as_deref().is_none_or(|l| l < d.as_str()) {
-            state.last_date = Some(d);
+        let id = doc.id;
+        let done = settle_doc(db, state, doc, items, now, &mut recs, &mut notices).await?;
+        // Looked at (imported or held): the next poll starts after it.
+        state.watermark = state.watermark.max(Some(id));
+        if let Some(n) = done {
+            summary.new_receipts += 1;
+            summary.transactions += n;
         }
-        summary.new_receipts += 1;
-        summary.transactions += imported.tx_ids.len();
-        if let Some(r) = imported.record {
-            recs.push(r);
-        }
-        let unmapped = items
-            .iter()
-            .any(|i| !map.contains_key(&product_key(&i.name)));
-        notices.push(Notice {
-            id: doc.id,
-            at: now.to_rfc3339(),
-            title: format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total),
-            body: notice_body(&doc, &items, unmapped),
-            tx_ids: imported.tx_ids,
-            read: false,
-        });
     }
-    flush_sheet(&mut recs).await;
+    persist_lists(db, &mut recs, &mut notices).await?;
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(summary),
+    }
+}
+
+/// Import one receipt whose details are known, or hold it if it has nowhere valid to go.
+/// Returns the number of transactions made (`None` when held).
+async fn settle_doc(
+    db: &dyn Storage,
+    state: &mut State,
+    doc: DocSummary,
+    items: Vec<DocItem>,
+    now: DateTime<Utc>,
+    recs: &mut Vec<ReceiptRecord>,
+    notices: &mut Vec<Notice>,
+) -> Result<Option<usize>> {
+    let category: Option<i64> = load(db, CATEGORY_KEY).await?;
+    let map = product_map(db).await?;
+    for i in &items {
+        if !i.name.is_empty() {
+            state.products.insert(i.name.clone());
+        }
+    }
+    match import_receipt(db, &doc, &items, category, &map).await {
+        Ok(imported) => {
+            state.held.remove(&doc.id);
+            state.seen.push(doc.id);
+            let d = doc.date.to_string();
+            if state.last_date.as_deref().is_none_or(|l| l < d.as_str()) {
+                state.last_date = Some(d);
+            }
+            let n = imported.tx_ids.len();
+            if let Some(r) = imported.record {
+                recs.push(r);
+            }
+            let unmapped = items
+                .iter()
+                .any(|i| !map.contains_key(&product_key(&i.name)));
+            notices.push(Notice {
+                id: doc.id,
+                at: now.to_rfc3339(),
+                title: format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total),
+                body: notice_body(&doc, &items, unmapped),
+                tx_ids: imported.tx_ids,
+                read: false,
+            });
+            Ok(Some(n))
+        }
+        Err(e) => match e.downcast::<NeedsCategory>() {
+            Ok(NeedsCategory(need)) => {
+                if !state.held.contains_key(&doc.id) {
+                    let what: Vec<&str> = need
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|n| !n.is_empty())
+                        .collect();
+                    notices.push(Notice {
+                        id: doc.id,
+                        at: now.to_rfc3339(),
+                        title: format!("קבלה ממתינה לסיווג: ₪{:.2}", doc.total),
+                        body: format!(
+                            "{}הגדירו תת-קטגוריית הכנסה {} ב\"קבלות מ-Sumit\" והקבלה תיובא",
+                            if doc.customer.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{} · ", doc.customer)
+                            },
+                            if what.is_empty() {
+                                "ברירת מחדל".to_string()
+                            } else {
+                                format!("למוצרים: {}", what.join(", "))
+                            },
+                        ),
+                        tx_ids: Vec::new(),
+                        read: false,
+                    });
+                }
+                state.held.insert(doc.id, Held { doc, items, need });
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        },
+    }
+}
+
+async fn persist_lists(
+    db: &dyn Storage,
+    recs: &mut Vec<ReceiptRecord>,
+    notices: &mut Vec<Notice>,
+) -> Result<()> {
+    flush_sheet(recs).await;
     if recs.len() > MAX_RECEIPTS {
         // Keep the unsent ones; drop the oldest sent ones.
         let mut excess = recs.len() - MAX_RECEIPTS;
@@ -822,12 +957,35 @@ async fn run_poll(
         let cut = notices.len() - MAX_NOTICES;
         notices.drain(..cut);
     }
-    save(db, RECEIPTS_KEY, &recs).await?;
-    save(db, NOTICES_KEY, &notices).await?;
-    match failed {
-        Some(e) => Err(e),
-        None => Ok(summary),
+    save(db, RECEIPTS_KEY, recs).await?;
+    save(db, NOTICES_KEY, notices).await
+}
+
+/// Try the held receipts again with the current mapping. Makes no Sumit calls. Returns how
+/// many were imported.
+pub async fn retry_held(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize> {
+    let mut state: State = load(db, STATE_KEY).await?;
+    if state.held.is_empty() {
+        return Ok(0);
     }
+    let mut recs: Vec<ReceiptRecord> = load(db, RECEIPTS_KEY).await?;
+    let mut notices: Vec<Notice> = load(db, NOTICES_KEY).await?;
+    let held: Vec<Held> = state.held.values().cloned().collect();
+    let mut done = 0;
+    for h in held {
+        if settle_doc(db, &mut state, h.doc, h.items, now, &mut recs, &mut notices)
+            .await?
+            .is_some()
+        {
+            done += 1;
+        }
+    }
+    persist_lists(db, &mut recs, &mut notices).await?;
+    save(db, STATE_KEY, &state).await?;
+    if done > 0 {
+        crate::push::notify_all(db).await;
+    }
+    Ok(done)
 }
 
 fn notice_body(doc: &DocSummary, items: &[DocItem], unmapped: bool) -> String {
@@ -986,6 +1144,15 @@ mod tests {
         assert!(check_status(&json!({"Status": 1, "UserErrorMessage": "bad key"})).is_err());
     }
 
+    /// A state past its baseline, so polls import.
+    async fn armed(db: &dyn Storage) {
+        let st = State {
+            watermark: Some(0),
+            ..State::default()
+        };
+        save(db, STATE_KEY, &st).await.unwrap();
+    }
+
     fn cfg() -> Config {
         Config {
             base_url: String::new(),
@@ -993,7 +1160,6 @@ mod tests {
             api_key: "SECRET".into(),
             monthly_limit: 5,
             hours: vec![7, 13, 19],
-            start_date: None,
         }
     }
 
@@ -1038,6 +1204,9 @@ mod tests {
     async fn imports_once_splits_by_business_and_counts_calls() {
         let db = crate::testdb::fresh().await;
         let biz = db.insert_business("שמלות", false).await.unwrap();
+        armed(&db).await;
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        save(&db, CATEGORY_KEY, &Some(cat)).await.unwrap();
         save(
             &db,
             PRODUCTS_KEY,
@@ -1099,10 +1268,11 @@ mod tests {
             total: 10.0,
             doc_type: 2,
         };
-        let a = import_receipt(&db, &doc, &[], None, &BTreeMap::new())
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        let a = import_receipt(&db, &doc, &[], Some(cat), &BTreeMap::new())
             .await
             .unwrap();
-        let b = import_receipt(&db, &doc, &[], None, &BTreeMap::new())
+        let b = import_receipt(&db, &doc, &[], Some(cat), &BTreeMap::new())
             .await
             .unwrap();
         assert_eq!(a.tx_ids, b.tx_ids);
@@ -1139,6 +1309,7 @@ mod tests {
             .insert_category("תיקונים", true, Some(top))
             .await
             .unwrap();
+        let plain = db.insert_category("אחר", true, None).await.unwrap();
         let doc = DocSummary {
             id: 6,
             number: Some(7),
@@ -1166,7 +1337,7 @@ mod tests {
                 category_id: Some(sub),
             },
         )]);
-        let r = import_receipt(&db, &doc, &items, Some(top), &map)
+        let r = import_receipt(&db, &doc, &items, Some(plain), &map)
             .await
             .unwrap();
         assert_eq!(r.tx_ids.len(), 2);
@@ -1178,7 +1349,95 @@ mod tests {
         );
         assert_eq!(
             (txs[1].amount_agorot, txs[1].category_id),
-            (7_500, Some(top))
+            (7_500, Some(plain))
         );
+    }
+
+    #[tokio::test]
+    async fn a_receipt_without_a_usable_category_is_held_then_imported() {
+        let db = crate::testdb::fresh().await;
+        let top = db.insert_category("הכנסות", true, None).await.unwrap();
+        let sub = db.insert_category("שמלות", true, Some(top)).await.unwrap();
+        armed(&db).await;
+        // The default is a category that has sub-categories: not allowed.
+        save(&db, CATEGORY_KEY, &Some(top)).await.unwrap();
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let doc = DocSummary {
+            id: 90,
+            number: Some(5),
+            date: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            customer: "דנה".into(),
+            total: 100.0,
+            doc_type: 2,
+        };
+        let api = Fake {
+            docs: vec![doc],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.new_receipts, s.transactions), (0, 0));
+        assert!(db.list_transactions().await.unwrap().is_empty());
+        let st: State = load(&db, STATE_KEY).await.unwrap();
+        assert!(st.held.contains_key(&90) && st.seen.is_empty());
+        let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
+        assert_eq!(notices.len(), 1);
+        // The next poll does not fetch the held receipt's details again, nor notify again.
+        poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!(*api.details.lock().unwrap(), 1);
+        assert_eq!(
+            load::<Vec<Notice>>(&db, NOTICES_KEY).await.unwrap().len(),
+            1
+        );
+        // A valid category releases it, without calling Sumit.
+        save(&db, CATEGORY_KEY, &Some(sub)).await.unwrap();
+        let lists = *api.lists.lock().unwrap();
+        assert_eq!(retry_held(&db, now).await.unwrap(), 1);
+        assert_eq!(*api.lists.lock().unwrap(), lists);
+        let txs = db.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 1);
+        assert_eq!(txs[0].category_id, Some(sub));
+        let st: State = load(&db, STATE_KEY).await.unwrap();
+        assert!(st.held.is_empty() && st.seen == vec![90]);
+        assert_eq!(retry_held(&db, now).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_first_poll_only_records_a_baseline() {
+        let db = crate::testdb::fresh().await;
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        save(&db, CATEGORY_KEY, &Some(cat)).await.unwrap();
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let old = DocSummary {
+            id: 10,
+            number: Some(1),
+            date: NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+            customer: String::new(),
+            total: 50.0,
+            doc_type: 2,
+        };
+        let mut api = Fake {
+            docs: vec![old.clone()],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert!(s.baseline);
+        assert_eq!((s.new_receipts, s.calls), (0, 1));
+        assert!(db.list_transactions().await.unwrap().is_empty());
+        assert_eq!(*api.details.lock().unwrap(), 0);
+        // Next poll: the old receipt stays ignored, a newer one is imported.
+        let newer = DocSummary {
+            id: 11,
+            number: Some(2),
+            total: 20.0,
+            ..old.clone()
+        };
+        api.docs = vec![old, newer];
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert!(!s.baseline);
+        assert_eq!((s.new_receipts, s.transactions), (1, 1));
+        let st: State = load(&db, STATE_KEY).await.unwrap();
+        assert_eq!(st.watermark, Some(11));
     }
 }

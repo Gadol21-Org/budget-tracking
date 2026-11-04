@@ -25,6 +25,7 @@ async function enablePush(key: string): Promise<string> {
 /** Settings card: check Sumit for new receipts now, see recent ones, and open the mapping. */
 export function sumitCard(): HTMLElement {
   const status = el("div", { className: "note muted", textContent: "טוען…" });
+  const held = el("div", { className: "note error" });
   const list = el("div");
   const out = el("div", { className: "note muted" });
   const check = el("button", { className: "btn primary", textContent: "בדיקת קבלות חדשות עכשיו" });
@@ -41,6 +42,7 @@ export function sumitCard(): HTMLElement {
     }
     status.textContent = `בדיקה אחרונה: ${when(o.last_poll_at)} · הבאה: ${when(o.next_poll_at)} · קריאות החודש: ${o.calls_this_month}/${o.monthly_limit}${o.last_error ? ` · שגיאה: ${o.last_error}` : ""}`;
     push.style.display = o.push_public_key ? "" : "none";
+    held.textContent = o.held.length ? `${o.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${[...new Set(o.held.flatMap((h) => h.products))].join(", ") || "ברירת מחדל"}). הגדירו אותה ב"הגדרת מוצרים ועסקים" והקבלות ייובאו.` : "";
     list.replaceChildren(
       ...o.notices.slice(0, 5).map((n) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `${n.read ? "" : "● "}${n.title}` }), el("div", { className: "muted", textContent: `${when(n.at)} · ${n.body}` })))),
     );
@@ -54,7 +56,7 @@ export function sumitCard(): HTMLElement {
     out.textContent = "בודק…";
     try {
       const r = await api.sumitPoll();
-      out.textContent = r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "אין קבלות חדשות.";
+      out.textContent = r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "אין קבלות חדשות.";
       await load();
     } catch (e) {
       out.className = "note error";
@@ -79,6 +81,7 @@ export function sumitCard(): HTMLElement {
     el("h2", { textContent: "קבלות מ-Sumit" }),
     el("p", { className: "muted", textContent: "קבלות חדשות נמשכות אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00) ונרשמות כהכנסה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין לחצן רענון אוטומטי." }),
     status,
+    held,
     list,
     el("div", { className: "actions", style: "justify-content:flex-start;flex-wrap:wrap" }, check, map, push),
     out,
@@ -89,11 +92,13 @@ export function sumitCard(): HTMLElement {
 function openMapping(o: SumitOverview, done: () => void) {
   openDialog((close) => {
     const cat = el("select");
-    cat.append(el("option", { value: "", textContent: "ללא קטגוריה" }), ...state.cats.filter((c) => c.is_income).map((c) => el("option", { value: String(c.id), textContent: c.name })));
+    // Only categories without sub-categories: a transaction must be on a sub-category when there are any.
+    const leaves = state.cats.filter((c) => c.is_income && !state.cats.some((k) => k.parent_id === c.id));
+    cat.append(el("option", { value: "", textContent: "בחירת קטגוריה…" }), ...leaves.map((c) => el("option", { value: String(c.id), textContent: catPath(c.id) })));
     cat.value = o.category_id != null ? String(o.category_id) : "";
-    cat.onchange = () => void api.sumitCategory(cat.value ? Number(cat.value) : null);
+    cat.onchange = () => void api.sumitCategory(cat.value ? Number(cat.value) : null).catch(() => {});
     // Every income category, sub-categories with their full path, so each product can go to its own.
-    const incomeCats = state.cats.filter((c) => c.is_income && !state.cats.some((k) => k.parent_id === c.id));
+    const incomeCats = leaves;
     const rows = o.products.map((p) => {
       const biz = el("select");
       biz.append(el("option", { value: "", textContent: "ללא עסק" }), ...state.biz.businesses.map((b) => el("option", { value: String(b.id), textContent: b.name })));
@@ -109,8 +114,8 @@ function openMapping(o: SumitOverview, done: () => void) {
     const ok = el("button", { type: "button", className: "btn primary", textContent: "סגירה" });
     ok.onclick = () => (close(), done());
     return el(
-      "div",
-      { className: "add" },
+      "form",
+      { className: "add", method: "dialog" },
       el("h2", { textContent: "קבלות מ-Sumit: קטגוריה ומוצרים" }),
       el("label", {}, "קטגוריית ברירת מחדל לקבלות", cat),
       el("h3", { textContent: "עסק וקטגוריה לכל מוצר" }),

@@ -17,6 +17,14 @@ pub(crate) struct Product {
 }
 
 #[derive(Serialize)]
+pub(crate) struct HeldReceipt {
+    id: i64,
+    customer: String,
+    total: f64,
+    products: Vec<String>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct Overview {
     /// `SUMIT_API_KEY` and `SUMIT_COMPANY_ID` are set on the server.
     configured: bool,
@@ -28,6 +36,8 @@ pub(crate) struct Overview {
     category_id: Option<i64>,
     products: Vec<Product>,
     notices: Vec<Notice>,
+    /// Receipts waiting for a product to be given an income sub-category: (number, customer, total).
+    held: Vec<HeldReceipt>,
     /// VAPID public key for subscribing to web push; absent when push is not set up.
     push_public_key: Option<String>,
 }
@@ -65,6 +75,16 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
         }
     }
     products.sort_by(|a, b| a.name.cmp(&b.name));
+    let state_held: Vec<HeldReceipt> = state
+        .held
+        .values()
+        .map(|h| HeldReceipt {
+            id: h.doc.id,
+            customer: h.doc.customer.clone(),
+            total: h.doc.total,
+            products: h.need.iter().filter(|n| !n.is_empty()).cloned().collect(),
+        })
+        .collect();
     let now = Utc::now();
     let hours = cfg.as_ref().map_or(vec![7, 13, 19], |c| c.hours.clone());
     let mut notices: Vec<Notice> = sumit::load(db.as_ref(), sumit::NOTICES_KEY)
@@ -86,6 +106,7 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
             .await
             .map_err(internal)?,
         products,
+        held: state_held,
         notices,
         push_public_key: push::public_key(),
     }))
@@ -103,14 +124,17 @@ pub(crate) async fn set_category(
 ) -> Result<StatusCode, ApiError> {
     if let Some(id) = b.category_id {
         let cats = db.list_categories().await.map_err(internal)?;
-        if !cats.iter().any(|c| c.id == id && c.is_income) {
+        if !sumit::is_usable_category(&cats, id) {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                "unknown income category".into(),
+                "choose an income category that has no sub-categories".into(),
             ));
         }
     }
     sumit::save(db.as_ref(), sumit::CATEGORY_KEY, &b.category_id)
+        .await
+        .map_err(internal)?;
+    sumit::retry_held(db.as_ref(), Utc::now())
         .await
         .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
@@ -140,10 +164,10 @@ pub(crate) async fn set_product(
     let mut map = sumit::product_map(db.as_ref()).await.map_err(internal)?;
     if let Some(id) = b.category_id {
         let cats = db.list_categories().await.map_err(internal)?;
-        if !cats.iter().any(|c| c.id == id && c.is_income) {
+        if !sumit::is_usable_category(&cats, id) {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                "unknown income category".into(),
+                "choose an income category that has no sub-categories".into(),
             ));
         }
     }
@@ -169,6 +193,9 @@ pub(crate) async fn set_product(
             .await
             .map_err(internal)?;
     }
+    sumit::retry_held(db.as_ref(), Utc::now())
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
