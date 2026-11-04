@@ -180,26 +180,11 @@ pub(crate) async fn mark_read(State(db): State<Db>) -> Result<StatusCode, ApiErr
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Poll now instead of waiting for the next slot. Spends API calls, so it is refused within
-/// ten minutes of the previous poll.
+/// Poll now instead of waiting for the next slot. Spends API calls (counted against the monthly
+/// limit, which refuses further calls once reached).
 pub(crate) async fn poll_now(State(db): State<Db>) -> Result<Json<sumit::PollSummary>, ApiError> {
     let cfg = config()?
         .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "Sumit is not configured".into()))?;
-    let state: SumitState = sumit::load(db.as_ref(), sumit::STATE_KEY)
-        .await
-        .map_err(internal)?;
-    if let Some(at) = state
-        .last_poll_at
-        .as_deref()
-        .and_then(|t| t.parse::<chrono::DateTime<Utc>>().ok())
-    {
-        if Utc::now() - at < chrono::Duration::minutes(10) {
-            return Err(ApiError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "נבדק לפני רגע. כל בדיקה צורכת קריאות מהמכסה החודשית של Sumit, נסו שוב בעוד כמה דקות".into(),
-            ));
-        }
-    }
     let api = sumit::HttpApi::new(cfg.clone());
     sumit::poll_and_notify(db.as_ref(), &api, &cfg)
         .await
