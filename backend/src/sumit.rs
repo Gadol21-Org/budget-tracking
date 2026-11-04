@@ -34,7 +34,6 @@ pub const CALLS_KEY: &str = "sumit_calls";
 pub const NOTICES_KEY: &str = "sumit_notices";
 pub const RECEIPTS_KEY: &str = "sumit_receipts";
 pub const PRODUCTS_KEY: &str = "sumit_product_map";
-pub const CATEGORY_KEY: &str = "sumit_income_category";
 
 const DEFAULT_BASE: &str = "https://api.sumit.co.il";
 const DEFAULT_LIMIT: u32 = 240;
@@ -174,6 +173,8 @@ pub trait SumitApi: Send + Sync {
     /// One page (index `page`) of receipts dated `from` through `to`.
     async fn list(&self, from: NaiveDate, to: NaiveDate, page: usize) -> Result<ListPage>;
     async fn items(&self, doc_id: i64) -> Result<Vec<DocItem>>;
+    /// Names of all the products (income items) of the account, in one call.
+    async fn products(&self) -> Result<Vec<String>>;
 }
 
 pub struct HttpApi {
@@ -272,6 +273,18 @@ pub fn parse_list(v: &Value) -> ListPage {
     }
 }
 
+pub fn parse_products(v: &Value) -> Vec<String> {
+    v["Data"]["IncomeItems"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|i| i["Name"].as_str())
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
 pub fn parse_items(v: &Value) -> Vec<DocItem> {
     v["Data"]["Items"]
         .as_array()
@@ -325,6 +338,16 @@ impl SumitApi for HttpApi {
             )
             .await?;
         Ok(parse_items(&v))
+    }
+
+    async fn products(&self) -> Result<Vec<String>> {
+        let v = self
+            .call(
+                "/accounting/incomeitems/list/",
+                json!({"Paging": {"StartIndex": 0, "PageSize": 1000}}),
+            )
+            .await?;
+        Ok(parse_products(&v))
     }
 }
 
@@ -570,7 +593,6 @@ pub async fn import_receipt(
     db: &dyn Storage,
     doc: &DocSummary,
     items: &[DocItem],
-    category: Option<i64>,
     map: &BTreeMap<String, ProductRule>,
 ) -> Result<Imported> {
     let mark = marker(doc.id);
@@ -594,20 +616,16 @@ pub async fn import_receipt(
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
     let usable = |c: i64| is_usable_category(&cats, c);
-    let default = category.filter(|c| usable(*c));
     let rule_of = |name: &str| {
         let r = map.get(&product_key(name)).copied().unwrap_or_default();
         (
             r.business_id.filter(|b| known.iter().any(|k| k.id == *b)),
-            r.category_id.filter(|c| usable(*c)).or(default),
+            r.category_id.filter(|c| usable(*c)),
         )
     };
+    // Every product needs its own income sub-category; a receipt without products has none.
     let missing: Vec<String> = if items.is_empty() {
-        if default.is_none() {
-            vec![String::new()]
-        } else {
-            Vec::new()
-        }
+        vec![String::new()]
     } else {
         items
             .iter()
@@ -620,7 +638,7 @@ pub async fn import_receipt(
     }
     let biz_of = |name: &str| rule_of(name).0;
     let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
-    let parts = split_total(total, &priced, (None, default));
+    let parts = split_total(total, &priced, (None, None));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
     for ((b, cat), amount) in &parts {
@@ -812,6 +830,15 @@ async fn run_poll(
         state.watermark = Some(receipts.iter().map(|d| d.id).max().unwrap_or(0));
         state.last_date = receipts.iter().map(|d| d.date.to_string()).max();
         summary.baseline = true;
+        // Learn the products now, so they can be mapped before the first receipt arrives.
+        // One call; the baseline stands even if it fails.
+        if spend_call(db, cfg.monthly_limit, now).await.is_ok() {
+            summary.calls += 1;
+            match api.products().await {
+                Ok(names) => state.products.extend(names),
+                Err(e) => tracing::warn!("sumit: listing products failed: {e:#}"),
+            }
+        }
         return Ok(summary);
     }
     let seen: BTreeSet<i64> = state.seen.iter().copied().collect();
@@ -826,9 +853,7 @@ async fn run_poll(
     let mut notices: Vec<Notice> = load(db, NOTICES_KEY).await?;
     let mut failed: Option<anyhow::Error> = None;
     for doc in fresh {
-        let items = if state.failures.get(&doc.id).copied().unwrap_or(0) >= 2 {
-            Vec::new()
-        } else {
+        let items = {
             spend_call(db, cfg.monthly_limit, now).await?;
             summary.calls += 1;
             match api.items(doc.id).await {
@@ -871,14 +896,13 @@ async fn settle_doc(
     recs: &mut Vec<ReceiptRecord>,
     notices: &mut Vec<Notice>,
 ) -> Result<Option<usize>> {
-    let category: Option<i64> = load(db, CATEGORY_KEY).await?;
     let map = product_map(db).await?;
     for i in &items {
         if !i.name.is_empty() {
             state.products.insert(i.name.clone());
         }
     }
-    match import_receipt(db, &doc, &items, category, &map).await {
+    match import_receipt(db, &doc, &items, &map).await {
         Ok(imported) => {
             state.held.remove(&doc.id);
             state.seen.push(doc.id);
@@ -923,7 +947,7 @@ async fn settle_doc(
                                 format!("{} · ", doc.customer)
                             },
                             if what.is_empty() {
-                                "ברירת מחדל".to_string()
+                                "הקבלה ללא פירוט מוצרים".to_string()
                             } else {
                                 format!("למוצרים: {}", what.join(", "))
                             },
@@ -1203,6 +1227,16 @@ mod tests {
                 },
             ])
         }
+        async fn products(&self) -> Result<Vec<String>> {
+            Ok(vec!["שמלה".into(), "משלוח".into(), "צבע".into()])
+        }
+    }
+
+    fn rule(business_id: Option<i64>, category_id: Option<i64>) -> ProductRule {
+        ProductRule {
+            business_id,
+            category_id,
+        }
     }
 
     #[tokio::test]
@@ -1211,17 +1245,13 @@ mod tests {
         let biz = db.insert_business("שמלות", false).await.unwrap();
         armed(&db).await;
         let cat = db.insert_category("הכנסות", true, None).await.unwrap();
-        save(&db, CATEGORY_KEY, &Some(cat)).await.unwrap();
         save(
             &db,
             PRODUCTS_KEY,
-            &BTreeMap::from([(
-                product_key("שמלה"),
-                ProductRule {
-                    business_id: Some(biz),
-                    category_id: None,
-                },
-            )]),
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(Some(biz), Some(cat))),
+                (product_key("משלוח"), rule(None, Some(cat))),
+            ]),
         )
         .await
         .unwrap();
@@ -1274,12 +1304,14 @@ mod tests {
             doc_type: 2,
         };
         let cat = db.insert_category("הכנסות", true, None).await.unwrap();
-        let a = import_receipt(&db, &doc, &[], Some(cat), &BTreeMap::new())
-            .await
-            .unwrap();
-        let b = import_receipt(&db, &doc, &[], Some(cat), &BTreeMap::new())
-            .await
-            .unwrap();
+        let items = [DocItem {
+            name: "שמלה".into(),
+            quantity: 1.0,
+            total: 10.0,
+        }];
+        let map = BTreeMap::from([(product_key("שמלה"), rule(None, Some(cat)))]);
+        let a = import_receipt(&db, &doc, &items, &map).await.unwrap();
+        let b = import_receipt(&db, &doc, &items, &map).await.unwrap();
         assert_eq!(a.tx_ids, b.tx_ids);
         assert!(b.record.is_none());
         assert_eq!(db.list_transactions().await.unwrap().len(), 1);
@@ -1335,16 +1367,11 @@ mod tests {
                 total: 25.0,
             },
         ];
-        let map = BTreeMap::from([(
-            product_key("תיקון"),
-            ProductRule {
-                business_id: None,
-                category_id: Some(sub),
-            },
-        )]);
-        let r = import_receipt(&db, &doc, &items, Some(plain), &map)
-            .await
-            .unwrap();
+        let map = BTreeMap::from([
+            (product_key("שמלה"), rule(None, Some(plain))),
+            (product_key("תיקון"), rule(None, Some(sub))),
+        ]);
+        let r = import_receipt(&db, &doc, &items, &map).await.unwrap();
         assert_eq!(r.tx_ids.len(), 2);
         let mut txs = db.list_transactions().await.unwrap();
         txs.sort_by_key(|t| t.amount_agorot);
@@ -1364,8 +1391,14 @@ mod tests {
         let top = db.insert_category("הכנסות", true, None).await.unwrap();
         let sub = db.insert_category("שמלות", true, Some(top)).await.unwrap();
         armed(&db).await;
-        // The default is a category that has sub-categories: not allowed.
-        save(&db, CATEGORY_KEY, &Some(top)).await.unwrap();
+        // A product pointing at a category that has sub-categories does not count.
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([(product_key("שמלה"), rule(None, Some(top)))]),
+        )
+        .await
+        .unwrap();
         let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
         let doc = DocSummary {
             id: 90,
@@ -1394,8 +1427,17 @@ mod tests {
             load::<Vec<Notice>>(&db, NOTICES_KEY).await.unwrap().len(),
             1
         );
-        // A valid category releases it, without calling Sumit.
-        save(&db, CATEGORY_KEY, &Some(sub)).await.unwrap();
+        // Valid sub-categories for its products release it, without calling Sumit.
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(None, Some(sub))),
+                (product_key("משלוח"), rule(None, Some(sub))),
+            ]),
+        )
+        .await
+        .unwrap();
         let lists = *api.lists.lock().unwrap();
         assert_eq!(retry_held(&db, now).await.unwrap(), 1);
         assert_eq!(*api.lists.lock().unwrap(), lists);
@@ -1410,8 +1452,6 @@ mod tests {
     #[tokio::test]
     async fn the_first_poll_only_records_a_baseline() {
         let db = crate::testdb::fresh().await;
-        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
-        save(&db, CATEGORY_KEY, &Some(cat)).await.unwrap();
         let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
         let old = DocSummary {
             id: 10,
@@ -1428,10 +1468,24 @@ mod tests {
         };
         let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
         assert!(s.baseline);
-        assert_eq!((s.new_receipts, s.calls), (0, 1));
+        // One call for the receipts, one for the product list; nothing imported.
+        assert_eq!((s.new_receipts, s.calls), (0, 2));
         assert!(db.list_transactions().await.unwrap().is_empty());
         assert_eq!(*api.details.lock().unwrap(), 0);
+        let st: State = load(&db, STATE_KEY).await.unwrap();
+        assert!(st.products.contains("צבע") && st.products.contains("שמלה"));
         // Next poll: the old receipt stays ignored, a newer one is imported.
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(None, Some(cat))),
+                (product_key("משלוח"), rule(None, Some(cat))),
+            ]),
+        )
+        .await
+        .unwrap();
         let newer = DocSummary {
             id: 11,
             number: Some(2),

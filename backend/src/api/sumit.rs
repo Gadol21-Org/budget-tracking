@@ -33,7 +33,6 @@ pub(crate) struct Overview {
     next_poll_at: Option<String>,
     calls_this_month: u32,
     monthly_limit: u32,
-    category_id: Option<i64>,
     products: Vec<Product>,
     notices: Vec<Notice>,
     /// Receipts waiting for a product to be given an income sub-category: (number, customer, total).
@@ -102,42 +101,11 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
             .await
             .map_err(internal)?,
         monthly_limit: cfg.as_ref().map_or(0, |c| c.monthly_limit),
-        category_id: sumit::load::<Option<i64>>(db.as_ref(), sumit::CATEGORY_KEY)
-            .await
-            .map_err(internal)?,
         products,
         held: state_held,
         notices,
         push_public_key: push::public_key(),
     }))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CategoryChoice {
-    category_id: Option<i64>,
-}
-
-/// The income category new receipts are imported into (none leaves them uncategorised).
-pub(crate) async fn set_category(
-    State(db): State<Db>,
-    Json(b): Json<CategoryChoice>,
-) -> Result<StatusCode, ApiError> {
-    if let Some(id) = b.category_id {
-        let cats = db.list_categories().await.map_err(internal)?;
-        if !sumit::is_usable_category(&cats, id) {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "choose an income category that has no sub-categories".into(),
-            ));
-        }
-    }
-    sumit::save(db.as_ref(), sumit::CATEGORY_KEY, &b.category_id)
-        .await
-        .map_err(internal)?;
-    sumit::retry_held(db.as_ref(), Utc::now())
-        .await
-        .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

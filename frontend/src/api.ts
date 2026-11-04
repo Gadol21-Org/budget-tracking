@@ -197,7 +197,6 @@ export interface SumitOverview {
   next_poll_at: string | null;
   calls_this_month: number;
   monthly_limit: number;
-  category_id: number | null;
   products: { name: string; business_id: number | null; category_id: number | null }[];
   notices: SumitNotice[];
   /** Receipts waiting for an income sub-category (default or per product) before they can be imported. */
@@ -209,7 +208,6 @@ export const api = {
   sumit: () => request<SumitOverview>("/api/sumit"),
   /** Look for new receipts now. Costs Sumit API calls (the server refuses within 10 minutes of the last check). */
   sumitPoll: () => request<{ baseline: boolean; new_receipts: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
-  sumitCategory: (category_id: number | null) => request<void>("/api/sumit/category", { method: "PUT", body: JSON.stringify({ category_id }) }),
   sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
   pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),

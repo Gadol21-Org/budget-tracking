@@ -157,10 +157,6 @@ pub(crate) fn router(db: Db) -> Router {
         )
         .route("/api/sumit", get(sumit::overview))
         .route(
-            "/api/sumit/category",
-            axum::routing::put(sumit::set_category),
-        )
-        .route(
             "/api/sumit/products",
             axum::routing::put(sumit::set_product),
         )
