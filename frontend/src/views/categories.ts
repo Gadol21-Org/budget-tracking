@@ -191,26 +191,6 @@ export function categoriesView(): HTMLElement {
   return el("div", {}, el("div", { className: "actions", style: "justify-content:flex-start" }, back), el("h1", { textContent: "קטגוריות" }), categoriesCard());
 }
 
-export function categoriesLinkCard(): HTMLElement {
-  const open = el("button", { className: "btn", textContent: "עריכת קטגוריות" });
-  open.onclick = () => {
-    go("categories");
-  };
-  return el("div", { className: "card" }, el("h2", { textContent: "קטגוריות" }), el("p", { className: "muted", textContent: "הוספה ומחיקה של קטגוריות ותתי-קטגוריות." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
-}
-
-export function businessesLinkCard(): HTMLElement {
-  const open = el("button", { className: "btn", textContent: "ניהול עסקים" });
-  open.onclick = () => go("businesses");
-  return el("div", { className: "card" }, el("h2", { textContent: "עסקים" }), el("p", { className: "muted", textContent: "עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
-}
-
-export function currenciesLinkCard(): HTMLElement {
-  const open = el("button", { className: "btn", textContent: "ניהול מטבעות" });
-  open.onclick = () => go("currencies");
-  return el("div", { className: "card" }, el("h2", { textContent: "מטבעות" }), el("p", { className: "muted", textContent: "בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." }), el("div", { className: "actions", style: "justify-content:flex-start" }, open));
-}
-
 export function categoriesCard(): HTMLElement {
   const kinds = [
     [false, "הוצאות"],
