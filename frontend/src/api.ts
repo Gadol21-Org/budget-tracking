@@ -198,7 +198,7 @@ export interface SumitOverview {
   calls_this_month: number;
   monthly_limit: number;
   category_id: number | null;
-  products: { name: string; business_id: number | null }[];
+  products: { name: string; business_id: number | null; category_id: number | null }[];
   notices: SumitNotice[];
   push_public_key: string | null;
 }
@@ -208,7 +208,7 @@ export const api = {
   /** Look for new receipts now. Costs Sumit API calls (the server refuses within 10 minutes of the last check). */
   sumitPoll: () => request<{ new_receipts: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
   sumitCategory: (category_id: number | null) => request<void>("/api/sumit/category", { method: "PUT", body: JSON.stringify({ category_id }) }),
-  sumitProduct: (name: string, business_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id }) }),
+  sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
   pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
   pushUnsubscribe: (endpoint: string) => request<void>("/api/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),

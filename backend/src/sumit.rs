@@ -407,8 +407,44 @@ pub async fn save<T: Serialize>(db: &dyn Storage, key: &str, v: &T) -> Result<()
     db.set_setting(key, &serde_json::to_string(v)?).await
 }
 
-/// Product name (lower-cased) -> business id.
-pub async fn product_map(db: &dyn Storage) -> Result<BTreeMap<String, i64>> {
+/// Where a Sumit product goes: its business and its income category (either may be unset; an
+/// unset category means the default one).
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ProductRule {
+    pub business_id: Option<i64>,
+    pub category_id: Option<i64>,
+}
+
+impl<'de> Deserialize<'de> for ProductRule {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Earlier versions stored just the business id.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Business(i64),
+            Rule {
+                business_id: Option<i64>,
+                category_id: Option<i64>,
+            },
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Business(b) => ProductRule {
+                business_id: Some(b),
+                category_id: None,
+            },
+            Raw::Rule {
+                business_id,
+                category_id,
+            } => ProductRule {
+                business_id,
+                category_id,
+            },
+        })
+    }
+}
+
+/// Product name (lower-cased) -> its rule.
+pub async fn product_map(db: &dyn Storage) -> Result<BTreeMap<String, ProductRule>> {
     load(db, PRODUCTS_KEY).await
 }
 
@@ -442,42 +478,49 @@ pub async fn calls_this_month(db: &dyn Storage, now: DateTime<Utc>) -> Result<u3
 // ---------------------------------------------------------------------------------------------
 // Import
 
-/// Split a receipt's total over the businesses its products belong to. Each group's share of
-/// the total is proportional to its products' prices (which may exclude VAT); the last group
-/// takes the remainder so the parts add up exactly. Returns (business, agorot), the group
-/// without a business last.
-pub fn split_total(total_agorot: i64, items: &[(Option<i64>, f64)]) -> Vec<(Option<i64>, i64)> {
-    let mut groups: BTreeMap<Option<i64>, f64> = BTreeMap::new();
-    for (b, v) in items {
-        *groups.entry(*b).or_default() += v.max(0.0);
+/// Split a receipt's total over the groups its products fall in (business and category). Each
+/// group's share of the total is proportional to its products' prices (which may exclude VAT);
+/// the last group takes the remainder so the parts add up exactly. The `plain` group (no
+/// business, the default category) comes last.
+pub fn split_total<K: Ord + Copy>(
+    total_agorot: i64,
+    items: &[(K, f64)],
+    plain: K,
+) -> Vec<(K, i64)> {
+    let mut groups: BTreeMap<K, f64> = BTreeMap::new();
+    for (k, v) in items {
+        *groups.entry(*k).or_default() += v.max(0.0);
     }
     if groups.is_empty() {
-        return vec![(None, total_agorot)];
+        return vec![(plain, total_agorot)];
     }
     let sum: f64 = groups.values().sum();
-    let mut order: Vec<Option<i64>> = groups.keys().filter(|k| k.is_some()).copied().collect();
-    if groups.contains_key(&None) {
-        order.push(None);
+    let mut order: Vec<K> = groups.keys().filter(|k| **k != plain).copied().collect();
+    if groups.contains_key(&plain) {
+        order.push(plain);
     }
     let mut out = Vec::new();
     let mut left = total_agorot;
-    for (i, b) in order.iter().enumerate() {
+    for (i, k) in order.iter().enumerate() {
         let part = if i + 1 == order.len() {
             left
         } else if sum > 0.0 {
-            (total_agorot as f64 * groups[b] / sum).round() as i64
+            (total_agorot as f64 * groups[k] / sum).round() as i64
         } else {
             total_agorot / order.len() as i64
         };
         left -= part;
-        out.push((*b, part));
+        out.push((*k, part));
     }
     out.retain(|(_, a)| *a != 0);
     if out.is_empty() {
-        out.push((None, total_agorot));
+        out.push((plain, total_agorot));
     }
     out
 }
+
+/// (business, category) a product's money goes to.
+pub type Group = (Option<i64>, Option<i64>);
 
 pub fn marker(doc_id: i64) -> String {
     format!("[sumit:{doc_id}]")
@@ -500,7 +543,7 @@ pub async fn import_receipt(
     doc: &DocSummary,
     items: &[DocItem],
     category: Option<i64>,
-    map: &BTreeMap<String, i64>,
+    map: &BTreeMap<String, ProductRule>,
 ) -> Result<Imported> {
     let mark = marker(doc.id);
     let existing: Vec<i64> = db
@@ -521,24 +564,29 @@ pub async fn import_receipt(
         bail!("receipt {} has no positive amount", doc.id);
     }
     let known = db.list_businesses().await?;
-    let biz_of = |name: &str| {
-        map.get(&product_key(name))
-            .copied()
-            .filter(|b| known.iter().any(|k| k.id == *b))
+    let cats = db.list_categories().await?;
+    let rule_of = |name: &str| {
+        let r = map.get(&product_key(name)).copied().unwrap_or_default();
+        (
+            r.business_id.filter(|b| known.iter().any(|k| k.id == *b)),
+            r.category_id
+                .filter(|c| cats.iter().any(|k| k.id == *c && k.is_income))
+                .or(category),
+        )
     };
-    let priced: Vec<(Option<i64>, f64)> =
-        items.iter().map(|i| (biz_of(&i.name), i.total)).collect();
-    let parts = split_total(total, &priced);
+    let biz_of = |name: &str| rule_of(name).0;
+    let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
+    let parts = split_total(total, &priced, (None, category));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
-    for (b, amount) in &parts {
+    for ((b, cat), amount) in &parts {
         let mut note = format!("קבלה {}", doc.number.unwrap_or(doc.id));
         if !doc.customer.is_empty() {
             note.push_str(&format!(" – {}", doc.customer));
         }
         let what: Vec<&str> = items
             .iter()
-            .filter(|i| biz_of(&i.name) == *b && !i.name.is_empty())
+            .filter(|i| rule_of(&i.name) == (*b, *cat) && !i.name.is_empty())
             .map(|i| i.name.as_str())
             .collect();
         if !what.is_empty() {
@@ -550,7 +598,7 @@ pub async fn import_receipt(
             .create_transaction(&NewTransaction {
                 date: date.clone(),
                 amount_agorot: *amount,
-                category_id: category,
+                category_id: *cat,
                 payment_method_id: None,
                 note,
             })
@@ -895,13 +943,14 @@ mod tests {
 
     #[test]
     fn totals_split_over_businesses() {
-        let s = split_total(11_800, &[(Some(1), 50.0), (Some(2), 30.0), (None, 20.0)]);
-        assert_eq!(s, vec![(Some(1), 5_900), (Some(2), 3_540), (None, 2_360)]);
+        let n = None;
+        let s = split_total(11_800, &[(Some(1), 50.0), (Some(2), 30.0), (n, 20.0)], n);
+        assert_eq!(s, vec![(Some(1), 5_900), (Some(2), 3_540), (n, 2_360)]);
         assert_eq!(s.iter().map(|x| x.1).sum::<i64>(), 11_800);
-        assert_eq!(split_total(1_000, &[(None, 5.0)]), vec![(None, 1_000)]);
-        assert_eq!(split_total(1_000, &[]), vec![(None, 1_000)]);
-        assert_eq!(split_total(100, &[(Some(3), 0.0)]), vec![(Some(3), 100)]);
-        let odd = split_total(1_000, &[(Some(1), 1.0), (Some(2), 1.0), (None, 1.0)]);
+        assert_eq!(split_total(1_000, &[(n, 5.0)], n), vec![(n, 1_000)]);
+        assert_eq!(split_total(1_000, &[], n), vec![(n, 1_000)]);
+        assert_eq!(split_total(100, &[(Some(3), 0.0)], n), vec![(Some(3), 100)]);
+        let odd = split_total(1_000, &[(Some(1), 1.0), (Some(2), 1.0), (n, 1.0)], n);
         assert_eq!(odd.iter().map(|x| x.1).sum::<i64>(), 1_000);
     }
 
@@ -992,7 +1041,13 @@ mod tests {
         save(
             &db,
             PRODUCTS_KEY,
-            &BTreeMap::from([(product_key("שמלה"), biz)]),
+            &BTreeMap::from([(
+                product_key("שמלה"),
+                ProductRule {
+                    business_id: Some(biz),
+                    category_id: None,
+                },
+            )]),
         )
         .await
         .unwrap();
@@ -1053,5 +1108,77 @@ mod tests {
         assert_eq!(a.tx_ids, b.tx_ids);
         assert!(b.record.is_none());
         assert_eq!(db.list_transactions().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn old_product_maps_still_load() {
+        let m: BTreeMap<String, ProductRule> =
+            serde_json::from_str(r#"{"a": 3, "b": {"business_id": null, "category_id": 5}}"#)
+                .unwrap();
+        assert_eq!(
+            m["a"],
+            ProductRule {
+                business_id: Some(3),
+                category_id: None
+            }
+        );
+        assert_eq!(
+            m["b"],
+            ProductRule {
+                business_id: None,
+                category_id: Some(5)
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn each_product_can_go_to_its_own_category() {
+        let db = crate::testdb::fresh().await;
+        let top = db.insert_category("הכנסות", true, None).await.unwrap();
+        let sub = db
+            .insert_category("תיקונים", true, Some(top))
+            .await
+            .unwrap();
+        let doc = DocSummary {
+            id: 6,
+            number: Some(7),
+            date: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            customer: String::new(),
+            total: 100.0,
+            doc_type: 2,
+        };
+        let items = vec![
+            DocItem {
+                name: "שמלה".into(),
+                quantity: 1.0,
+                total: 75.0,
+            },
+            DocItem {
+                name: "תיקון".into(),
+                quantity: 1.0,
+                total: 25.0,
+            },
+        ];
+        let map = BTreeMap::from([(
+            product_key("תיקון"),
+            ProductRule {
+                business_id: None,
+                category_id: Some(sub),
+            },
+        )]);
+        let r = import_receipt(&db, &doc, &items, Some(top), &map)
+            .await
+            .unwrap();
+        assert_eq!(r.tx_ids.len(), 2);
+        let mut txs = db.list_transactions().await.unwrap();
+        txs.sort_by_key(|t| t.amount_agorot);
+        assert_eq!(
+            (txs[0].amount_agorot, txs[0].category_id),
+            (2_500, Some(sub))
+        );
+        assert_eq!(
+            (txs[1].amount_agorot, txs[1].category_id),
+            (7_500, Some(top))
+        );
     }
 }

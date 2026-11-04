@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct Product {
     name: String,
     business_id: Option<i64>,
+    category_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -45,16 +46,21 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
     let mut products: Vec<Product> = state
         .products
         .iter()
-        .map(|n| Product {
-            name: n.clone(),
-            business_id: map.get(&sumit::product_key(n)).copied(),
+        .map(|n| {
+            let r = map.get(&sumit::product_key(n)).copied().unwrap_or_default();
+            Product {
+                name: n.clone(),
+                business_id: r.business_id,
+                category_id: r.category_id,
+            }
         })
         .collect();
     for (k, b) in &map {
         if !state.products.iter().any(|n| sumit::product_key(n) == *k) {
             products.push(Product {
                 name: k.clone(),
-                business_id: Some(*b),
+                business_id: b.business_id,
+                category_id: b.category_id,
             });
         }
     }
@@ -114,9 +120,10 @@ pub(crate) async fn set_category(
 pub(crate) struct ProductChoice {
     name: String,
     business_id: Option<i64>,
+    category_id: Option<i64>,
 }
 
-/// Say which business a Sumit product belongs to (null removes the mapping). Applies to
+/// Say which business and income category a Sumit product belongs to (both null removes the mapping). Applies to
 /// receipts imported from now on.
 pub(crate) async fn set_product(
     State(db): State<Db>,
@@ -131,10 +138,26 @@ pub(crate) async fn set_product(
     }
     check_business(&db, b.business_id).await?;
     let mut map = sumit::product_map(db.as_ref()).await.map_err(internal)?;
-    match b.business_id {
-        Some(id) => map.insert(sumit::product_key(name), id),
-        None => map.remove(&sumit::product_key(name)),
-    };
+    if let Some(id) = b.category_id {
+        let cats = db.list_categories().await.map_err(internal)?;
+        if !cats.iter().any(|c| c.id == id && c.is_income) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "unknown income category".into(),
+            ));
+        }
+    }
+    if b.business_id.is_none() && b.category_id.is_none() {
+        map.remove(&sumit::product_key(name));
+    } else {
+        map.insert(
+            sumit::product_key(name),
+            sumit::ProductRule {
+                business_id: b.business_id,
+                category_id: b.category_id,
+            },
+        );
+    }
     sumit::save(db.as_ref(), sumit::PRODUCTS_KEY, &map)
         .await
         .map_err(internal)?;

@@ -1,6 +1,7 @@
 import { el } from "../ui";
 import { api, type SumitOverview } from "../api";
 import { state } from "../state";
+import { catPath } from "../selectors";
 import { openDialog } from "../nav";
 import { load } from "../sync";
 
@@ -91,12 +92,19 @@ function openMapping(o: SumitOverview, done: () => void) {
     cat.append(el("option", { value: "", textContent: "ללא קטגוריה" }), ...state.cats.filter((c) => c.is_income).map((c) => el("option", { value: String(c.id), textContent: c.name })));
     cat.value = o.category_id != null ? String(o.category_id) : "";
     cat.onchange = () => void api.sumitCategory(cat.value ? Number(cat.value) : null);
+    // Every income category, sub-categories with their full path, so each product can go to its own.
+    const incomeCats = state.cats.filter((c) => c.is_income && !state.cats.some((k) => k.parent_id === c.id));
     const rows = o.products.map((p) => {
-      const sel = el("select");
-      sel.append(el("option", { value: "", textContent: "ללא עסק" }), ...state.biz.businesses.map((b) => el("option", { value: String(b.id), textContent: b.name })));
-      sel.value = p.business_id != null ? String(p.business_id) : "";
-      sel.onchange = () => void api.sumitProduct(p.name, sel.value ? Number(sel.value) : null);
-      return el("label", {}, p.name, sel);
+      const biz = el("select");
+      biz.append(el("option", { value: "", textContent: "ללא עסק" }), ...state.biz.businesses.map((b) => el("option", { value: String(b.id), textContent: b.name })));
+      biz.value = p.business_id != null ? String(p.business_id) : "";
+      const pc = el("select");
+      pc.append(el("option", { value: "", textContent: "קטגוריית ברירת המחדל" }), ...incomeCats.map((c) => el("option", { value: String(c.id), textContent: catPath(c.id) })));
+      pc.value = p.category_id != null ? String(p.category_id) : "";
+      const save = () => void api.sumitProduct(p.name, biz.value ? Number(biz.value) : null, pc.value ? Number(pc.value) : null);
+      biz.onchange = save;
+      pc.onchange = save;
+      return el("div", { className: "card" }, el("div", { className: "name", textContent: p.name }), el("label", {}, "עסק", biz), el("label", {}, "קטגוריה ותת-קטגוריה", pc));
     });
     const ok = el("button", { type: "button", className: "btn primary", textContent: "סגירה" });
     ok.onclick = () => (close(), done());
@@ -104,9 +112,9 @@ function openMapping(o: SumitOverview, done: () => void) {
       "div",
       { className: "add" },
       el("h2", { textContent: "קבלות מ-Sumit: קטגוריה ומוצרים" }),
-      el("label", {}, "קטגוריית הכנסה לקבלות", cat),
-      el("h3", { textContent: "עסק לכל מוצר" }),
-      ...(rows.length ? rows : [el("div", { className: "note muted", textContent: "מוצרים יופיעו כאן אחרי הקבלה הראשונה. קבלה עם מוצרים מכמה עסקים תתפצל לכמה תנועות." })]),
+      el("label", {}, "קטגוריית ברירת מחדל לקבלות", cat),
+      el("h3", { textContent: "עסק וקטגוריה לכל מוצר" }),
+      ...(rows.length ? rows : [el("div", { className: "note muted", textContent: "מוצרים יופיעו כאן אחרי הקבלה הראשונה. קבלה עם מוצרים מעסקים או מקטגוריות שונים תתפצל לכמה תנועות." })]),
       el("div", { className: "actions" }, ok),
     );
   });
