@@ -170,4 +170,21 @@ mod tests {
         assert!(check_endpoint("https://fcm.googleapis.com@evil.com/x").is_err());
         assert!(check_endpoint("https://notfcm.googleapis.com.evil.com/x").is_err());
     }
+
+    // A throwaway key made only for this test.
+    const TEST_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgpOQ9JdX3PqeRe7vx\nJi1jugv+q/aGEhbC8zWePrdJY3OhRANCAAT4iLsUBO8lR3FLJnM0Z3Omj7Zkkops\nQMr/A/W/Y9+gYKdbJ2PUqsfkOj6HuNj/Ka8kmceMl8oNi/PovjprV+mw\n-----END PRIVATE KEY-----\n";
+
+    #[test]
+    fn vapid_header_is_signed_with_a_p256_key() {
+        let h = vapid_header(
+            "https://fcm.googleapis.com/fcm/send/abc",
+            TEST_PEM,
+            "PUBKEY",
+        )
+        .unwrap();
+        assert!(h.starts_with("vapid t=") && h.ends_with(", k=PUBKEY"));
+        let jwt = h.trim_start_matches("vapid t=").split(',').next().unwrap();
+        assert_eq!(jwt.split('.').count(), 3);
+        assert!(vapid_header("https://x/y", "not a key", "K").is_err());
+    }
 }

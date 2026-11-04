@@ -6,6 +6,7 @@ import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { drillCrumbs, summaryCategories } from "../insights";
 import { categoryName } from "../categories";
+import { canOfferPush, enablePush } from "./sumit";
 import { inPeriod, money } from "../selectors";
 
 export function monthBar(): HTMLElement {
@@ -138,6 +139,30 @@ function sumitBanner(): HTMLElement | null {
   return clickable(b, () => go("settings"));
 }
 
+/** Asks once to turn on notifications for new Sumit receipts (the browser's own permission prompt follows the tap). */
+function pushOffer(): HTMLElement | null {
+  if (!canOfferPush()) return null;
+  const ask = el("button", { className: "btn primary", textContent: "הפעלה" });
+  const later = el("button", { className: "btn", textContent: "לא עכשיו" });
+  ask.onclick = async () => {
+    try {
+      await enablePush(state.sumit.pushKey!);
+    } catch {
+      /* the permission stays undecided: the offer comes back */
+    }
+    render();
+  };
+  later.onclick = () => {
+    try {
+      localStorage.setItem("push-offer-dismissed", "1");
+    } catch {
+      /* not remembered */
+    }
+    render();
+  };
+  return el("div", { className: "sumit-banner", role: "status" }, el("div", { textContent: "לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?" }), el("div", { className: "actions", style: "justify-content:flex-start;margin-top:8px" }, ask, later));
+}
+
 export function monthView(): HTMLElement {
   const txs = inPeriod();
   const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
@@ -158,6 +183,7 @@ export function monthView(): HTMLElement {
     {},
     monthBar(),
     sumitBanner(),
+    pushOffer(),
     el("div", { className: "stats" }, stat("הכנסות", money(income, "income"), "income"), stat("הוצאות", money(-expense, "expense"), "expense"), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
     businessCard(),
     summaryCategories(insightsCtx()),

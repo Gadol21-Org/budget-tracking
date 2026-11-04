@@ -128,8 +128,9 @@ async function apply(data: ServerData & { log?: LogEntry[] }) {
 async function refreshSumit() {
   try {
     const o = await api.sumit();
-    const next = o.configured ? { held: o.held.length, unread: o.notices.filter((n) => !n.read).length } : { held: 0, unread: 0 };
-    if (next.held === state.sumit.held && next.unread === state.sumit.unread) return;
+    state.sumitData = o;
+    const next = o.configured ? { held: o.held.length, unread: o.notices.filter((n) => !n.read).length, pushKey: o.push_public_key } : { held: 0, unread: 0, pushKey: null };
+    if (next.held === state.sumit.held && next.unread === state.sumit.unread && next.pushKey === state.sumit.pushKey) return;
     state.sumit = next;
     render();
   } catch {

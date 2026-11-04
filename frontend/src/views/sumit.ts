@@ -13,7 +13,7 @@ function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
 }
 
 /** Ask for notification permission and register this device for "new receipt" pushes. */
-async function enablePush(key: string): Promise<string> {
+export async function enablePush(key: string): Promise<string> {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return "הדפדפן אינו תומך בהתראות";
   if ((await Notification.requestPermission()) !== "granted") return "ההרשאה להתראות לא ניתנה";
   const reg = await navigator.serviceWorker.ready;
@@ -33,8 +33,14 @@ export function sumitCard(): HTMLElement {
   const push = el("button", { className: "btn", textContent: "הפעלת התראות במכשיר" });
   push.style.display = "none";
   let data: SumitOverview | undefined;
+  let painted = "";
   const paint = (o: SumitOverview) => {
     data = o;
+    state.sumitData = o;
+    // Nothing changed since the last paint (the cached copy was already shown): leave the card alone, no flash.
+    const sig = JSON.stringify(o);
+    if (sig === painted) return;
+    painted = sig;
     if (!o.configured) {
       status.textContent = "החיבור ל-Sumit עדיין לא הוגדר בשרת.";
       check.disabled = true;
@@ -44,11 +50,14 @@ export function sumitCard(): HTMLElement {
     push.style.display = o.push_public_key ? "" : "none";
     held.textContent = o.held.length ? `${o.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${[...new Set(o.held.flatMap((h) => h.products))].join(", ") || "ללא פירוט מוצרים"}). הגדירו אותה ב"הגדרת מוצרים ועסקים" והקבלות ייובאו.` : "";
     list.replaceChildren(
-      ...o.notices.slice(0, 5).map((n) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `${n.read ? "" : "● "}${n.title}` }), el("div", { className: "muted", textContent: `${when(n.at)} · ${n.body}` })))),
+      // Only receipts not seen yet: once the card has shown them they are marked read and drop off.
+      ...o.notices.filter((n) => !n.read).slice(0, 5).map((n) => el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: `● ${n.title}` }), el("div", { className: "muted", textContent: `${when(n.at)} · ${n.body}` })))),
     );
-    if (o.notices.some((n) => !n.read)) void api.sumitRead().catch(() => {});
+    if (o.notices.some((n) => !n.read)) void api.sumitRead().then(() => (state.sumit.unread = 0)).catch(() => {});
   };
-  const refresh = () => api.sumit().then(paint).catch(() => (status.textContent = "טעינת הנתונים נכשלה"));
+  const refresh = () => api.sumit().then(paint).catch(() => !data && (status.textContent = "טעינת הנתונים נכשלה"));
+  // Draw from the cached overview at once; the fresh one replaces it only if it differs.
+  if (state.sumitData) paint(state.sumitData);
   void refresh();
   check.onclick = async () => {
     check.disabled = true;
@@ -118,4 +127,13 @@ function openMapping(o: SumitOverview, done: () => void) {
       el("div", { className: "actions" }, ok),
     );
   });
+}
+
+/** Can this device be asked for notifications now (supported, not yet decided, the server can send them)? */
+export function canOfferPush(): boolean {
+  try {
+    return !!state.sumit.pushKey && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && Notification.permission === "default" && localStorage.getItem("push-offer-dismissed") !== "1";
+  } catch {
+    return false;
+  }
 }

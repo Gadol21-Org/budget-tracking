@@ -1,7 +1,7 @@
 import { type InsightsNav, type InsightsState } from "./insights";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
-import { type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
+import { type SumitOverview, type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
 export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people";
 
@@ -47,7 +47,9 @@ export const state = {
   /** Transactions entered in USD or JPY, by transaction id (queued lines by -queue id): original amount and rate. */
   fx: new Map<number, Fx>(),
   /** Sumit receipts needing attention: waiting for a category, or new and not yet seen. */
-  sumit: { held: 0, unread: 0 },
+  sumit: { held: 0, unread: 0, pushKey: null as string | null },
+  /** The last Sumit overview fetched, so the settings card draws at once instead of flashing while it loads. */
+  sumitData: undefined as SumitOverview | undefined,
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };

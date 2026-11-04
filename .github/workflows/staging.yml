@@ -72,6 +72,9 @@ jobs:
           # Optional: the Sumit TEST account, for trying receipt polling. Staging-only secrets.
           SUMIT_API_KEY: ${{ secrets.STAGING_SUMIT_API_KEY }}
           SUMIT_COMPANY_ID: ${{ secrets.STAGING_SUMIT_COMPANY_ID }}
+          # Optional web push keys (see .env.example), also staging-only.
+          VAPID_PRIVATE_KEY_PEM_B64: ${{ secrets.STAGING_VAPID_PRIVATE_KEY_PEM_B64 }}
+          VAPID_PUBLIC_KEY: ${{ secrets.STAGING_VAPID_PUBLIC_KEY }}
           RESET: ${{ inputs.teardown && 'teardown' || (inputs.reset && 'reset' || '') }}
         run: |
           ssh="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes $TARGET"
@@ -83,8 +86,12 @@ jobs:
             exit 0
           fi
           if [ -n "$SUMIT_API_KEY" ] && [ -n "$SUMIT_COMPANY_ID" ]; then
-            printf 'SUMIT_API_KEY=%s\nSUMIT_COMPANY_ID=%s\n' "$SUMIT_API_KEY" "$SUMIT_COMPANY_ID" \
-              | $ssh 'umask 077; cat > ~/budget-staging/sumit.env'
+            {
+              printf 'SUMIT_API_KEY=%s\nSUMIT_COMPANY_ID=%s\n' "$SUMIT_API_KEY" "$SUMIT_COMPANY_ID"
+              if [ -n "$VAPID_PRIVATE_KEY_PEM_B64" ] && [ -n "$VAPID_PUBLIC_KEY" ]; then
+                printf 'VAPID_PRIVATE_KEY_PEM_B64=%s\nVAPID_PUBLIC_KEY=%s\n' "$VAPID_PRIVATE_KEY_PEM_B64" "$VAPID_PUBLIC_KEY"
+              fi
+            } | $ssh 'umask 077; cat > ~/budget-staging/sumit.env'
           else
             $ssh 'rm -f ~/budget-staging/sumit.env'
           fi
