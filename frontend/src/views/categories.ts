@@ -4,9 +4,10 @@ import { api, type Category } from "../api";
 import { state } from "../state";
 import { go, goBack, manageCtx, openDialog } from "../nav";
 import { load, loadHistory } from "../sync";
-import { catPath } from "../selectors";
 import { render } from "../render";
-import { combo } from "../widgets";
+import { createElement } from "react";
+import { mountReact } from "../components/mount";
+import { DeleteCategoryForm } from "./DeleteCategoryForm";
 
 /** Paamonim top-level categories of a kind: what a top-level category made here can stand in for. */
 export const paamonimTops = (isIncome: boolean) => state.cats.filter((c) => c.parent_id == null && c.from_paamonim && c.is_income === isIncome);
@@ -179,66 +180,7 @@ export function openMoveCategoryDialog(cat: Category) {
 }
 
 export function openDeleteCategoryDialog(cat: Category) {
-  openDialog((close) => {
-    const subs = state.cats.filter((c) => c.parent_id === cat.id);
-    const doomed = new Set([cat.id, ...subs.map((c) => c.id)]);
-    // Occurrences not yet settled are not in txs, so repeating rules are counted separately.
-    const lines = state.txs.filter((t) => t.category_id != null && doomed.has(t.category_id) && !t.upcoming).length;
-    const rules = new Set(state.recurring.filter((r) => r.category_id != null && doomed.has(r.category_id)).map((r) => r.series_id)).size;
-    const used = lines + rules;
-    // The same searchable category / sub-category pickers as the transaction form.
-    const avail = state.cats.filter((c) => c.is_income === cat.is_income && !doomed.has(c.id));
-    const topPick = combo("חיפוש קטגוריה…");
-    const subPick = combo("תת-קטגוריה");
-    const kidsOf = (top: string) => avail.filter((k) => String(k.parent_id) === top);
-    topPick.set(avail.filter((c) => c.parent_id == null).map((c) => ({ value: String(c.id), label: c.name })));
-    const fillSubs = (keep = "") => {
-      const top = topPick.value;
-      const kids = top ? kidsOf(top) : avail.filter((k) => k.parent_id != null);
-      subPick.set(kids.map((k) => ({ value: String(k.id), label: top ? k.name : catPath(k.id) })), kids.some((k) => String(k.id) === keep) ? keep : "");
-      subPick.setDisabled(top !== "" && kids.length === 0, top && kids.length === 0 ? "אין תתי-קטגוריות" : "חיפוש תת-קטגוריה…");
-    };
-    fillSubs();
-    /** The category the transactions move to: the sub-category if one is picked, or the category itself when it has no sub-categories. */
-    const targetId = () => subPick.value || (topPick.value && kidsOf(topPick.value).length === 0 ? topPick.value : "");
-    const picks = el("div", {}, el("label", {}, "קטגוריה", topPick.root), el("label", {}, "תת-קטגוריה", subPick.root));
-    const err = el("div", { className: "error" });
-    const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
-    cancel.onclick = close;
-    const del = el("button", { type: "submit", className: "btn primary", textContent: "מחיקה" });
-    const form = el(
-      "form",
-      { className: "add", method: "dialog" },
-      el("h2", { textContent: `מחיקת "${cat.name}"` }),
-      subs.length > 0 && el("p", { className: "muted", textContent: `יימחקו גם ${subs.length} תתי-קטגוריות.` }),
-      used > 0
-        ? el("div", {}, el("p", { textContent: `${lines} תנועות ו-${rules} הוצאות חוזרות משויכות לקטגוריה. להעביר אותן אל:` }), picks)
-        : el("p", { className: "muted", textContent: "אין תנועות משויכות." }),
-      err,
-      el("div", { className: "actions" }, cancel, del),
-    );
-    const syncDel = () => (del.disabled = used > 0 && !targetId());
-    topPick.input.addEventListener("change", () => (fillSubs(), syncDel()));
-    subPick.input.addEventListener("change", () => {
-      const parent = state.cats.find((c) => String(c.id) === subPick.value)?.parent_id;
-      if (parent != null && topPick.value !== String(parent)) (topPick.pick(String(parent)), fillSubs(subPick.value));
-      syncDel();
-    });
-    syncDel();
-    form.onsubmit = async (e) => {
-      e.preventDefault();
-      try {
-        del.disabled = true;
-        await api.deleteCategory(cat.id, targetId() ? Number(targetId()) : undefined);
-        close();
-        await load();
-      } catch (e2) {
-        err.textContent = e2 instanceof Error ? e2.message : String(e2);
-        syncDel();
-      }
-    };
-    return form;
-  });
+  openDialog((close) => mountReact(createElement(DeleteCategoryForm, { cat, close })));
 }
 
 export function categoriesView(): HTMLElement {
