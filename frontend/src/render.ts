@@ -1,7 +1,7 @@
 import { el } from "./ui";
 import { insightsView, type Cmp, type Ctx } from "./insights";
 import { currenciesView } from "./views/currencies";
-import { businessDashboard, businessesView } from "./business";
+import { businessDashboard, businessesView } from "./views/business";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, openDialog, showCategory } from "./nav";
 import { monthBar, monthView } from "./views/month";
@@ -73,9 +73,7 @@ export function businessScreen(): HTMLElement {
     biz: state.biz,
     period: state.period,
     view: state.bizView,
-    monthBar,
     setView: (patch) => ((state.bizView = { ...state.bizView, ...patch }), render()),
-    openDialog,
     back: () => goBack("month"),
   });
 }

@@ -75,7 +75,7 @@ export function showCategory(id: number | null) {
 }
 
 export function manageCtx() {
-  return { biz: state.biz, cats: state.cats, txs: state.txs, openDialog, reload: load, back: () => goBack("settings") };
+  return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("settings") };
 }
 
 /** Open a modal built by `build`, which gets a way to close it. */

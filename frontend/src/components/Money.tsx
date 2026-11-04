@@ -1,6 +1,6 @@
-import { formatShekels } from "../format";
+import { formatShekels, formatShekelsWhole } from "../format";
 
-/** A shekel amount (given in agorot), coloured by `cls` ("expense" or "income"). */
-export function Money({ agorot, cls = "" }: { agorot: number; cls?: string }) {
-  return <span className={`num ${cls}`.trim()}>{formatShekels(agorot)}</span>;
+/** A shekel amount (given in agorot), coloured by `cls` ("expense" or "income"); `whole` rounds to whole shekels, as the dashboards show it. */
+export function Money({ agorot, cls = "", whole = false }: { agorot: number; cls?: string; whole?: boolean }) {
+  return <span className={`num ${cls}`.trim()}>{(whole ? formatShekelsWhole : formatShekels)(agorot)}</span>;
 }

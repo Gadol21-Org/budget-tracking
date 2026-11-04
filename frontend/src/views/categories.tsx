@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Category } from "../api";
-import { bizName, openCategoryBusinessDialog } from "../business";
+import { bizName } from "../business";
+import { openCategoryBusinessDialog } from "./business";
 import { BackButton } from "../components/BackButton";
 import { DialogForm } from "../components/DialogForm";
 import { mountReact } from "../components/mount";
