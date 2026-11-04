@@ -4,6 +4,7 @@ import { state } from "../state";
 import { catPath } from "../selectors";
 import { openDialog } from "../nav";
 import { load } from "../sync";
+import { combo } from "../widgets";
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" }) : "—");
 
@@ -101,22 +102,36 @@ export function sumitCard(): HTMLElement {
 /** Choose the income category receipts go to, and the business of each product. */
 export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
   openDialog((close) => {
-    // Only categories without sub-categories: a transaction must be on a sub-category when there are any.
-    const leaves = state.cats.filter((c) => c.is_income && !state.cats.some((k) => k.parent_id === c.id));
-    // Every income category, sub-categories with their full path, so each product can go to its own.
-    const incomeCats = leaves;
     const wanted = only && new Set(only.map((n) => n.trim().toLowerCase()));
     const rows = o.products.filter((p) => !wanted || wanted.has(p.name.trim().toLowerCase())).map((p) => {
       const biz = el("select");
       biz.append(el("option", { value: "", textContent: "ללא עסק" }), ...state.biz.businesses.map((b) => el("option", { value: String(b.id), textContent: b.name })));
       biz.value = p.business_id != null ? String(p.business_id) : "";
-      const pc = el("select");
-      pc.append(el("option", { value: "", textContent: "בחירת קטגוריה…" }), ...incomeCats.map((c) => el("option", { value: String(c.id), textContent: catPath(c.id) })));
-      pc.value = p.category_id != null ? String(p.category_id) : "";
-      const save = () => void api.sumitProduct(p.name, biz.value ? Number(biz.value) : null, pc.value ? Number(pc.value) : null);
+      // The same searchable category / sub-category pickers as the transaction form.
+      const income = state.cats.filter((c) => c.is_income);
+      const kidsOf = (top: string) => income.filter((k) => String(k.parent_id) === top);
+      const top = combo("חיפוש קטגוריה…");
+      const sub = combo("תת-קטגוריה");
+      top.set(income.filter((c) => c.parent_id == null).map((c) => ({ value: String(c.id), label: c.name })));
+      const fillSubs = (keep = "") => {
+        const kids = top.value ? kidsOf(top.value) : income.filter((k) => k.parent_id != null);
+        sub.set(kids.map((k) => ({ value: String(k.id), label: top.value ? k.name : catPath(k.id) })), kids.some((k) => String(k.id) === keep) ? keep : "");
+        sub.setDisabled(top.value !== "" && kids.length === 0, top.value && kids.length === 0 ? "אין תתי-קטגוריות" : "חיפוש תת-קטגוריה…");
+      };
+      const parent = (id: number) => income.find((c) => c.id === id)?.parent_id;
+      if (p.category_id != null) top.pick(String(parent(p.category_id) ?? p.category_id));
+      fillSubs(p.category_id != null && parent(p.category_id) != null ? String(p.category_id) : "");
+      /** The category the receipts go to: the sub-category, or the category itself when it has none. Empty until a usable one is picked. */
+      const target = () => sub.value || (top.value && kidsOf(top.value).length === 0 ? top.value : "");
+      const save = () => void api.sumitProduct(p.name, biz.value ? Number(biz.value) : null, target() ? Number(target()) : null);
       biz.onchange = save;
-      pc.onchange = save;
-      return el("div", { className: "card" }, el("div", { className: "name", textContent: p.name }), el("label", {}, "עסק", biz), el("label", {}, "קטגוריה ותת-קטגוריה", pc));
+      top.input.addEventListener("change", () => (fillSubs(), save()));
+      sub.input.addEventListener("change", () => {
+        const par = parent(Number(sub.value));
+        if (par != null && top.value !== String(par)) (top.pick(String(par)), fillSubs(sub.value));
+        save();
+      });
+      return el("div", { className: "card" }, el("div", { className: "name", textContent: p.name }), el("label", {}, "עסק", biz), el("label", {}, "קטגוריה", top.root), el("label", {}, "תת-קטגוריה", sub.root));
     });
     // The browser focuses the first control of a dialog; keep it on the close button so no picker is highlighted or opened.
     const ok = el("button", { type: "button", className: "btn primary", textContent: "סגירה", autofocus: true });
