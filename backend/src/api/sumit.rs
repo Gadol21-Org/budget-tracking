@@ -207,12 +207,18 @@ pub(crate) async fn subscribe(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn unsubscribe(
+#[derive(Serialize)]
+pub(crate) struct Registered {
+    registered: bool,
+}
+
+/// Does the server already hold this device's push endpoint? Asked before offering to enable notifications.
+pub(crate) async fn push_check(
     State(db): State<Db>,
     Json(b): Json<Subscription>,
-) -> Result<StatusCode, ApiError> {
-    push::unsubscribe(db.as_ref(), &b.endpoint)
+) -> Result<Json<Registered>, ApiError> {
+    let registered = push::is_registered(db.as_ref(), &b.endpoint)
         .await
         .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(Registered { registered }))
 }

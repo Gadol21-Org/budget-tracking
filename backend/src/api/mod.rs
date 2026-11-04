@@ -165,10 +165,8 @@ pub(crate) fn router(db: Db) -> Router {
             axum::routing::post(sumit::mark_read),
         )
         .route("/api/sumit/poll", axum::routing::post(sumit::poll_now))
-        .route(
-            "/api/push",
-            axum::routing::post(sumit::subscribe).delete(sumit::unsubscribe),
-        )
+        .route("/api/push", axum::routing::post(sumit::subscribe))
+        .route("/api/push/check", axum::routing::post(sumit::push_check))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(

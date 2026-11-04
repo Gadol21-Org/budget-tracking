@@ -47,7 +47,7 @@ export function sumitCard(): HTMLElement {
       return;
     }
     status.textContent = `בדיקה אחרונה: ${when(o.last_poll_at)} · הבאה: ${when(o.next_poll_at)} · קריאות החודש: ${o.calls_this_month}/${o.monthly_limit}${o.last_error ? ` · שגיאה: ${o.last_error}` : ""}`;
-    push.style.display = o.push_public_key ? "" : "none";
+    push.style.display = state.sumit.offerPush ? "" : "none";
     held.textContent = o.held.length ? `${o.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${[...new Set(o.held.flatMap((h) => h.products))].join(", ") || "ללא פירוט מוצרים"}). הגדירו אותה ב"הגדרת מוצרים ועסקים" והקבלות ייובאו.` : "";
     list.replaceChildren(
       // Only receipts not seen yet: once the card has shown them they are marked read and drop off.
@@ -79,6 +79,7 @@ export function sumitCard(): HTMLElement {
   push.onclick = async () => {
     try {
       out.textContent = await enablePush(data!.push_public_key!);
+      push.style.display = "none";
     } catch (e) {
       out.className = "note error";
       out.textContent = `שגיאה: ${e instanceof Error ? e.message : e}`;
@@ -98,13 +99,14 @@ export function sumitCard(): HTMLElement {
 }
 
 /** Choose the income category receipts go to, and the business of each product. */
-function openMapping(o: SumitOverview, done: () => void) {
+export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
   openDialog((close) => {
     // Only categories without sub-categories: a transaction must be on a sub-category when there are any.
     const leaves = state.cats.filter((c) => c.is_income && !state.cats.some((k) => k.parent_id === c.id));
     // Every income category, sub-categories with their full path, so each product can go to its own.
     const incomeCats = leaves;
-    const rows = o.products.map((p) => {
+    const wanted = only && new Set(only.map((n) => n.trim().toLowerCase()));
+    const rows = o.products.filter((p) => !wanted || wanted.has(p.name.trim().toLowerCase())).map((p) => {
       const biz = el("select");
       biz.append(el("option", { value: "", textContent: "ללא עסק" }), ...state.biz.businesses.map((b) => el("option", { value: String(b.id), textContent: b.name })));
       biz.value = p.business_id != null ? String(p.business_id) : "";
@@ -122,18 +124,9 @@ function openMapping(o: SumitOverview, done: () => void) {
       "form",
       { className: "add", method: "dialog" },
       el("h2", { textContent: "קבלות מ-Sumit: מוצרים" }),
-      el("h3", { textContent: "עסק וקטגוריה לכל מוצר" }),
+      el("h3", { textContent: only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "עסק וקטגוריה לכל מוצר" }),
       ...(rows.length ? rows : [el("div", { className: "note muted", textContent: "מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרים מעסקים או מקטגוריות שונים תתפצל לכמה תנועות." })]),
       el("div", { className: "actions" }, ok),
     );
   });
-}
-
-/** Can this device be asked for notifications now (supported, not yet decided, the server can send them)? */
-export function canOfferPush(): boolean {
-  try {
-    return !!state.sumit.pushKey && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && Notification.permission === "default" && localStorage.getItem("push-offer-dismissed") !== "1";
-  } catch {
-    return false;
-  }
 }

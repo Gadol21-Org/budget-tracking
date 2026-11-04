@@ -129,12 +129,25 @@ async function refreshSumit() {
   try {
     const o = await api.sumit();
     state.sumitData = o;
-    const next = o.configured ? { held: o.held.length, unread: o.notices.filter((n) => !n.read).length, pushKey: o.push_public_key } : { held: 0, unread: 0, pushKey: null };
-    if (next.held === state.sumit.held && next.unread === state.sumit.unread && next.pushKey === state.sumit.pushKey) return;
+    const pushKey = o.configured ? o.push_public_key : null;
+    const next = { held: o.configured ? o.held.length : 0, unread: o.configured ? o.notices.filter((n) => !n.read).length : 0, pushKey, offerPush: pushKey ? await needsPush() : false };
+    const cur = state.sumit;
+    if (next.held === cur.held && next.unread === cur.unread && next.pushKey === cur.pushKey && next.offerPush === cur.offerPush) return;
     state.sumit = next;
     render();
   } catch {
     /* offline or not set up: no banner */
+  }
+}
+
+/** Ask the server whether this device is already registered for pushes; only an unregistered one is offered them. */
+async function needsPush(): Promise<boolean> {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window) || Notification.permission === "denied") return false;
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    return !(sub && (await api.pushRegistered(sub.endpoint)));
+  } catch {
+    return false;
   }
 }
 

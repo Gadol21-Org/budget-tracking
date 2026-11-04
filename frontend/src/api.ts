@@ -211,7 +211,7 @@ export const api = {
   sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
   pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
-  pushUnsubscribe: (endpoint: string) => request<void>("/api/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
+  pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>
     request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),

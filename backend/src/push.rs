@@ -81,10 +81,9 @@ pub async fn subscribe(db: &dyn Storage, endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn unsubscribe(db: &dyn Storage, endpoint: &str) -> Result<()> {
-    let mut all = endpoints(db).await?;
-    all.retain(|e| e != endpoint);
-    crate::sumit::save(db, KEY, &all).await
+/// Is this device's push endpoint stored on the server?
+pub async fn is_registered(db: &dyn Storage, endpoint: &str) -> Result<bool> {
+    Ok(endpoints(db).await?.iter().any(|e| e == endpoint))
 }
 
 #[derive(Serialize)]

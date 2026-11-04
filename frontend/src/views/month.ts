@@ -6,7 +6,8 @@ import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { drillCrumbs, summaryCategories } from "../insights";
 import { categoryName } from "../categories";
-import { canOfferPush, enablePush } from "./sumit";
+import { enablePush, openMapping } from "./sumit";
+import { load } from "../sync";
 import { inPeriod, money } from "../selectors";
 
 export function monthBar(): HTMLElement {
@@ -136,31 +137,28 @@ function sumitBanner(): HTMLElement | null {
   if (!held && !unread) return null;
   const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} קבלות חדשות מ-Sumit יובאו`;
   const b = el("div", { className: held ? "sumit-banner warn" : "sumit-banner", role: "status", textContent: text });
-  return clickable(b, () => go("settings"));
+  // Held receipts: open the classification of just their products; new ones: the settings card that lists them.
+  return clickable(b, () => {
+    const o = state.sumitData;
+    if (held && o) openMapping(o, () => void load(), [...new Set(o.held.flatMap((h) => h.products))]);
+    else go("settings");
+  });
 }
 
-/** Asks once to turn on notifications for new Sumit receipts (the browser's own permission prompt follows the tap). */
+/** Offers to turn on notifications for new Sumit receipts, only while the server does not hold this device yet. */
 function pushOffer(): HTMLElement | null {
-  if (!canOfferPush()) return null;
+  if (!state.sumit.offerPush) return null;
   const ask = el("button", { className: "btn primary", textContent: "הפעלה" });
-  const later = el("button", { className: "btn", textContent: "לא עכשיו" });
   ask.onclick = async () => {
     try {
       await enablePush(state.sumit.pushKey!);
+      state.sumit.offerPush = false;
     } catch {
       /* the permission stays undecided: the offer comes back */
     }
     render();
   };
-  later.onclick = () => {
-    try {
-      localStorage.setItem("push-offer-dismissed", "1");
-    } catch {
-      /* not remembered */
-    }
-    render();
-  };
-  return el("div", { className: "sumit-banner", role: "status" }, el("div", { textContent: "לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?" }), el("div", { className: "actions", style: "justify-content:flex-start;margin-top:8px" }, ask, later));
+  return el("div", { className: "sumit-banner", role: "status" }, el("div", { textContent: "לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?" }), el("div", { className: "actions", style: "justify-content:flex-start;margin-top:8px" }, ask));
 }
 
 export function monthView(): HTMLElement {
