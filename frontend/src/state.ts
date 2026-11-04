@@ -46,6 +46,8 @@ export const state = {
   /** Choosing several lines to tag them as a business's. */
   /** Transactions entered in USD or JPY, by transaction id (queued lines by -queue id): original amount and rate. */
   fx: new Map<number, Fx>(),
+  /** Sumit receipts needing attention: waiting for a category, or new and not yet seen. */
+  sumit: { held: 0, unread: 0 },
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };

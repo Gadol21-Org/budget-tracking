@@ -129,6 +129,15 @@ function drillBackBar(): HTMLElement {
   return el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, drillCrumbs(insightsCtx())));
 }
 
+/** Tells that Sumit receipts need a classification (held), or arrived and were not looked at yet. */
+function sumitBanner(): HTMLElement | null {
+  const { held, unread } = state.sumit;
+  if (!held && !unread) return null;
+  const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} קבלות חדשות מ-Sumit יובאו`;
+  const b = el("div", { className: held ? "sumit-banner warn" : "sumit-banner", role: "status", textContent: text });
+  return clickable(b, () => go("settings"));
+}
+
 export function monthView(): HTMLElement {
   const txs = inPeriod();
   const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
@@ -148,6 +157,7 @@ export function monthView(): HTMLElement {
     "div",
     {},
     monthBar(),
+    sumitBanner(),
     el("div", { className: "stats" }, stat("הכנסות", money(income, "income"), "income"), stat("הוצאות", money(-expense, "expense"), "expense"), stat("יתרה", money(income + expense, income + expense < 0 ? "expense" : "income"))),
     businessCard(),
     summaryCategories(insightsCtx()),

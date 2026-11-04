@@ -121,6 +121,20 @@ async function apply(data: ServerData & { log?: LogEntry[] }) {
   }));
   state.txs = [...txs, ...generated];
   render();
+  void refreshSumit();
+}
+
+/** Look at the Sumit receipts' status (a read of our own server, no Sumit call) for the banner on the summary. */
+async function refreshSumit() {
+  try {
+    const o = await api.sumit();
+    const next = o.configured ? { held: o.held.length, unread: o.notices.filter((n) => !n.read).length } : { held: 0, unread: 0 };
+    if (next.held === state.sumit.held && next.unread === state.sumit.unread) return;
+    state.sumit = next;
+    render();
+  } catch {
+    /* offline or not set up: no banner */
+  }
 }
 
 /** Months fetched beyond what the screen needs when older months are loaded. */

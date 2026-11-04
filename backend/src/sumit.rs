@@ -718,6 +718,8 @@ async fn flush_sheet(recs: &mut [ReceiptRecord]) {
 pub struct PollSummary {
     /// The first poll: existing receipts were only noted, nothing was imported.
     pub baseline: bool,
+    /// Receipts newly put on hold for want of a usable category.
+    pub held: usize,
     pub new_receipts: usize,
     pub transactions: usize,
     pub calls: u32,
@@ -843,6 +845,9 @@ async fn run_poll(
         let done = settle_doc(db, state, doc, items, now, &mut recs, &mut notices).await?;
         // Looked at (imported or held): the next poll starts after it.
         state.watermark = state.watermark.max(Some(id));
+        if done.is_none() {
+            summary.held += 1;
+        }
         if let Some(n) = done {
             summary.new_receipts += 1;
             summary.transactions += n;
@@ -1050,7 +1055,7 @@ pub async fn poll_and_notify(
                 s.transactions,
                 s.calls
             );
-            if s.new_receipts > 0 {
+            if s.new_receipts > 0 || s.held > 0 {
                 crate::push::notify_all(db).await;
             }
             Ok(s)
