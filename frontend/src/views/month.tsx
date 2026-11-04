@@ -1,5 +1,4 @@
 import { MonthBar } from "../components/MonthBar";
-import { Embed } from "../components/Embed";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
 import { mountReact } from "../components/mount";
@@ -10,7 +9,7 @@ import { businessOf, summaryFigures } from "../business";
 import { go, goBack } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
-import { drillCrumbs, summaryCategories } from "../insights";
+import { DrillCrumbs, SummaryCategories } from "./insights";
 import { categoryName } from "../categories";
 import { inPeriod } from "../selectors";
 
@@ -27,9 +26,6 @@ export function ConnectedMonthBar() {
     />
   );
 }
-
-/** The same bar as a DOM node, for the screens that still build their own DOM. */
-export const monthBar = () => mountReact(<ConnectedMonthBar />);
 
 export function openPeriodDialog() {
   openReactDialog((close) => (
@@ -89,7 +85,7 @@ function DrillBackBar() {
         {`→ ${label}`}
       </button>
       <div className="grow">
-        <Embed build={() => drillCrumbs(insightsCtx())} />
+        <DrillCrumbs ctx={insightsCtx()} />
       </div>
     </div>
   );
@@ -120,7 +116,7 @@ function MonthScreen() {
       <div>
         <DrillBackBar />
         <ConnectedMonthBar />
-        <Embed build={() => summaryCategories(insightsCtx())} />
+        <SummaryCategories ctx={insightsCtx()} />
       </div>
     );
   }
@@ -137,7 +133,7 @@ function MonthScreen() {
         <Stat label="יתרה" agorot={balance} cls={sign(balance)} />
       </div>
       <BusinessCard />
-      <Embed build={() => summaryCategories(insightsCtx())} />
+      <SummaryCategories ctx={insightsCtx()} />
     </div>
   );
 }

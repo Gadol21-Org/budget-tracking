@@ -6,7 +6,6 @@ import {
   type BizTab,
   type Fig,
   allocation,
-  bizName,
   businessOf,
   figures,
   lastMonths,

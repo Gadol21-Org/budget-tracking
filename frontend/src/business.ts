@@ -1,5 +1,5 @@
 import { type Business, type BusinessData, type Category, type Transaction } from "./api";
-import { contains, shift, title as periodTitle, type Period } from "./period";
+import { contains, type Period } from "./period";
 
 /**
  * Businesses are a lens over the household's own transactions: nothing is moved or removed from

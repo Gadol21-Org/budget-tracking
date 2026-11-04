@@ -1,5 +1,4 @@
-import { el } from "./ui";
-import { type InsightsNav } from "./insights";
+import { type InsightsNav } from "./insights/model";
 import { type Screen, type View, state } from "./state";
 import { render } from "./render";
 import { load } from "./sync";
@@ -78,12 +77,3 @@ export function manageCtx() {
   return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("settings") };
 }
 
-/** Open a modal built by `build`, which gets a way to close it. */
-export function openDialog(build: (close: () => void) => HTMLElement) {
-  const dlg = el("dialog");
-  dlg.append(build(() => dlg.close()));
-  dlg.addEventListener("close", () => dlg.remove());
-  document.body.append(dlg);
-  trackDialog(dlg);
-  dlg.showModal();
-}

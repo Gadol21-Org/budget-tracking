@@ -1,10 +1,11 @@
 import { el } from "./ui";
-import { insightsView, type Cmp, type Ctx } from "./insights";
+import { type Cmp, type Ctx } from "./insights/model";
+import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
 import { businessDashboard, businessesView } from "./views/business";
 import { type View, root, state } from "./state";
-import { go, goBack, manageCtx, navigateInsights, openDialog, showCategory } from "./nav";
-import { monthBar, monthView } from "./views/month";
+import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
+import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
 import { peopleView } from "./views/people";
@@ -47,7 +48,6 @@ export function insightsCtx(): Ctx {
     cats: state.cats,
     period: state.period,
     ins: state.insights,
-    monthBar,
     navigate: navigateInsights,
     setCmp: (c: Cmp) => ((state.insights.cmp = c), render()),
     setPeriod: (p) => ((state.period = p), render()),
@@ -58,7 +58,6 @@ export function insightsCtx(): Ctx {
       state.kind = "expense";
       go("month");
     },
-    openDialog,
   };
 }
 
