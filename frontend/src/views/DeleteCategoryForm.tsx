@@ -3,6 +3,7 @@ import { api, type Category } from "../api";
 import { state } from "../state";
 import { load } from "../sync";
 import { CategoryPicker, type CategoryChoice } from "../components/CategoryPicker";
+import { DialogForm } from "../components/DialogForm";
 
 /** Delete a category (and its sub-categories), moving what is on it to another category when anything is. */
 export function DeleteCategoryForm({ cat, close }: { cat: Category; close: () => void }) {
@@ -15,32 +16,23 @@ export function DeleteCategoryForm({ cat, close }: { cat: Category; close: () =>
   const avail = state.cats.filter((c) => c.is_income === cat.is_income && !doomed.has(c.id));
 
   const [choice, setChoice] = useState<CategoryChoice>({ top: "", sub: "" });
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
 
   /** The category the transactions move to: the sub-category if one is picked, or the category itself when it has no sub-categories. */
   const hasKids = (top: string) => avail.some((k) => String(k.parent_id) === top);
   const target = choice.sub || (choice.top && !hasKids(choice.top) ? choice.top : "");
-  const canDelete = !busy && !(used > 0 && !target);
 
   return (
-    <form
-      className="add"
-      method="dialog"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          setBusy(true);
-          await api.deleteCategory(cat.id, target ? Number(target) : undefined);
-          close();
-          await load();
-        } catch (e2) {
-          setError(e2 instanceof Error ? e2.message : String(e2));
-          setBusy(false);
-        }
+    <DialogForm
+      title={`מחיקת "${cat.name}"`}
+      submitLabel="מחיקה"
+      submitDisabled={used > 0 && !target}
+      close={close}
+      onSubmit={async () => {
+        await api.deleteCategory(cat.id, target ? Number(target) : undefined);
+        close();
+        await load();
       }}
     >
-      <h2>{`מחיקת "${cat.name}"`}</h2>
       {subs.length > 0 && <p className="muted">{`יימחקו גם ${subs.length} תתי-קטגוריות.`}</p>}
       {used > 0 ? (
         <div>
@@ -52,15 +44,6 @@ export function DeleteCategoryForm({ cat, close }: { cat: Category; close: () =>
       ) : (
         <p className="muted">אין תנועות משויכות.</p>
       )}
-      <div className="error">{error}</div>
-      <div className="actions">
-        <button type="button" className="btn" onClick={close}>
-          ביטול
-        </button>
-        <button type="submit" className="btn primary" disabled={!canDelete}>
-          מחיקה
-        </button>
-      </div>
-    </form>
+    </DialogForm>
   );
 }

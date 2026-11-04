@@ -1,6 +1,6 @@
 import { el } from "./ui";
 import { insightsView, type Cmp, type Ctx } from "./insights";
-import { currenciesView } from "./currencies";
+import { currenciesView } from "./views/currencies";
 import { businessDashboard, businessesView } from "./business";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, openDialog, showCategory } from "./nav";
