@@ -230,11 +230,20 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .combo input { width: 100%; }
 .combo input:disabled { opacity: .55; }
 .combo-list {
-  position: absolute; inset-inline: 0; top: calc(100% + 4px); z-index: 10; max-height: 220px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  position: absolute; inset-inline: 0; top: calc(100% + 4px); z-index: 10; max-height: 220px; overflow-y: auto; overscroll-behavior: contain;
+  /* Scroll shadows: a soft edge shows on a side only while more items hide beyond it; a thin scrollbar stays visible. */
+  background:
+    linear-gradient(var(--surface) 30%, transparent) top / 100% 24px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) bottom / 100% 24px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgb(0 0 0 / .28), transparent) top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgb(0 0 0 / .28), transparent) bottom / 100% 10px no-repeat scroll,
+    var(--surface);
+  scrollbar-width: thin; scrollbar-color: var(--muted) transparent; border: 1px solid var(--line); border-radius: 10px; padding: 4px;
   box-shadow: 0 6px 20px rgb(0 0 0 / .15); color: var(--text);
 }
 .combo-list[hidden] { display: none; }
+.combo-list::-webkit-scrollbar { width: 6px; }
+.combo-list::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
 .combo-list button { display: block; width: 100%; border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
 .combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
 .combo-list button[aria-selected="true"] { font-weight: 700; }

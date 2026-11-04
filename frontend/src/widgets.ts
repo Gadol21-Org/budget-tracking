@@ -81,6 +81,7 @@ export function combo(placeholder: string) {
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
     document.removeEventListener("click", outside, true);
+    window.visualViewport?.removeEventListener("resize", fit);
   };
   /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not, and neither must scrolling (a scroll gesture fires pointerdown but no click). */
   const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("click", outside, true));
@@ -90,6 +91,14 @@ export function combo(placeholder: string) {
     value = v;
     input.value = labelOf(v);
     close();
+  };
+  /** Make the list as tall as the room under the field allows (above the keyboard when it is up), within sensible bounds. */
+  const fit = () => {
+    if (list.hidden) return;
+    const vv = window.visualViewport;
+    const bottom = Math.min(vv ? vv.offsetTop + vv.height : innerHeight, innerHeight);
+    const room = bottom - input.getBoundingClientRect().bottom - 16;
+    list.style.maxHeight = `${Math.round(Math.min(Math.max(room, 160), 560))}px`;
   };
   const show = (filter: string) => {
     const q = filter.trim().toLowerCase();
@@ -109,6 +118,10 @@ export function combo(placeholder: string) {
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("click", outside, true);
+    fit();
+    // The page scrolls the field to the top and the keyboard animates in, so measure again once things settle.
+    setTimeout(fit, 400);
+    window.visualViewport?.addEventListener("resize", fit);
   };
   const justPicked = () => Date.now() - pickedAt <= 500;
   input.onfocus = () => {
