@@ -118,7 +118,8 @@ export function openMapping(o: SumitOverview, done: () => void, only?: string[])
       pc.onchange = save;
       return el("div", { className: "card" }, el("div", { className: "name", textContent: p.name }), el("label", {}, "עסק", biz), el("label", {}, "קטגוריה ותת-קטגוריה", pc));
     });
-    const ok = el("button", { type: "button", className: "btn primary", textContent: "סגירה" });
+    // The browser focuses the first control of a dialog; keep it on the close button so no picker is highlighted or opened.
+    const ok = el("button", { type: "button", className: "btn primary", textContent: "סגירה", autofocus: true });
     ok.onclick = () => (close(), done());
     return el(
       "form",
