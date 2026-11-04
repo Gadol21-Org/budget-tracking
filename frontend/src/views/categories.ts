@@ -199,8 +199,8 @@ export function openDeleteCategoryDialog(cat: Category) {
       subPick.setDisabled(top !== "" && kids.length === 0, top && kids.length === 0 ? "אין תתי-קטגוריות" : "חיפוש תת-קטגוריה…");
     };
     fillSubs();
-    /** The category the transactions move to: the sub-category if one is picked, otherwise the category itself. */
-    const targetId = () => subPick.value || topPick.value;
+    /** The category the transactions move to: the sub-category if one is picked, or the category itself when it has no sub-categories. */
+    const targetId = () => subPick.value || (topPick.value && kidsOf(topPick.value).length === 0 ? topPick.value : "");
     const picks = el("div", {}, el("label", {}, "קטגוריה", topPick.root), el("label", {}, "תת-קטגוריה", subPick.root));
     const err = el("div", { className: "error" });
     const cancel = el("button", { type: "button", className: "btn", textContent: "ביטול" });
