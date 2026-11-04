@@ -1,14 +1,13 @@
 import { useState } from "react";
-import { mountReact } from "./mount";
 
 export type MenuItem = [label: string, run: () => void];
 
 /** A button that opens a small menu of choices above it. */
-export function MenuButton({ label, items, className = "btn" }: { label: string; items: MenuItem[]; className?: string }) {
+export function MenuButton({ label, items, className = "btn", disabled = false }: { label: string; items: MenuItem[]; className?: string; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="menuwrap">
-      <button type="button" className={className} onClick={() => setOpen(!open)}>
+      <button type="button" className={className} disabled={disabled} onClick={() => setOpen(!open)}>
         {label} ▾
       </button>
       <div className="menu" hidden={!open}>
@@ -28,6 +27,3 @@ export function MenuButton({ label, items, className = "btn" }: { label: string;
     </div>
   );
 }
-
-/** For the screens not yet written in React: the same menu as a DOM node. */
-export const menuButton = (label: string, items: MenuItem[], className = "btn") => mountReact(<MenuButton label={label} items={items} className={className} />, "menuhost");
