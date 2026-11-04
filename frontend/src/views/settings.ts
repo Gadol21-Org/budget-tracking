@@ -4,6 +4,7 @@ import { load } from "../sync";
 import { businessesLinkCard, categoriesLinkCard, currenciesLinkCard } from "./categories";
 import { openLog } from "./log";
 import { openPeople } from "./people";
+import { sumitCard } from "./sumit";
 
 export function settingsView(): HTMLElement {
   const out = el("div", { className: "note muted" });
@@ -41,6 +42,7 @@ export function settingsView(): HTMLElement {
     el("div", { className: "card" }, el("p", { className: "muted", textContent: "ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google." }), el("div", { className: "actions", style: "justify-content:flex-start" }, imp, exp), out),
     categoriesLinkCard(),
     businessesLinkCard(),
+    sumitCard(),
     currenciesLinkCard(),
     historyCard(),
     peopleLinkCard(),

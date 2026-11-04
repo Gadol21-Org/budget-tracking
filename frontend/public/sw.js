@@ -1,7 +1,7 @@
 // Network first, falling back to cache, so the app shell (including hashed assets)
 // still opens offline once it has been loaded. API calls are never cached. A server error from the
 // proxy (502/503/504, Cloudflare 52x) counts as "no server": the cached copy is used instead of the error page.
-const CACHE = "budget-shell-v7";
+const CACHE = "budget-shell-v8";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icon-v2.svg", "/icon-192-v2.png"])));
@@ -51,5 +51,26 @@ self.addEventListener("fetch", (e) => {
       }
       return (await network) ?? (await cache.match("/")) ?? Response.error();
     }),
+  );
+});
+
+// A push carries no data: ask the server what is new and show it.
+self.addEventListener("push", (e) => {
+  e.waitUntil(
+    fetch("/api/sumit", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((o) => o.notices.filter((n) => !n.read))
+      .catch(() => [])
+      .then((unread) => {
+        const n = unread[0];
+        return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { body: n ? n.body : "", tag: "sumit-receipt", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+      }),
+  );
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((cs) => (cs.length ? cs[0].focus() : self.clients.openWindow("/"))),
   );
 });

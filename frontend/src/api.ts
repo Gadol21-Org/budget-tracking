@@ -181,7 +181,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
+export interface SumitNotice {
+  id: number;
+  at: string;
+  title: string;
+  body: string;
+  tx_ids: number[];
+  read: boolean;
+}
+
+export interface SumitOverview {
+  configured: boolean;
+  last_poll_at: string | null;
+  last_error: string | null;
+  next_poll_at: string | null;
+  calls_this_month: number;
+  monthly_limit: number;
+  category_id: number | null;
+  products: { name: string; business_id: number | null }[];
+  notices: SumitNotice[];
+  push_public_key: string | null;
+}
+
 export const api = {
+  sumit: () => request<SumitOverview>("/api/sumit"),
+  /** Look for new receipts now. Costs Sumit API calls (the server refuses within 10 minutes of the last check). */
+  sumitPoll: () => request<{ new_receipts: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
+  sumitCategory: (category_id: number | null) => request<void>("/api/sumit/category", { method: "PUT", body: JSON.stringify({ category_id }) }),
+  sumitProduct: (name: string, business_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id }) }),
+  sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
+  pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
+  pushUnsubscribe: (endpoint: string) => request<void>("/api/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>
     request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),
