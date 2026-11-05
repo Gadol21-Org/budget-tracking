@@ -61,7 +61,7 @@ Tick "חוזר מדי חודש" when adding an expense or income, for a set numb
 Set `GOOGLE_SERVICE_ACCOUNT_JSON_B64` and `GOOGLE_SHEET_ID` (share the sheet with the service account as Editor). One tab per stored table (Transactions, Categories, Payment methods, Recurring, Recurring settled, Change log, Paamonim pending deletes, Paamonim meta) makes a complete backup; all are cleared and rewritten by `POST /api/export/sheets` and nightly (`SHEETS_EXPORT_INTERVAL_HOURS`). Verified live against Google Sheets.
 
 ## Layout
-- `backend/src/storage.rs` – `Storage` trait and the shared types. Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
+- `backend/src/storage/` – the `Storage` trait (`mod.rs`), the shared types (`model.rs`) and their tests. Monthly totals (`/api/monthly-totals`) are computed on demand from transactions, with no pre-aggregation; add a date index or rollups if a backend gets slow with very large history.
 - `backend/src/mysql.rs` – the MySQL implementation of `Storage`.
 - `backend/src/testdb.rs` – per-test databases (test builds only).
 - `backend/src/paamonim.rs` – Paamonim client (form login + `/rishumit/*` endpoints). The server logs in once and keeps the session; when Paamonim redirects a request to the login page (session expired), the client logs in again and resends it once.
