@@ -320,7 +320,7 @@ function Overview({ ctx, baseLabel }: BodyProps) {
   }
 
   return (
-    <div>
+    <>
       <div className="kpis">
         <Kpi label="הוצאות" value={money(cur.expense, "expense")} sub={<Delta cur={cur.expense} base={bExp} higherIsBad />} />
         <Kpi label="הכנסות" value={money(cur.income, "income")} sub={<Delta cur={cur.income} base={bInc} higherIsBad={false} />} />
@@ -350,7 +350,7 @@ function Overview({ ctx, baseLabel }: BodyProps) {
           <span>הקשה על עמודה מציגה את הסכום מעליה</span>
         </Legend>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -427,9 +427,9 @@ export function SummaryCategories({ ctx }: { ctx: Ctx }) {
       />
     );
   return (
-    <div>
+    <>
       {body}
-    </div>
+    </>
   );
 }
 
@@ -621,7 +621,7 @@ function Trends({ ctx }: BodyProps) {
   const stackColors = [...shown.map((id) => catColor(ctx, id)), OTHER_COLOR];
 
   return (
-    <div>
+    <>
       <div className="kpis">
         <Kpi label="הוצאות בחודש (ממוצע)" value={money(Math.round(avgExp), "expense")} sub={<Note text={`${done.length} חודשים שהסתיימו`} />} />
         <Kpi label="חיסכון בחודש (ממוצע)" value={money(Math.round(avgSave), avgSave < 0 ? "expense" : "income")} sub={<Note text="הכנסות פחות הוצאות" />} />
@@ -664,7 +664,7 @@ function Trends({ ctx }: BodyProps) {
         </Legend>
       </div>
       <div className="muted small pad">הקשה על חודש בגרף מציגה את הסכום מעליו, בלי לשנות את התקופה הנבחרת.</div>
-    </div>
+    </>
   );
 }
 
@@ -715,7 +715,7 @@ function Changes({ ctx, baseLabel }: BodyProps) {
     );
   };
   return (
-    <div>
+    <>
       <div className="card" style={{ textAlign: "center" }}>
         <div className="muted small">{`סך ההוצאות ${baseLabel}`}</div>
         <div className="num" style={{ fontSize: "1.5rem", fontWeight: 800, color: net > 0 ? "var(--expense)" : "var(--income)" }}>{`${net > 0 ? "+" : "−"}${formatShekelsWhole(Math.abs(net))}`}</div>
@@ -726,7 +726,7 @@ function Changes({ ctx, baseLabel }: BodyProps) {
       <h2>מה הקטין את ההוצאות</h2>
       {down.length ? <div className="card rows">{down.map((i) => row(i, false))}</div> : <div className="empty">שום דבר לא ירד</div>}
       <div className="muted small pad">הקשה על שורה פותחת אותה בפירוט הקטגוריות.</div>
-    </div>
+    </>
   );
 }
 
@@ -803,7 +803,7 @@ function Fixed({ ctx }: BodyProps) {
   const pct = (v: number, of: number) => (of > 0 ? `${Math.round((v / of) * 100)}%` : "–");
   const varColor = "color-mix(in srgb, var(--brand) 35%, transparent)";
   return (
-    <div>
+    <>
       <div className="card">
         <div className="muted small">מתוך ההוצאות בתקופה</div>
         <div className="splitbar">
@@ -862,7 +862,7 @@ function Fixed({ ctx }: BodyProps) {
         </div>
       ) : null}
       {forecast}
-    </div>
+    </>
   );
 }
 
