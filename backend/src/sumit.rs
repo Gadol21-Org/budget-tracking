@@ -755,7 +755,11 @@ async fn settle_refund(
         .collect();
     let line_sum: f64 = lines.iter().map(|(_, a)| a).sum();
     // The lines are net of VAT where the receipt has some; the transactions hold the gross share.
-    let scale = if line_sum > 0.0 { refund_total / line_sum } else { 1.0 };
+    let scale = if line_sum > 0.0 {
+        refund_total / line_sum
+    } else {
+        1.0
+    };
     let date = doc.date.to_string();
     let candidates: Vec<usize> = recs
         .iter()
@@ -1752,16 +1756,27 @@ mod tests {
         let mut notices = Vec::new();
         // Half of the dress: 40 net = 47.20 gross.
         let credit = doc_of(78, 6, -47.2);
-        let changed = settle_refund(&db, &mut state, &credit, &[neg("שמלה", 40.0)], now, &mut recs, &mut notices)
-            .await
-            .unwrap();
+        let changed = settle_refund(
+            &db,
+            &mut state,
+            &credit,
+            &[neg("שמלה", 40.0)],
+            now,
+            &mut recs,
+            &mut notices,
+        )
+        .await
+        .unwrap();
         assert!(changed);
         let amounts = |txs: Vec<crate::storage::Transaction>| {
             let mut a: Vec<i64> = txs.iter().map(|t| t.amount_agorot).collect();
             a.sort();
             a
         };
-        assert_eq!(amounts(db.list_transactions().await.unwrap()), vec![11_800 - 4_720]);
+        assert_eq!(
+            amounts(db.list_transactions().await.unwrap()),
+            vec![11_800 - 4_720]
+        );
         // The rest of the dress and the shipping: everything goes.
         let credit = doc_of(79, 6, -70.8);
         settle_refund(
@@ -1779,9 +1794,17 @@ mod tests {
         assert_eq!(notices.len(), 2);
         // Nothing is left to refund: a third one finds no receipt and changes nothing.
         let credit = doc_of(80, 6, -10.0);
-        let changed = settle_refund(&db, &mut state, &credit, &[neg("שמלה", 10.0)], now, &mut recs, &mut notices)
-            .await
-            .unwrap();
+        let changed = settle_refund(
+            &db,
+            &mut state,
+            &credit,
+            &[neg("שמלה", 10.0)],
+            now,
+            &mut recs,
+            &mut notices,
+        )
+        .await
+        .unwrap();
         assert!(!changed);
         assert!(notices[2].title.contains("ללא קבלה מתאימה"));
     }
@@ -1798,12 +1821,32 @@ mod tests {
         let mut notices = Vec::new();
         let credit = doc_of(78, 6, -118.0);
         let lines = [neg("שמלה", 80.0), neg("משלוח", 20.0)];
-        assert!(!settle_refund(&db, &mut state, &credit, &lines, now, &mut recs, &mut notices).await.unwrap());
+        assert!(!settle_refund(
+            &db,
+            &mut state,
+            &credit,
+            &lines,
+            now,
+            &mut recs,
+            &mut notices
+        )
+        .await
+        .unwrap());
         assert!(notices[0].title.contains("שאינו חד-משמעי"));
         // Another customer's refund does not touch this customer's receipt.
         let mut other = doc_of(81, 6, -118.0);
         other.customer = "אחר".into();
-        assert!(!settle_refund(&db, &mut state, &other, &lines, now, &mut recs, &mut notices).await.unwrap());
+        assert!(!settle_refund(
+            &db,
+            &mut state,
+            &other,
+            &lines,
+            now,
+            &mut recs,
+            &mut notices
+        )
+        .await
+        .unwrap());
         assert_eq!(db.list_transactions().await.unwrap().len(), 1);
     }
 
