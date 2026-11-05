@@ -104,12 +104,14 @@ form.add label, form.add .field { font-size: .8rem; text-transform: uppercase; l
   .nav button[aria-current="page"] { background: var(--ios-fill); color: var(--ios-blue); }
 }
 
-/* No sticky hover or focus look after a tap: apps show only the selected state, never a darker "pressed" leftover.
-   Hover colours apply only where a real pointer exists (desktop). */
-.clickable:focus { outline: none; }
-@media (hover: none) {
-  .clickable:hover { background: inherit; }
-  .stats .card.clickable:hover { background: var(--ios-card); }
-}
+/* No sticky hover or focus look after a tap: apps show only the selected state, never a darker "pressed" or outlined leftover.
+   Hover colours apply only where a real pointer exists (desktop); touch devices never get them. */
+button:focus, button:focus-visible, select:focus, select:focus-visible, .clickable:focus, .clickable:focus-visible,
+form.add input:focus, form.add input:focus-visible { outline: none; }
+button, select, .clickable { -webkit-tap-highlight-color: transparent; }
 .stats .card.clickable:hover { background: var(--ios-card); }
+@media (hover: none) {
+  .clickable:hover, .periodbtn:hover, .combo-list button:hover, .menu button:hover, .menu button:focus-visible { background: transparent; }
+  .del:hover { color: var(--muted); }
+}
 @media (hover: hover) { .clickable:hover { background: var(--ios-fill); } .stats .card.clickable:hover { background: var(--ios-card); } }
