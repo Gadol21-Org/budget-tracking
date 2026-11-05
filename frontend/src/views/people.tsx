@@ -33,6 +33,11 @@ function People({ users }: { users: LogUser[] }) {
   );
 }
 
+/** The change history shows the new name at once, without fetching the list again. */
+function rememberName(email: string, name: string) {
+  state.logUsers = state.logUsers.map((u) => (u.email === email ? { ...u, name } : u));
+}
+
 function PersonRow({ user }: { user: LogUser }) {
   const [name, setName] = useState(user.name);
   const [busy, setBusy] = useState(false);
@@ -41,7 +46,7 @@ function PersonRow({ user }: { user: LogUser }) {
     setBusy(true);
     try {
       await api.setLogUserName(user.email, name);
-      user.name = name.trim();
+      rememberName(user.email, name.trim());
       setNote("נשמר");
     } catch {
       setNote("השמירה נכשלה");

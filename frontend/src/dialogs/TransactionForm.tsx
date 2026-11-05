@@ -84,7 +84,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
   const [bizValue, setBizValue] = useState<number | null | undefined>(ownTag);
   // Foreign currency: the shekel amount follows the rate for the transaction's day.
   const [quote, setQuote] = useState<Quote | null>(startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null);
-  const [loadingQuote, setLoadingQuote] = useState(false);
+  const [loadingQuote, setLoadingQuote] = useState(!startFx && ruleFx !== undefined);
   const [ilsText, setIlsText] = useState(startFx ? String(Math.abs(existing!.amount_agorot) / 100) : "");
   /** The shekel amount was typed in (what the card really charged): it is used as it is. */
   const [ilsTouched, setIlsTouched] = useState(false);
@@ -159,21 +159,24 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
   // A repeating charge is always priced by the rate of each month's day, so no shekel amount is typed for it.
   const manual = ilsTouched && !repeat;
   const ilsShown = manual || !quote ? ilsText : minor ? ((minor / 10 ** decimals(currency)) * quote.rate).toFixed(2) : "";
-  const refreshQuote = async (cur: Currency, day: string) => {
-    if (cur === "ILS") return;
+  /** Look the rate up; only the newest lookup's answer is kept (null: none available, e.g. offline). */
+  const lookUp = (cur: Currency, day: string) => {
     const seq = ++quoteSeq.current;
-    setLoadingQuote(true);
-    try {
-      const q = await api.fxRate(cur, day);
-      if (seq === quoteSeq.current) setQuote(q);
-    } catch {
+    const settle = (q: Quote | null) => {
       if (seq !== quoteSeq.current) return;
-      setQuote(null);
-    }
-    if (seq === quoteSeq.current) setLoadingQuote(false);
+      setQuote(q);
+      setLoadingQuote(false);
+    };
+    api.fxRate(cur, day).then(settle, () => settle(null));
   };
+  const refreshQuote = (cur: Currency, day: string) => {
+    if (cur === "ILS") return;
+    setLoadingQuote(true);
+    lookUp(cur, day);
+  };
+  // A new foreign line (or a repeating one) looks its rate up as the dialog opens; a saved line starts from its saved rate.
   useEffect(() => {
-    if (!startFx) void refreshQuote(currency, date);
+    if (!startFx && currency !== "ILS") lookUp(currency, date);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the dialog opens
   }, []);
   const rateText = quote ? `שער: 1 ${currencySymbol(currency)} = ₪${formatRate(quote.rate)} · ${fmtDate(quote.date)}${quote.estimated ? " · זמני, יתעדכן אוטומטית כשהיום יסתיים" : ""}` : "";
@@ -317,7 +320,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
             onChange={(c) => {
               const next = c || "ILS";
               setCurrency(next);
-              void refreshQuote(next, date);
+              refreshQuote(next, date);
             }}
           />
         </Field>
@@ -344,7 +347,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
               onClick={() => {
                 setIlsTouched(false);
                 setForceLookup(true);
-                void refreshQuote(currency, date);
+                refreshQuote(currency, date);
               }}
             >
               עדכון שער
@@ -359,7 +362,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
           required
           onChange={(d) => {
             setDate(d);
-            void refreshQuote(currency, d);
+            refreshQuote(currency, d);
           }}
         />
       </Field>

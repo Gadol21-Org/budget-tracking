@@ -73,6 +73,18 @@ export function showCategory(id: number | null) {
   go("list", { id });
 }
 
+/** The summary's income / expense card: which side its category breakdown shows. */
+export function showSide(kind: "expense" | "income") {
+  state.kind = kind;
+  render();
+}
+
+/** The business dashboards, always opening on the whole business (a single one is picked from there). */
+export function openBusinessDashboard() {
+  state.bizView = { tab: "overview", scope: "all" };
+  go("business");
+}
+
 export function manageCtx() {
   return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("settings") };
 }

@@ -20,6 +20,8 @@ function SyncMark({ t }: { t: Transaction }) {
   if (t.sync_state === "error") return <span className="sync" title="לא נשמר בפעמונים">⚠️</span>;
   // Can't go to Paamonim as it is (a top-level category made here, a zero amount, a refund on an expense item).
   if (t.sync_state === "skipped") return <span className="sync" title="לא נשלח לפעמונים: אין לו מקום שם">⚠️</span>;
+  // The time decides whether the ✅ moment is over; trackSync renders again when it ends.
+  // eslint-disable-next-line react-hooks/purity
   if ((state.justSynced.get(t.id) ?? 0) > Date.now()) return <span className="sync" title="נשמר בפעמונים">✅</span>;
   return null;
 }

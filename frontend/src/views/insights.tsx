@@ -611,8 +611,8 @@ function Trends({ ctx }: BodyProps) {
   const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const avgExp = mean(done.map((i) => expense[i]!)), avgSave = mean(done.map((i) => income[i]! - expense[i]!));
 
-  let run = 0;
-  const cumulative = months.map((_, i) => (run += income[i]! - expense[i]!));
+  const cumulative: number[] = [];
+  for (let i = 0, run = 0; i < months.length; i++) cumulative.push((run += income[i]! - expense[i]!));
 
   // Top categories over the 12 months, the rest as "other".
   const totals = new Map<number | null, number>();

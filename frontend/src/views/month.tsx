@@ -6,7 +6,7 @@ import { openReactDialog } from "../components/openReactDialog";
 import { PeriodForm } from "../dialogs/PeriodForm";
 import { shift } from "../period";
 import { businessOf, summaryFigures } from "../business";
-import { go, goBack } from "../nav";
+import { goBack, openBusinessDashboard, showSide } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { DrillCrumbs, SummaryCategories } from "./insights";
@@ -47,13 +47,8 @@ function BusinessCard() {
   if (!state.biz.businesses.length) return null;
   const { total, per } = summaryFigures({ txs: state.txs, cats: state.cats, biz: state.biz, period: state.period });
   if (!state.txs.some((t) => businessOf(state.biz, state.cats, t) != null)) return null;
-  // Always opens the whole business; a single business is picked from there.
-  const open = () => {
-    state.bizView = { tab: "overview", scope: "all" };
-    go("business");
-  };
   return (
-    <div className="card bizcard clickable" style={{ marginTop: 10 }} {...clickableProps(open)}>
+    <div className="card bizcard clickable" style={{ marginTop: 10 }} {...clickableProps(openBusinessDashboard)}>
       <div className="head">
         <div className="grow">
           <div className="bizname">מתוכם העסקים</div>
@@ -92,7 +87,7 @@ function DrillBackBar() {
 }
 
 function Stat({ label, agorot, cls, kind }: { label: string; agorot: number; cls: string; kind?: "expense" | "income" }) {
-  const props = kind ? { ...clickableProps(() => ((state.kind = kind), render())), className: `card clickable${state.kind === kind ? " selected" : ""}` } : { className: "card" };
+  const props = kind ? { ...clickableProps(() => showSide(kind)), className: `card clickable${state.kind === kind ? " selected" : ""}` } : { className: "card" };
   return (
     <div {...props}>
       <div className="label">{label}</div>

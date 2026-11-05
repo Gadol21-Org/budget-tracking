@@ -19,7 +19,9 @@ interface Props {
  * leaving the field with text that matches nothing puts the picked label back.
  */
 export function Combo({ items, value, onChange, placeholder, disabled = false }: Props) {
-  const [open, setOpen] = useState(false);
+  const [openState, setOpen] = useState(false);
+  // A disabled field never shows its list.
+  const open = openState && !disabled;
   /** What was typed since the list opened; null shows the picked label. */
   const [typed, setTyped] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -44,10 +46,6 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
     close();
     inputRef.current?.blur();
   };
-
-  useEffect(() => {
-    if (disabled) close();
-  }, [disabled, close]);
 
   // Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not,
   // and neither must scrolling (a scroll gesture fires pointerdown but no click).
@@ -86,7 +84,7 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
     }
     return () => {
       clearTimeout(timer);
-      listRef.current?.classList.remove("settling");
+      list?.classList.remove("settling");
       window.visualViewport?.removeEventListener("resize", fit);
     };
   }, [open]);
@@ -102,7 +100,7 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
         autoComplete="off"
         spellCheck={false}
         disabled={disabled}
-        value={typed ?? label}
+        value={disabled ? label : (typed ?? label)}
         onFocus={(e) => {
           // The layout can shift after a pick (the shekel box hides) so the tap's click lands on the field: stay closed.
           if (justPicked()) return e.currentTarget.blur();
@@ -113,7 +111,11 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
         onChange={(e) => (setTyped(e.target.value), setOpen(true))}
         onKeyDown={(e) => {
           if (e.key === "Tab" && open) close();
-          if (e.key === "Escape" && open) (e.stopPropagation(), e.preventDefault(), close());
+          if (e.key === "Escape" && open) {
+            e.stopPropagation();
+            e.preventDefault();
+            close();
+          }
           if (e.key === "Enter" && open) {
             // Enter takes the first match instead of submitting the form.
             e.preventDefault();
