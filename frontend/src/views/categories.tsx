@@ -1,3 +1,4 @@
+import { Icon, type IconName } from "../components/Icon";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import { api, type Category } from "../api";
 import { bizName } from "../business";
@@ -173,10 +174,10 @@ export function categoriesView(): ReactElement {
   );
 }
 
-function IconButton({ text, title, onClick }: { text: string; title: string; onClick: () => void }) {
+function IconButton({ icon, title, onClick }: { icon: IconName; title: string; onClick: () => void }) {
   return (
-    <button type="button" className="btn" title={title} onClick={onClick}>
-      {text}
+    <button type="button" className="btn iconbtn" title={title} aria-label={title} onClick={onClick}>
+      <Icon name={icon} />
     </button>
   );
 }
@@ -195,11 +196,11 @@ function CategoryRow({ c, sub }: { c: Category; sub: boolean }) {
           </div>
         ) : null}
       </div>
-      {state.biz.businesses.length > 0 && <IconButton text="💼" title="עסק של הקטגוריה" onClick={() => openCategoryBusinessDialog(manageCtx(), c)} />}
-      {!sub && !c.from_paamonim && <IconButton text="🔗" title="קטגוריה בפעמונים" onClick={() => openLinkCategoryDialog(c)} />}
-      {!sub && <IconButton text="+" title="הוספת תת-קטגוריה" onClick={() => openAddCategoryDialog(c.is_income, c.id)} />}
-      {sub && <IconButton text="⇄" title="העברה לקטגוריה אחרת" onClick={async () => (await loadHistory(""), openMoveCategoryDialog(c))} />}
-      <IconButton text="🗑" title="מחיקה" onClick={async () => (await loadHistory(""), openDeleteCategoryDialog(c))} />
+      {state.biz.businesses.length > 0 && <IconButton icon="briefcase" title="עסק של הקטגוריה" onClick={() => openCategoryBusinessDialog(manageCtx(), c)} />}
+      {!sub && !c.from_paamonim && <IconButton icon="link" title="קטגוריה בפעמונים" onClick={() => openLinkCategoryDialog(c)} />}
+      {!sub && <IconButton icon="plus" title="הוספת תת-קטגוריה" onClick={() => openAddCategoryDialog(c.is_income, c.id)} />}
+      {sub && <IconButton icon="move" title="העברה לקטגוריה אחרת" onClick={async () => (await loadHistory(""), openMoveCategoryDialog(c))} />}
+      <IconButton icon="trash" title="מחיקה" onClick={async () => (await loadHistory(""), openDeleteCategoryDialog(c))} />
     </div>
   );
 }
@@ -231,7 +232,10 @@ function CategoriesCard() {
         )}
       </div>
       <div className="actions" style={{ justifyContent: "flex-start" }}>
-        <IconButton text="הוספת קטגוריה" title="" onClick={() => openAddCategoryDialog(state.catKind, null)} />
+        <button type="button" className="btn" onClick={() => openAddCategoryDialog(state.catKind, null)}>
+          <Icon name="plus" size={18} />
+          הוספת קטגוריה
+        </button>
       </div>
     </div>
   );

@@ -16,11 +16,29 @@ import { settingsView } from "./views/settings";
 import { ensureHistory, neededFrom } from "./sync";
 import { openTransactionDialog } from "./dialogs/transaction";
 
-const TABS: [View, string, string][] = [
-  ["month", "📊", "סיכום"],
-  ["list", "📋", "תנועות"],
-  ["insights", "📈", "תובנות"],
-  ["settings", "⚙️", "הגדרות"],
+/** Tab icons: Lucide (ISC licence), drawn with currentColor so a theme can colour and size them. */
+const ICONS: Record<string, string[]> = {
+  month: ["M21.21 15.89A10 10 0 1 1 8 2.83", "M22 12A10 10 0 0 0 12 2v10z"],
+  list: ["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"],
+  insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
+};
+
+function TabIcon({ view }: { view: string }) {
+  return (
+    <svg className="ico" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ICONS[view].map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+}
+
+const TABS: [View, string][] = [
+  ["month", "סיכום"],
+  ["list", "תנועות"],
+  ["insights", "תובנות"],
+  ["settings", "הגדרות"],
 ];
 
 const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people"];
@@ -38,12 +56,12 @@ function openTab(view: View) {
 function Nav() {
   return (
     <nav className="nav">
-      {TABS.map(([view, ico, label]) => {
+      {TABS.map(([view, label]) => {
         const current = state.view === view || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "month" && state.view === "business");
         return (
           <button key={view} aria-current={current ? "page" : undefined} onClick={() => openTab(view)}>
-            <span className="ico">{ico}</span>
-            {label}
+            <TabIcon view={view} />
+            <span>{label}</span>
           </button>
         );
       })}
