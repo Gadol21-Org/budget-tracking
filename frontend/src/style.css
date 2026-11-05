@@ -35,7 +35,7 @@ button, input, select { font: inherit; color: inherit; }
 /* Native-app feel: controls and chrome are not selectable and don't flash on tap; typed text and notes stay selectable. */
 body { -webkit-tap-highlight-color: transparent; }
 /* A tap or click selects; it must not leave a focused/pressed look behind. Keyboard focus (:focus-visible) keeps its ring, and hover only applies where a real pointer can hover (touch browsers keep :hover stuck after a tap). */
-button:focus:not(:focus-visible), select:focus:not(:focus-visible), [role="button"]:focus:not(:focus-visible) { outline: none; }
+button:focus:not(:focus-visible), [role="button"]:focus:not(:focus-visible), select:focus { outline: none; }
 button:active, select:active { filter: none; }
 button, [role="button"], .nav, .fab, .daylabel, .stats .label { -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }
