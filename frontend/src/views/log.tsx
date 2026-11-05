@@ -1,9 +1,15 @@
 import { formatShekels } from "../format";
-import { el, fmtDate } from "../ui";
+import { fmtDate } from "../ui";
 import { api, type LogEntry } from "../api";
 import { go, goBack } from "../nav";
 import { state } from "../state";
 import { render } from "../render";
+import { type ReactElement, useState } from "react";
+import { BackButton } from "../components/BackButton";
+import { MonthBar } from "../components/MonthBar";
+import { openReactDialog } from "../components/openReactDialog";
+import { PeriodForm } from "../dialogs/PeriodForm";
+import { contains, bounds, monthOf, shift, type Period } from "../period";
 
 export const LOG_PAGE = 100;
 
@@ -62,76 +68,136 @@ export function logValue(key: string, v: unknown): string {
 }
 
 /** The lines under a log entry: what changed (old ← new) for an edit, otherwise the values recorded. */
-export function logLines(e: LogEntry): HTMLElement[] {
-  const line = (key: string, text: string) =>
-    el("div", { className: "logline" }, el("span", { className: "muted", textContent: `${LOG_FIELDS[key] ?? key}: ` }), el("span", { textContent: text }));
+function LogLines({ e }: { e: LogEntry }) {
+  const line = (key: string, text: string, id: string | number = key) => (
+    <div className="logline" key={id}>
+      <span className="muted">{`${LOG_FIELDS[key] ?? key}: `}</span>
+      <span>{text}</span>
+    </div>
+  );
   const values = (o: Record<string, unknown> | null) =>
     Object.entries(o ?? {})
       .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
-      .map(([k, v]) => line(k, logValue(k, v)));
+      .map(([k, v], i) => line(k, logValue(k, v), `${k}${i}`));
   if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override", "category_link", "category_move"].includes(e.kind)) {
     const keys = Object.keys({ ...e.old, ...e.new }).filter((k) => JSON.stringify(e.old![k] ?? null) !== JSON.stringify(e.new![k] ?? null));
-    return keys.map((k) => line(k, `${logValue(k, e.old![k])} ← ${logValue(k, e.new![k])}`));
+    return <>{keys.map((k) => line(k, `${logValue(k, e.old![k])} ← ${logValue(k, e.new![k])}`))}</>;
   }
-  return [...values(e.old), ...values(e.new)];
+  return (
+    <>
+      {values(e.old)}
+      {values(e.new)}
+    </>
+  );
 }
 
 /** The display name given to an email, else the email itself. */
 export const userLabel = (email: string) => state.logUsers.find((u) => u.email === email)?.name || email;
 
-export function logEntryRow(e: LogEntry): HTMLElement {
+function LogEntryRow({ e }: { e: LogEntry }) {
   const [ico, label] = LOG_KINDS[e.kind] ?? ["•", e.kind];
   const snap = (e.new ?? e.old) as Record<string, unknown> | null;
   const what = e.kind.startsWith("category_") ? (snap?.name as string | undefined) : (snap?.category as string | null | undefined) ?? (e.kind.startsWith("transaction_") || e.kind.startsWith("recurring_") ? "ללא קטגוריה" : undefined);
   const time = new Date(e.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
-  return el(
-    "div",
-    { className: "row logentry" },
-    el("span", { className: "logico", textContent: ico }),
-    el(
-      "div",
-      { className: "grow" },
-      el("div", { className: "logtitle" }, label, what ? el("span", { className: "muted", textContent: ` · ${what}` }) : null),
-      e.user_email ? el("div", { className: "logline muted", textContent: `👤 ${userLabel(e.user_email)}` }) : null,
-      ...logLines(e),
-    ),
-    el("span", { className: "muted logtime", textContent: time }),
+  return (
+    <div className="row logentry">
+      <span className="logico">{ico}</span>
+      <div className="grow">
+        <div className="logtitle">
+          {label}
+          {what ? <span className="muted">{` · ${what}`}</span> : null}
+        </div>
+        {e.user_email ? <div className="logline muted">{`👤 ${userLabel(e.user_email)}`}</div> : null}
+        <LogLines e={e} />
+      </div>
+      <span className="muted logtime">{time}</span>
+    </div>
   );
 }
 
-export function logView(): HTMLElement {
-  const back = el("button", { className: "btn", textContent: "→ הגדרות", title: "חזרה להגדרות" });
-  back.onclick = () => {
-    goBack("settings");
-  };
-  const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");
-  const days = [...new Set(state.log.map((e) => localDay(e.at)))];
-  const body = days.map((d) =>
-    el(
-      "div",
-      {},
-      el("div", { className: "daylabel", textContent: new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) }),
-      el("div", { className: "card rows" }, ...state.log.filter((e) => localDay(e.at) === d).map(logEntryRow)),
-    ),
-  );
-  const more = el("button", { className: "btn", textContent: "הצגת שינויים ישנים יותר" });
-  more.onclick = async () => {
-    more.disabled = true;
-    try {
+export function logView(): ReactElement {
+  return <LogScreen />;
+}
+
+const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");
+
+/** Whether the loaded entries reach back to the start of the period (or there is nothing older). */
+const covers = (p: Period) => {
+  const last = state.log[state.log.length - 1];
+  return !state.logMore || (last != null && localDay(last.at) < bounds(p).from);
+};
+
+/** Load older pages until the period's first day is covered. Returns false if a page failed to load. */
+export async function loadLogFor(p: Period): Promise<boolean> {
+  try {
+    while (!covers(p)) {
       const older = await api.log(state.log[state.log.length - 1]?.id, LOG_PAGE);
       state.log = [...state.log, ...older];
       state.logMore = older.length === LOG_PAGE;
-      render();
-    } catch {
-      more.disabled = false;
     }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function LogScreen() {
+  const [loadingMore, setLoadingMore] = useState(false);
+  const period = state.logPeriod;
+  const shown = state.log.filter((e) => contains(period, localDay(e.at)));
+  const days = [...new Set(shown.map((e) => localDay(e.at)))];
+  const choose = async (p: Period) => {
+    state.logPeriod = p;
+    render();
+    setLoadingMore(true);
+    await loadLogFor(p);
+    setLoadingMore(false);
+    render();
   };
-  return el(
-    "div",
-    {},
-    el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, el("div", { className: "name", textContent: "היסטוריית שינויים" }), el("div", { className: "muted", textContent: "שנה אחרונה" }))),
-    ...(body.length ? body : [el("div", { className: "empty", textContent: "עוד לא נרשמו שינויים" })]),
-    state.logMore ? el("div", { className: "actions", style: "justify-content:center;margin-top:12px" }, more) : null,
+  const more = async () => {
+    setLoadingMore(true);
+    await loadLogFor(period);
+    setLoadingMore(false);
+    render();
+  };
+  return (
+    <div>
+      <div className="card filterbar">
+        <BackButton onClick={() => goBack("settings")} />
+        <div className="grow">
+          <div className="name">היסטוריית שינויים</div>
+          <div className="muted">נשמרת שנה אחרונה</div>
+        </div>
+      </div>
+      <MonthBar
+        period={period}
+        onShift={(delta) => void choose(shift(period, delta) ?? period)}
+        onPick={() => openReactDialog((close) => <PeriodForm current={period} close={close} onPick={(p) => void choose(p)} />)}
+      />
+      {days.length ? (
+        days.map((d) => (
+          <div key={d}>
+            <div className="daylabel">{new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+            <div className="card rows">
+              {shown
+                .filter((e) => localDay(e.at) === d)
+                .map((e) => (
+                  <LogEntryRow key={e.id} e={e} />
+                ))}
+            </div>
+          </div>
+        ))
+      ) : (
+        <div className="empty">{loadingMore ? "טוען…" : "לא נרשמו שינויים בתקופה זו"}</div>
+      )}
+      {!covers(period) ? (
+        <div className="actions" style={{ justifyContent: "center", marginTop: 12 }}>
+          <button className="btn" disabled={loadingMore} onClick={more}>
+            הצגת שינויים ישנים יותר
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -139,5 +205,7 @@ export async function openLog() {
   state.logUsers = await api.logUsers().catch(() => []);
   state.log = await api.log(undefined, LOG_PAGE);
   state.logMore = state.log.length === LOG_PAGE;
+  state.logPeriod = monthOf(new Date().toLocaleDateString("sv-SE"));
+  await loadLogFor(state.logPeriod);
   go("log");
 }

@@ -1,4 +1,4 @@
-import { type InsightsNav, type InsightsState } from "./insights";
+import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
 import { type SumitOverview, type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
@@ -29,6 +29,8 @@ export const state = {
   /** Change log entries loaded so far (newest first) and whether older ones remain. */
   log: [] as LogEntry[],
   logMore: false,
+  /** The period the change history shows. */
+  logPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
   /** Emails seen on recorded changes, with display names. */
   logUsers: [] as LogUser[],
   /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */
