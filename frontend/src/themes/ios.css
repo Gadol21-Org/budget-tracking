@@ -103,3 +103,13 @@ form.add label, form.add .field { font-size: .8rem; text-transform: uppercase; l
   .nav button { font-size: .95rem; border-radius: 10px; color: var(--text); }
   .nav button[aria-current="page"] { background: var(--ios-fill); color: var(--ios-blue); }
 }
+
+/* No sticky hover or focus look after a tap: apps show only the selected state, never a darker "pressed" leftover.
+   Hover colours apply only where a real pointer exists (desktop). */
+.clickable:focus { outline: none; }
+@media (hover: none) {
+  .clickable:hover { background: inherit; }
+  .stats .card.clickable:hover { background: var(--ios-card); }
+}
+.stats .card.clickable:hover { background: var(--ios-card); }
+@media (hover: hover) { .clickable:hover { background: var(--ios-fill); } .stats .card.clickable:hover { background: var(--ios-card); } }
