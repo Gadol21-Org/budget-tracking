@@ -26,7 +26,7 @@ export function BagField({ value, onChange }: { value: number[]; onChange: (ids:
           ))}
         {!open && (
           <button type="button" className="qchip" onClick={() => setOpen(true)}>
-            {value.length ? "＋ עוד" : "＋ טיוב"}
+            {value.length ? "＋ עוד" : "＋ טיוג"}
           </button>
         )}
       </div>
