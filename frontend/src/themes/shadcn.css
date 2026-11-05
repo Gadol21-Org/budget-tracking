@@ -1,0 +1,108 @@
+/* Option B: shadcn/ui "zinc" look — monochrome, hairline borders, small radii, 40px controls, Inter + Heebo.
+   Token values are shadcn's default zinc theme (background / card / muted / border / primary). */
+@import "@fontsource-variable/inter";
+@import "@fontsource/heebo/hebrew-400.css";
+@import "@fontsource/heebo/hebrew-500.css";
+@import "@fontsource/heebo/hebrew-700.css";
+
+:root {
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(240 10% 3.9%);
+  --muted-bg: hsl(240 4.8% 95.9%);
+  --muted-fg: hsl(240 3.8% 46.1%);
+  --border: hsl(240 5.9% 90%);
+  --primary: hsl(240 5.9% 10%);
+  --primary-fg: hsl(0 0% 98%);
+  --ring: hsl(240 5.9% 10%);
+  --bg: var(--background);
+  --surface: var(--background);
+  --text: var(--foreground);
+  --muted: var(--muted-fg);
+  --line: var(--border);
+  --brand: var(--primary);
+  --brand-contrast: var(--primary-fg);
+  --expense: #dc2626;
+  --income: #16a34a;
+  --radius: 12px;
+  --nav-h: 64px;
+  --biz: #4f46e5;
+  --biz-soft: rgba(79, 70, 229, .1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: hsl(240 10% 3.9%);
+    --foreground: hsl(0 0% 98%);
+    --muted-bg: hsl(240 3.7% 15.9%);
+    --muted-fg: hsl(240 5% 64.9%);
+    --border: hsl(240 3.7% 15.9%);
+    --primary: hsl(0 0% 98%);
+    --primary-fg: hsl(240 5.9% 10%);
+    --ring: hsl(240 4.9% 83.9%);
+    --expense: #f87171;
+    --income: #4ade80;
+    --biz: #a5b4fc;
+    --biz-soft: rgba(165, 180, 252, .14);
+  }
+}
+body { font-family: "Inter Variable", "Heebo", system-ui, sans-serif; font-size: 15px; line-height: 1.45; letter-spacing: -.005em; -webkit-font-smoothing: antialiased; }
+h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
+h2 { font-size: .8rem; font-weight: 500; color: var(--muted-fg); text-transform: none; margin: 24px 2px 8px; }
+
+/* Cards: 1px border + tiny shadow, like <Card>. */
+.card, .kpi { border-radius: 12px; border: 1px solid var(--border); background: var(--background); box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.stats .card { padding: 12px; }
+.stats .label, .kpi .l { font-size: .75rem; font-weight: 500; }
+.stats .value, .kpi .v { font-weight: 600; letter-spacing: -.02em; }
+.stats .card.selected { border-color: var(--foreground); box-shadow: 0 0 0 1px var(--foreground); }
+.row { border-bottom: 1px solid var(--border); }
+.bar { height: 4px; background: var(--muted-bg); }
+.bar > span { background: var(--foreground); }
+
+.iconbtn { border: 1px solid var(--border); border-radius: 8px; width: 36px; height: 36px; min-width: 36px; min-height: 36px; background: var(--background); box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.iconbtn:hover, .periodbtn:hover { background: var(--muted-bg); }
+.monthbar .title { font-size: 1rem; font-weight: 600; }
+
+/* Bottom nav: plain, hairline top border, active = foreground. */
+.nav { background: color-mix(in srgb, var(--background) 85%, transparent); backdrop-filter: blur(12px); border-top: 1px solid var(--border); }
+.nav button { color: var(--muted-fg); font-size: .7rem; font-weight: 500; gap: 3px; }
+.nav button .ico { width: 22px; height: 22px; stroke-width: 1.75; }
+.nav button[aria-current="page"] { color: var(--foreground); font-weight: 600; }
+.nav button[aria-current="page"] .ico { stroke-width: 2.25; }
+
+/* FAB: black circle. */
+.fab { background: var(--primary); color: var(--primary-fg); width: 52px; height: 52px; font-size: 1.8rem; box-shadow: 0 10px 20px -5px rgb(0 0 0 / .3), 0 2px 4px rgb(0 0 0 / .1); }
+
+/* Buttons. */
+.btn { border-radius: 8px; border: 1px solid var(--border); background: var(--background); font-size: .875rem; font-weight: 500; padding: 9px 16px; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+.btn:hover { background: var(--muted-bg); }
+.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); box-shadow: none; }
+.btn.primary:hover { opacity: .9; background: var(--primary); }
+
+/* Tabs / segmented controls: muted track, white active pill (shadcn <Tabs>). */
+.seg, .seg3, .seg4, .seg3b { background: var(--muted-bg); border: 0; border-radius: 8px; padding: 3px; gap: 2px; }
+.seg button, .seg3 button, .seg4 button, .seg3b button { background: transparent; color: var(--muted-fg); border-radius: 6px; font-size: .875rem; font-weight: 500; padding: 8px; }
+.seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg4 button[aria-pressed="true"], .seg3b button[aria-pressed="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 1px 3px rgb(0 0 0 / .12); font-weight: 600; }
+@media (prefers-color-scheme: dark) { .seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg4 button[aria-pressed="true"], .seg3b button[aria-pressed="true"] { background: hsl(240 3.7% 22%); } }
+
+/* Chips as outline badges / toggles. */
+.chip, .cmpbtn, .qchip { border-radius: 8px; border: 1px solid var(--border); background: var(--background); font-size: .8125rem; font-weight: 500; padding: 7px 12px; }
+.chip[aria-pressed="true"], .qchip[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+
+/* Inputs / dialogs. */
+dialog { border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgb(0 0 0 / .25); }
+dialog.fullpage { border: 0; border-radius: 0; }
+dialog::backdrop { background: rgb(0 0 0 / .8); }
+form.add input, form.add select, .datefield .dateshown { background: var(--background); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: .9375rem; box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
+form.add input:focus-visible, form.add select:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+form.add label, form.add .field { font-size: .8125rem; font-weight: 500; color: var(--foreground); }
+.combo-list, .menu { border-radius: 8px; border: 1px solid var(--border); background: var(--background); box-shadow: 0 10px 15px -3px rgb(0 0 0 / .12); }
+.combo-list button:hover, .menu button:hover { background: var(--muted-bg); }
+.partialnote { background: var(--muted-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--muted-fg); }
+.bizhero { background: var(--primary); color: var(--primary-fg); }
+.bizcard { border-color: var(--border); }
+.bizchip, .upcoming-mark { font-weight: 500; }
+@media (min-width: 900px) {
+  .nav { background: var(--background); backdrop-filter: none; border-top: 0; }
+  .nav button { font-size: .875rem; border-radius: 6px; }
+  .nav button[aria-current="page"] { background: var(--muted-bg); }
+}

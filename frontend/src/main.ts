@@ -1,4 +1,6 @@
 import "./style.css";
+import "./themes/shadcn.css";
+import "./themes/shadcn.css";
 import "./gestures";
 import "./widgets";
 import { el } from "./ui";
