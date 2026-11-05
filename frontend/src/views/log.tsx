@@ -6,6 +6,10 @@ import { state } from "../state";
 import { render } from "../render";
 import { type ReactElement, useState } from "react";
 import { BackButton } from "../components/BackButton";
+import { MonthBar } from "../components/MonthBar";
+import { openReactDialog } from "../components/openReactDialog";
+import { PeriodForm } from "../dialogs/PeriodForm";
+import { contains, bounds, monthOf, shift, type Period } from "../period";
 
 export const LOG_PAGE = 100;
 
@@ -117,21 +121,44 @@ export function logView(): ReactElement {
 
 const localDay = (at: string) => new Date(at).toLocaleDateString("sv-SE");
 
-function LogScreen() {
-  const [loadingMore, setLoadingMore] = useState(false);
-  const days = [...new Set(state.log.map((e) => localDay(e.at)))];
-  const more = async () => {
-    setLoadingMore(true);
-    try {
+/** Whether the loaded entries reach back to the start of the period (or there is nothing older). */
+const covers = (p: Period) => {
+  const last = state.log[state.log.length - 1];
+  return !state.logMore || (last != null && localDay(last.at) < bounds(p).from);
+};
+
+/** Load older pages until the period's first day is covered. Returns false if a page failed to load. */
+export async function loadLogFor(p: Period): Promise<boolean> {
+  try {
+    while (!covers(p)) {
       const older = await api.log(state.log[state.log.length - 1]?.id, LOG_PAGE);
       state.log = [...state.log, ...older];
       state.logMore = older.length === LOG_PAGE;
-      render();
-    } catch {
-      /* the list stays as it was; the button can be pressed again */
-    } finally {
-      setLoadingMore(false);
     }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function LogScreen() {
+  const [loadingMore, setLoadingMore] = useState(false);
+  const period = state.logPeriod;
+  const shown = state.log.filter((e) => contains(period, localDay(e.at)));
+  const days = [...new Set(shown.map((e) => localDay(e.at)))];
+  const choose = async (p: Period) => {
+    state.logPeriod = p;
+    render();
+    setLoadingMore(true);
+    await loadLogFor(p);
+    setLoadingMore(false);
+    render();
+  };
+  const more = async () => {
+    setLoadingMore(true);
+    await loadLogFor(period);
+    setLoadingMore(false);
+    render();
   };
   return (
     <div>
@@ -139,15 +166,20 @@ function LogScreen() {
         <BackButton onClick={() => goBack("settings")} />
         <div className="grow">
           <div className="name">היסטוריית שינויים</div>
-          <div className="muted">שנה אחרונה</div>
+          <div className="muted">נשמרת שנה אחרונה</div>
         </div>
       </div>
+      <MonthBar
+        period={period}
+        onShift={(delta) => void choose(shift(period, delta) ?? period)}
+        onPick={() => openReactDialog((close) => <PeriodForm current={period} close={close} onPick={(p) => void choose(p)} />)}
+      />
       {days.length ? (
         days.map((d) => (
           <div key={d}>
             <div className="daylabel">{new Date(`${d}T00:00:00`).toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
             <div className="card rows">
-              {state.log
+              {shown
                 .filter((e) => localDay(e.at) === d)
                 .map((e) => (
                   <LogEntryRow key={e.id} e={e} />
@@ -156,9 +188,9 @@ function LogScreen() {
           </div>
         ))
       ) : (
-        <div className="empty">עוד לא נרשמו שינויים</div>
+        <div className="empty">{loadingMore ? "טוען…" : "לא נרשמו שינויים בתקופה זו"}</div>
       )}
-      {state.logMore ? (
+      {!covers(period) ? (
         <div className="actions" style={{ justifyContent: "center", marginTop: 12 }}>
           <button className="btn" disabled={loadingMore} onClick={more}>
             הצגת שינויים ישנים יותר
@@ -173,5 +205,7 @@ export async function openLog() {
   state.logUsers = await api.logUsers().catch(() => []);
   state.log = await api.log(undefined, LOG_PAGE);
   state.logMore = state.log.length === LOG_PAGE;
+  state.logPeriod = monthOf(new Date().toLocaleDateString("sv-SE"));
+  await loadLogFor(state.logPeriod);
   go("log");
 }

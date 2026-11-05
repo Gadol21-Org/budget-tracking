@@ -29,6 +29,8 @@ export const state = {
   /** Change log entries loaded so far (newest first) and whether older ones remain. */
   log: [] as LogEntry[],
   logMore: false,
+  /** The period the change history shows. */
+  logPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
   /** Emails seen on recorded changes, with display names. */
   logUsers: [] as LogUser[],
   /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */
