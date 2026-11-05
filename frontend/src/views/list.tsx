@@ -148,7 +148,7 @@ function SelectionBar() {
           })
         }
       >
-        🎒 הוספה לטיוג
+        🎒 טיוב
       </button>
       {inBags.length > 0 && (
         <button
