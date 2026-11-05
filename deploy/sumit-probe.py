@@ -52,10 +52,10 @@ for t in CREDIT:
         print("CREDIT", CREDIT[t], json.dumps(mask(d), ensure_ascii=False))
 first = next((d for t in CREDIT for d in by_type.get(t, [])), None)
 if first:
-    det = post("/accounting/documents/getdetails/", {"DocumentID": first.get("DocumentID"), "DocumentType": first.get("Type")})
+    det = post("/accounting/documents/getdetails/", {"DocumentID": first.get("DocumentID")})
     print("CREDIT details:", json.dumps(mask(det.get("Data")), ensure_ascii=False)[:3500])
 regular = next((d for t in (1, 2, 4) for d in by_type.get(t, [])), None)
 if regular:
-    det = post("/accounting/documents/getdetails/", {"DocumentID": regular.get("DocumentID"), "DocumentType": regular.get("Type")})
+    det = post("/accounting/documents/getdetails/", {"DocumentID": regular.get("DocumentID")})
     print("REGULAR details (fields only):", sorted((det.get("Data") or {}).keys()))
 print("api calls made:", calls)
