@@ -79,10 +79,12 @@ export interface Bag {
   budget_agorot: number | null;
   start_date: string | null;
   end_date: string | null;
+  /** "business_root" for the bag every business sits under, "business_general" for the shared-costs business; null for any other. */
+  role: string | null;
 }
 
 /** What a bag is created or changed to. */
-export type BagInput = Omit<Bag, "id">;
+export type BagInput = Omit<Bag, "id" | "role">;
 
 /** The bags, and which transactions sit in which as [transaction id, bag id] pairs (a transaction can be in several). */
 export interface BagData {

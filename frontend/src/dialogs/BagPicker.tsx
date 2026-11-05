@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { bagPath, childBags, isArchived, type BagState } from "../bags";
+import { bagPath, childBags, isArchived, isBusinessBag, type BagState } from "../bags";
 import { openReactDialog } from "../components/openReactDialog";
 import { state } from "../state";
 import { load } from "../sync";
@@ -50,7 +50,7 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
   const [, setTick] = useState(0);
   const [err, setErr] = useState("");
   const s = state.bags;
-  const offered = (id: number) => (only ? only.includes(id) : !isArchived(s, id) || picked.has(id));
+  const offered = (id: number) => !isBusinessBag(s, id) && (only ? only.includes(id) : !isArchived(s, id) || picked.has(id));
   const q = query.trim().toLowerCase();
   const rows = ordered(s, null, 0, (id) => offered(id) && (!q || bagPath(s, id).toLowerCase().includes(q)), (id) => !!q || opened.has(id));
   const toggleOpen = (id: number) =>

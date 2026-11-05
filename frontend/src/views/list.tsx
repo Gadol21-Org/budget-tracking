@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
-import { bagPath, bagsOf } from "../bags";
+import { bagPath, bagsOf, isBusinessBag } from "../bags";
 import { bizName, businessOf } from "../business";
 import { openBagPicker } from "../dialogs/BagPicker";
 import { Money } from "../components/Money";
@@ -124,7 +124,7 @@ export function listView(): ReactElement {
 /** The bar under the list while choosing lines: put them in bags, take them out, or stop. */
 function SelectionBar() {
   const ids = [...state.selecting!];
-  const inBags = [...new Set(ids.flatMap((id) => state.bags.tx.get(id) ?? []))];
+  const inBags = [...new Set(ids.flatMap((id) => state.bags.tx.get(id) ?? []))].filter((b) => !isBusinessBag(state.bags, b));
   const done = async () => {
     state.selecting = null;
     await load();

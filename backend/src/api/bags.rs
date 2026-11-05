@@ -136,9 +136,17 @@ pub(crate) async fn change_bag(
     if !bags.iter().any(|x| x.id == id) {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "הטיוג לא נמצא".into()));
     }
+    if is_root(&bags, id) {
+        return Err(bad("אי אפשר לשנות את הטיוג עסקים"));
+    }
     validate(&bags, Some(id), &mut b)?;
     db.update_bag(id, &b).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn is_root(bags: &[Bag], id: i64) -> bool {
+    bags.iter()
+        .any(|b| b.id == id && b.role.as_deref() == Some("business_root"))
 }
 
 /// Removes the bag and its sub-bags; the transactions in them stay.
@@ -146,6 +154,10 @@ pub(crate) async fn delete_bag(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    let bags = db.list_bags().await.map_err(internal)?;
+    if is_root(&bags, id) {
+        return Err(bad("אי אפשר למחוק את הטיוג עסקים"));
+    }
     db.remove_bag(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -187,6 +199,7 @@ mod tests {
             budget_agorot: None,
             start_date: None,
             end_date: None,
+            role: None,
         }
     }
     fn input(name: &str, parent: Option<i64>) -> BagInput {
