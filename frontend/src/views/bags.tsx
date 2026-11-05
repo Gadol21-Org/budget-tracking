@@ -110,9 +110,14 @@ function BagsScreen() {
       )}
       {archive && !archived.length && <div className="empty">אין טיוגים בארכיון</div>}
       {(archive ? archived.length > 0 : active.length > 0) && <div className="card rows">{archive ? <ArchivedList /> : <Tree parent={null} depth={0} archived={false} />}</div>}
-      <button className="btn" onClick={() => openBagForm()}>
-        ＋ טיוג חדש
-      </button>
+      <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <button className="btn" onClick={() => openBagForm()}>
+          ＋ טיוג חדש
+        </button>
+        <button className="btn" onClick={() => openBusinessForm()}>
+          ＋ עסק חדש
+        </button>
+      </div>
       {state.bags.bags.length > 0 && <NoteOverlap />}
     </div>
   );
@@ -338,6 +343,36 @@ function BagForm({ bag, parentId, close }: { bag?: Bag; parentId: number | null;
     </DialogForm>
   );
 }
+
+/** A new business is a bag directly under the fixed עסקים bag; one of them may hold the shared costs. */
+function BusinessForm({ close }: { close: () => void }) {
+  const [name, setName] = useState("");
+  const [general, setGeneral] = useState(false);
+  const hasGeneral = state.biz.businesses.some((b) => b.is_general);
+  return (
+    <DialogForm
+      title="עסק חדש"
+      submitLabel="יצירה"
+      submitDisabled={!name.trim()}
+      close={close}
+      onSubmit={async () => {
+        await api.addBusiness(name.trim(), general);
+        close();
+        await load();
+      }}
+    >
+      <Field label="שם">
+        <input type="text" required maxLength={60} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <label className="archiverow">
+        <input type="checkbox" disabled={hasGeneral} checked={general} onChange={(e) => setGeneral(e.target.checked)} />
+        <span>{hasGeneral ? "כבר יש עסק משותף" : "הוצאות משותפות (לא שייכות לעסק מסוים)"}</span>
+      </label>
+    </DialogForm>
+  );
+}
+
+const openBusinessForm = () => openReactDialog((close) => <BusinessForm close={close} />);
 
 export function openBagForm(bag?: Bag, parentId: number | null = null) {
   openReactDialog((close) => <BagForm bag={bag} parentId={parentId} close={close} />);

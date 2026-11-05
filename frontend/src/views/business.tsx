@@ -1,12 +1,11 @@
-import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
-import { api, type Business, type Category, type Transaction } from "../api";
+import { type ReactElement, type ReactNode, useState } from "react";
+import { api, type Category, type Transaction } from "../api";
 import {
   type BizCtx,
   type BizData,
   type BizTab,
   type Fig,
   allocation,
-  businessOf,
   figures,
   lastMonths,
   scopeName,
@@ -364,96 +363,6 @@ export interface ManageCtx {
 }
 
 const checkRow = { flexDirection: "row", alignItems: "center", gap: 8 } as const;
-
-function NameForm({ ctx, existing, close }: { ctx: ManageCtx; existing?: Business; close: () => void }) {
-  const [name, setName] = useState(existing?.name ?? "");
-  const [general, setGeneral] = useState(false);
-  const nameRef = useRef<HTMLInputElement>(null);
-  useEffect(() => void setTimeout(() => nameRef.current?.focus()), []);
-  const hasGeneral = ctx.biz.businesses.some((b) => b.is_general);
-  return (
-    <DialogForm
-      title={existing ? "שינוי שם" : "עסק חדש"}
-      submitLabel={existing ? "שמירה" : "הוספה"}
-      submitDisabled={!name.trim() || name.trim() === existing?.name}
-      close={close}
-      onSubmit={async () => {
-        if (existing) await api.renameBusiness(existing.id, name.trim());
-        else await api.addBusiness(name.trim(), general);
-        close();
-        await ctx.reload();
-      }}
-    >
-      <label>
-        שם
-        <input ref={nameRef} type="text" required maxLength={60} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      {!existing && (
-        <label style={checkRow}>
-          <input type="checkbox" disabled={hasGeneral} checked={general} onChange={(e) => setGeneral(e.target.checked)} />
-          {hasGeneral ? "כבר יש עסק משותף" : "הוצאות משותפות (לא שייכות לעסק מסוים)"}
-        </label>
-      )}
-    </DialogForm>
-  );
-}
-
-const openNameDialog = (ctx: ManageCtx, existing?: Business) => openReactDialog((close) => <NameForm ctx={ctx} existing={existing} close={close} />);
-
-export function businessesView(ctx: ManageCtx): ReactElement {
-  return <Businesses ctx={ctx} />;
-}
-
-function Businesses({ ctx }: { ctx: ManageCtx }) {
-  const tagged = (id: number) => ctx.txs.filter((t) => businessOf(ctx.biz, ctx.cats, t) === id && !t.upcoming).length;
-  return (
-    <div>
-      <div className="actions" style={{ justifyContent: "flex-start" }}>
-        <BackButton onClick={ctx.back} />
-      </div>
-      <h1>עסקים</h1>
-      <div className="card">
-        <p className="muted">
-          כל התנועות נשארות בסיכום משק הבית. עסק הוא רק מבט נוסף: אפשר לראות רווח והפסד לכל עסק ולכל העסקים יחד. הוצאה מסומנת בעסק בעת ההוספה, והכנסות נספרות לפי הקטגוריה שמקושרת לעסק (כפתור 💼 בהגדרות הקטגוריות).
-        </p>
-        <div className="rows">
-          {ctx.biz.businesses.length ? (
-            ctx.biz.businesses.map((b) => (
-              <div className="row" key={b.id}>
-                <div className="grow">
-                  <div className="name">{b.is_general ? `${b.name} (משותף)` : b.name}</div>
-                  <div className="muted">{`${tagged(b.id)} תנועות`}</div>
-                </div>
-                <button type="button" className="btn" title="שינוי שם" onClick={() => openNameDialog(ctx, b)}>
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  title="מחיקה"
-                  onClick={async () => {
-                    if (!confirm(`למחוק את "${b.name}"? התנועות נשארות, רק הסימון שלהן לעסק יוסר.`)) return;
-                    await api.deleteBusiness(b.id);
-                    await ctx.reload();
-                  }}
-                >
-                  🗑
-                </button>
-              </div>
-            ))
-          ) : (
-            <div className="empty">עוד אין עסקים</div>
-          )}
-        </div>
-        <div className="actions" style={{ justifyContent: "flex-start" }}>
-          <button type="button" className="btn" onClick={() => openNameDialog(ctx)}>
-            הוספת עסק
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /** Choose the business for a category (all its transactions count in it), or none. */
 function CategoryBusinessForm({ ctx, cat, close }: { ctx: ManageCtx; cat: Category; close: () => void }) {
