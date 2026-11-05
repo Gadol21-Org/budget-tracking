@@ -76,11 +76,15 @@ export function combo(placeholder: string) {
   list.setAttribute("role", "listbox");
   const root = el("div", { className: "combo" }, input, list);
   const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
+  let settle: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
+    clearTimeout(settle);
+    list.classList.remove("settling");
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
     document.removeEventListener("click", outside, true);
+    window.visualViewport?.removeEventListener("resize", fit);
   };
   /** Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not, and neither must scrolling (a scroll gesture fires pointerdown but no click). */
   const outside = (e: Event) => (root.isConnected ? root.contains(e.target as Node) || close() : document.removeEventListener("click", outside, true));
@@ -90,6 +94,14 @@ export function combo(placeholder: string) {
     value = v;
     input.value = labelOf(v);
     close();
+  };
+  /** Make the list as tall as the room under the field allows (above the keyboard when it is up), within sensible bounds. */
+  const fit = () => {
+    if (list.hidden) return;
+    const vv = window.visualViewport;
+    const bottom = Math.min(vv ? vv.offsetTop + vv.height : innerHeight, innerHeight);
+    const room = bottom - input.getBoundingClientRect().bottom - 16;
+    list.style.maxHeight = `${Math.round(Math.min(Math.max(room, 160), 560))}px`;
   };
   const show = (filter: string) => {
     const q = filter.trim().toLowerCase();
@@ -106,9 +118,24 @@ export function combo(placeholder: string) {
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
     );
+    const opening = list.hidden;
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("click", outside, true);
+    fit();
+    if (opening) {
+      window.visualViewport?.addEventListener("resize", fit);
+      // In a dialog the page scrolls the field to the top and the keyboard slides in: keep the list invisible (it still
+      // takes its place) until that has settled, so it appears once at its final size instead of jumping.
+      if (input.closest("dialog")) {
+        list.classList.add("settling");
+        settle = setTimeout(() => {
+          fit();
+          void list.offsetHeight; // apply the final size while the transition is still off
+          list.classList.remove("settling");
+        }, 450);
+      }
+    }
   };
   const justPicked = () => Date.now() - pickedAt <= 500;
   input.onfocus = () => {
