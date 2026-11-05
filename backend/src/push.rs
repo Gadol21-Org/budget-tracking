@@ -41,9 +41,22 @@ fn private_pem() -> Option<String> {
         return None;
     }
     if raw.starts_with("-----") {
-        return Some(raw.to_string());
+        return Some(raw.replace("\\n", "\n"));
     }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(raw).ok()?;
+    // Tolerate wrapped lines, stray spaces and url-safe or unpadded base64 from a copy-paste.
+    let clean: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .take_while(|c| *c != '=')
+        .collect();
+    let bytes = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(clean)
+        .ok()?;
     String::from_utf8(bytes).ok()
 }
 
