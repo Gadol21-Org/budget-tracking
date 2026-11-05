@@ -12,6 +12,10 @@ on:
         description: Wipe the staging data and reseed the sample data
         type: boolean
         default: false
+      sumit_probe:
+        description: After deploying, make 3 read-only calls to the Sumit test account and print the shape of its credit / refund documents
+        type: boolean
+        default: false
       teardown:
         description: Tear staging down (remove its containers, images and data) and deploy nothing
         type: boolean
@@ -100,6 +104,9 @@ jobs:
           $ssh bash '~/budget-staging/deploy-staging.sh' "$IMAGE:staging-${{ github.sha }}" "$RESET" || status=$?
           $ssh docker logout ghcr.io
           exit $status
+      - name: Sumit probe
+        if: ${{ inputs.sumit_probe && !inputs.teardown }}
+        run: ssh -i "$HOME/.ssh/id_deploy" -o BatchMode=yes "$TARGET" python3 - < deploy/sumit-probe.py
       - name: Summary
         run: |
           if [ "${{ inputs.teardown }}" = true ]; then
