@@ -64,7 +64,10 @@ export function combo(placeholder: string) {
   list.setAttribute("role", "listbox");
   const root = el("div", { className: "combo" }, input, list);
   const labelOf = (v: string) => items.find((i) => i.value === v)?.label ?? "";
+  let settle: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
+    clearTimeout(settle);
+    list.classList.remove("settling");
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
     input.value = labelOf(value);
@@ -103,13 +106,24 @@ export function combo(placeholder: string) {
           })
         : [el("div", { className: "combo-empty", textContent: "אין תוצאות" })]),
     );
+    const opening = list.hidden;
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
     document.addEventListener("click", outside, true);
     fit();
-    // The page scrolls the field to the top and the keyboard animates in, so measure again once things settle.
-    setTimeout(fit, 400);
-    window.visualViewport?.addEventListener("resize", fit);
+    if (opening) {
+      window.visualViewport?.addEventListener("resize", fit);
+      // In a dialog the page scrolls the field to the top and the keyboard slides in: keep the list invisible (it still
+      // takes its place) until that has settled, so it appears once at its final size instead of jumping.
+      if (input.closest("dialog")) {
+        list.classList.add("settling");
+        settle = setTimeout(() => {
+          fit();
+          void list.offsetHeight; // apply the final size while the transition is still off
+          list.classList.remove("settling");
+        }, 450);
+      }
+    }
   };
   const justPicked = () => Date.now() - pickedAt <= 500;
   input.onfocus = () => {
