@@ -34,6 +34,10 @@ pub const CALLS_KEY: &str = "sumit_calls";
 pub const NOTICES_KEY: &str = "sumit_notices";
 pub const RECEIPTS_KEY: &str = "sumit_receipts";
 pub const PRODUCTS_KEY: &str = "sumit_product_map";
+/// The expense category refunds are booked on (`{"category_id": n}`).
+pub const REFUND_KEY: &str = "sumit_refund_category";
+/// Stands in the list of what a held refund is waiting for when no refund category is set.
+pub const REFUND_NEED: &str = "קטגוריית זיכויים";
 
 const DEFAULT_BASE: &str = "https://api.sumit.co.il";
 const DEFAULT_LIMIT: u32 = 240;
@@ -413,6 +417,17 @@ impl std::fmt::Display for NeedsCategory {
 
 impl std::error::Error for NeedsCategory {}
 
+/// The expense category refunds go to.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug)]
+pub struct RefundRule {
+    pub category_id: Option<i64>,
+}
+
+/// Is `id` an expense category that transactions may be put on (it has no sub-categories)?
+pub fn is_usable_expense_category(cats: &[crate::storage::Category], id: i64) -> bool {
+    cats.iter().any(|c| c.id == id && !c.is_income) && !cats.iter().any(|c| c.parent_id == Some(id))
+}
+
 /// Is `id` an income category that transactions may be put on (it has no sub-categories)?
 pub fn is_usable_category(cats: &[crate::storage::Category], id: i64) -> bool {
     cats.iter().any(|c| c.id == id && c.is_income) && !cats.iter().any(|c| c.parent_id == Some(id))
@@ -633,23 +648,45 @@ pub async fn import_receipt(
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
     let usable = |c: i64| is_usable_category(&cats, c);
-    let rule_of = |name: &str| {
+    let own_rule = |name: &str| {
         let r = map.get(&product_key(name)).copied().unwrap_or_default();
         (
             r.business_id.filter(|b| known.iter().any(|k| k.id == *b)),
             r.category_id.filter(|c| usable(*c)),
         )
     };
-    // Every product needs its own income sub-category; a receipt without products has none.
-    let missing: Vec<String> = if items.is_empty() {
+    // A refund is an expense: it keeps the business of its product but goes on the refund
+    // category, so it can be edited like any other expense.
+    let refund_cat = if credit {
+        load::<RefundRule>(db, REFUND_KEY)
+            .await?
+            .category_id
+            .filter(|c| is_usable_expense_category(&cats, *c))
+    } else {
+        None
+    };
+    let rule_of = |name: &str| {
+        let (b, c) = own_rule(name);
+        if credit {
+            (b, c.and(refund_cat))
+        } else {
+            (b, c)
+        }
+    };
+    // Every product needs its own income sub-category (a refund also needs the refund
+    // category); a receipt without products has none.
+    let mut missing: Vec<String> = if items.is_empty() {
         vec![String::new()]
     } else {
         items
             .iter()
-            .filter(|i| rule_of(&i.name).1.is_none())
+            .filter(|i| own_rule(&i.name).1.is_none())
             .map(|i| i.name.clone())
             .collect()
     };
+    if credit && refund_cat.is_none() {
+        missing.push(REFUND_NEED.to_string());
+    }
     if !missing.is_empty() {
         return Err(NeedsCategory(missing).into());
     }
@@ -1587,6 +1624,16 @@ mod tests {
         )
         .await
         .unwrap();
+        let refunds = db.insert_category("החזרים", false, None).await.unwrap();
+        save(
+            &db,
+            REFUND_KEY,
+            &RefundRule {
+                category_id: Some(refunds),
+            },
+        )
+        .await
+        .unwrap();
         let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
         let api = Fake {
             docs: vec![doc_of(77, 2, 118.0), doc_of(78, 6, -59.0)],
@@ -1606,7 +1653,10 @@ mod tests {
         // 118.00 split 94.40 / 23.60, and the refund 59.00 split the same way, negative.
         assert_eq!(amounts, vec![-4_720, -1_180, 2_360, 9_440]);
         assert_eq!(txs.iter().map(|t| t.amount_agorot).sum::<i64>(), 5_900);
-        let refunds: Vec<_> = txs.iter().filter(|t| t.amount_agorot < 0).collect();
+        let refunds_txs: Vec<_> = txs.iter().filter(|t| t.amount_agorot < 0).collect();
+        // Refunds are expenses on the refund category, not on the income one.
+        assert!(refunds_txs.iter().all(|t| t.category_id == Some(refunds)));
+        let refunds = refunds_txs;
         assert!(refunds
             .iter()
             .all(|t| t.note.starts_with("זיכוי 78") && t.note.contains("[sumit:78]")));
@@ -1631,5 +1681,53 @@ mod tests {
         assert!(db.list_transactions().await.unwrap().is_empty());
         let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
         assert!(notices[0].title.starts_with("זיכוי ממתין לסיווג"));
+    }
+
+    #[tokio::test]
+    async fn a_refund_waits_for_the_refund_category_and_then_imports() {
+        let db = crate::testdb::fresh().await;
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        armed(&db).await;
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(None, Some(cat))),
+                (product_key("משלוח"), rule(None, Some(cat))),
+            ]),
+        )
+        .await
+        .unwrap();
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let api = Fake {
+            docs: vec![doc_of(78, 6, -59.0)],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.held), (0, 1));
+        // An income category is not accepted as the refund category.
+        assert!(!is_usable_expense_category(
+            &db.list_categories().await.unwrap(),
+            cat
+        ));
+        let refunds = db.insert_category("החזרים", false, None).await.unwrap();
+        save(
+            &db,
+            REFUND_KEY,
+            &RefundRule {
+                category_id: Some(refunds),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry_held(&db, now).await.unwrap(), 1);
+        let txs = db.list_transactions().await.unwrap();
+        assert!(
+            !txs.is_empty()
+                && txs
+                    .iter()
+                    .all(|t| t.category_id == Some(refunds) && t.amount_agorot < 0)
+        );
     }
 }

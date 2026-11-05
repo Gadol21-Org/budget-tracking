@@ -116,7 +116,7 @@ export function SumitCard() {
     }
   };
   const unseen = data?.notices.filter((n) => !n.read).slice(0, 5) ?? [];
-  const products = data ? [...new Set(data.held.flatMap((h) => h.products))].join(", ") || "ללא פירוט מוצרים" : "";
+  const products = data ? [...new Set(data.held.flatMap((h) => h.products))].join(", ") : "";
   return (
     <div className="card">
       <h2>קבלות מ-Sumit</h2>
@@ -130,7 +130,7 @@ export function SumitCard() {
             ? "החיבור ל-Sumit עדיין לא הוגדר בשרת."
             : `בדיקה אחרונה: ${when(data.last_poll_at)} · הבאה: ${when(data.next_poll_at)} · קריאות החודש: ${data.calls_this_month}/${data.monthly_limit}${data.last_error ? ` · שגיאה: ${data.last_error}` : ""}`}
       </div>
-      {data && data.held.length > 0 && <div className="note error">{`${data.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${products}). הגדירו אותה ב"הגדרת מוצרים ועסקים" והקבלות ייובאו.`}</div>}
+      {data && data.held.length > 0 && <div className="note error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"הגדרת מוצרים ועסקים" והם ייובאו.`}</div>}
       <div>
         {unseen.map((n, i) => (
           <div className="row" key={i}>
@@ -200,6 +200,31 @@ function ProductRow({ p }: { p: SumitOverview["products"][number] }) {
   );
 }
 
+/** The expense category refunds are booked on; saved at once. */
+function RefundCategory({ id }: { id: number | null }) {
+  const expense = state.cats.filter((c) => !c.is_income);
+  const own = expense.find((c) => c.id === id);
+  const [pick, setPick] = useState<CategoryChoice>(own ? (own.parent_id != null ? { top: String(own.parent_id), sub: String(own.id) } : { top: String(own.id), sub: "" }) : { top: "", sub: "" });
+  const save = (c: CategoryChoice) => {
+    const t = c.sub || (c.top && !expense.some((k) => String(k.parent_id) === c.top) ? c.top : "");
+    void api.sumitRefundCategory(t ? Number(t) : null);
+  };
+  return (
+    <div className="card">
+      <div className="name">זיכויים</div>
+      <div className="muted">זיכוי מ-Sumit נרשם כהוצאה בקטגוריה הזו, עם העסק והמוצר של המוצר שזוכה.</div>
+      <CategoryPicker
+        cats={expense}
+        value={pick}
+        onChange={(c) => {
+          setPick(c);
+          save(c);
+        }}
+      />
+    </div>
+  );
+}
+
 /** The business and income category of each product (or only of `only`, the products of receipts waiting for one). */
 export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
   const wanted = only && new Set(only.map((n) => n.trim().toLowerCase()));
@@ -218,6 +243,7 @@ export function openMapping(o: SumitOverview, done: () => void, only?: string[])
       >
         <h2>קבלות מ-Sumit: מוצרים</h2>
         <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "עסק וקטגוריה לכל מוצר"}</h3>
+        {(!only || o.held.some((h) => h.needs_refund_category)) && <RefundCategory id={o.refund_category_id} />}
         {rows.length ? (
           rows.map((p) => <ProductRow key={p.name} p={p} />)
         ) : (
