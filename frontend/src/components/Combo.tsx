@@ -71,11 +71,22 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
       list.style.maxHeight = `${Math.round(Math.min(Math.max(room, 160), 560))}px`;
     };
     fit();
-    // The page scrolls the field to the top and the keyboard animates in, so measure again once things settle.
-    const timer = setTimeout(fit, 400);
     window.visualViewport?.addEventListener("resize", fit);
+    // In a dialog the page scrolls the field to the top and the keyboard slides in: keep the list invisible (it still takes
+    // its place) until that has settled, so it appears once at its final size instead of jumping.
+    const list = listRef.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (list && inputRef.current?.closest("dialog")) {
+      list.classList.add("settling");
+      timer = setTimeout(() => {
+        fit();
+        void list.offsetHeight; // apply the final size while the transition is still off
+        list.classList.remove("settling");
+      }, 450);
+    }
     return () => {
       clearTimeout(timer);
+      listRef.current?.classList.remove("settling");
       window.visualViewport?.removeEventListener("resize", fit);
     };
   }, [open]);
