@@ -178,7 +178,6 @@ function InsightsScreen({ ctx }: { ctx: Ctx }) {
           <CompareButton ctx={ctx} label={base.label} />
         </div>
       )}
-      {hasCompare && isPartial(ctx.period) && <div className="partialnote">התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה. לתמונה מלאה בחרו חודש שהסתיים.</div>}
       <div className={`dash dash-${dash}`}>
         <Body ctx={ctx} baseLabel={base.label} />
       </div>
@@ -429,7 +428,6 @@ export function SummaryCategories({ ctx }: { ctx: Ctx }) {
     );
   return (
     <div>
-      {ctx.ins.cat === undefined && isPartial(ctx.period) && <div className="partialnote">התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה.</div>}
       {body}
     </div>
   );
