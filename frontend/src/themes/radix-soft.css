@@ -1,0 +1,100 @@
+/* Option D: "Soft fintech" on Radix Colors — slate neutrals, indigo accent, jade / tomato for money,
+   borderless cards with soft shadows, big radii, floating pill tab bar, Rubik. Dark mode uses Radix's dark scales. */
+@import "@fontsource/rubik/latin-400.css";
+@import "@fontsource/rubik/latin-500.css";
+@import "@fontsource/rubik/latin-600.css";
+@import "@fontsource/rubik/hebrew-400.css";
+@import "@fontsource/rubik/hebrew-500.css";
+@import "@fontsource/rubik/hebrew-600.css";
+
+:root {
+  /* Radix slate 1/2/6/11/12, indigo 9/3, jade 11, tomato 11 */
+  --bg: #f8f9fa;
+  --surface: #fff;
+  --text: #1c2024;
+  --muted: #60646c;
+  --line: #e8e8ec;
+  --brand: #3e63dd;
+  --brand-soft: #e6edfe;
+  --brand-contrast: #fff;
+  --expense: #d13415;
+  --income: #218358;
+  --radius: 22px;
+  --nav-h: 72px;
+  --biz: #8e4ec6;
+  --biz-soft: #f3e7fc;
+  --shadow: 0 1px 2px rgba(28, 32, 36, .04), 0 8px 24px -8px rgba(28, 32, 36, .1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111113;
+    --surface: #1a1b1e;
+    --text: #edeef0;
+    --muted: #b0b4ba;
+    --line: #2b2d31;
+    --brand: #849dff;
+    --brand-soft: #1d2448;
+    --brand-contrast: #0b0e1f;
+    --expense: #ff9592;
+    --income: #3dd68c;
+    --biz: #d19dff;
+    --biz-soft: #2f1e3e;
+    --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 8px 24px -8px rgba(0,0,0,.6);
+  }
+}
+body { font-family: "Rubik", system-ui, sans-serif; font-size: 15px; }
+h1 { font-weight: 600; font-size: 1.5rem; }
+h2 { font-size: .95rem; font-weight: 500; color: var(--text); margin: 26px 6px 10px; }
+
+.card, .kpi { border: 0; border-radius: 22px; box-shadow: var(--shadow); padding: 16px 18px; }
+.kpi { padding: 14px 16px; }
+/* The three summary tiles: soft, the open one tinted indigo. */
+.stats { gap: 10px; }
+.stats .card { border-radius: 20px; padding: 14px 8px; }
+.stats .card.selected { background: var(--brand); color: var(--brand-contrast); box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--brand) 70%, transparent); border: 0; }
+.stats .card.selected .label, .stats .card.selected .value { color: var(--brand-contrast); }
+.stats .label { font-size: .75rem; }
+.stats .value, .kpi .v { font-weight: 600; }
+.row { border-bottom: 1px solid var(--line); padding-block: 12px; }
+.bar { height: 8px; border-radius: 4px; background: var(--line); }
+.bar > span { border-radius: 4px; }
+
+.iconbtn { border: 0; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); color: var(--brand); }
+.monthbar .title { font-weight: 600; }
+
+/* Floating pill tab bar. */
+.nav { inset-inline: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); border: 0; border-radius: 28px; height: 64px; background: var(--surface); box-shadow: 0 12px 32px -6px rgba(28, 32, 36, .22), 0 0 0 1px var(--line); padding: 6px; gap: 4px; }
+:root { --nav-h: 84px; }
+.nav button { border-radius: 22px; font-size: .68rem; font-weight: 500; gap: 2px; color: var(--muted); }
+.nav button .ico { width: 22px; height: 22px; }
+.nav button[aria-current="page"] { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+
+.fab { width: 56px; height: 56px; bottom: calc(var(--nav-h) + 12px); background: var(--brand); color: var(--brand-contrast); box-shadow: 0 10px 24px -6px color-mix(in srgb, var(--brand) 75%, transparent); }
+
+.btn { border-radius: 16px; border: 0; background: var(--brand-soft); color: var(--brand); font-weight: 500; padding: 13px 20px; }
+.btn.primary { background: var(--brand); color: var(--brand-contrast); }
+.card + .btn, .rows + .btn { box-shadow: none; }
+
+.seg, .seg3, .seg4, .seg3b { background: var(--line); border: 0; border-radius: 16px; padding: 4px; gap: 4px; }
+.seg button, .seg3 button, .seg4 button, .seg3b button { background: transparent; border-radius: 12px; padding: 9px; color: var(--muted); font-weight: 500; }
+.seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg4 button[aria-pressed="true"], .seg3b button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+
+.chip, .cmpbtn, .qchip { border: 0; background: var(--surface); box-shadow: var(--shadow); border-radius: 999px; font-weight: 500; }
+.chip[aria-pressed="true"], .qchip[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); }
+
+dialog { border-radius: 28px; box-shadow: 0 24px 60px rgba(0,0,0,.3); }
+dialog.fullpage { border-radius: 0; background: var(--bg); }
+form.add input, form.add select, .datefield .dateshown { background: var(--surface); border: 1.5px solid var(--line); border-radius: 16px; padding: 13px 14px; }
+form.add input:focus { outline: 0; border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+form.add label, form.add .field { color: var(--muted); font-weight: 500; padding-inline: 4px; }
+.combo-list, .menu { border: 0; border-radius: 18px; box-shadow: 0 16px 40px rgba(0,0,0,.2); }
+.combo-list button:hover, .menu button:hover { background: var(--brand-soft); }
+.partialnote { background: color-mix(in srgb, #f5a524 16%, var(--surface)); border-radius: 18px; }
+.bizhero { background: linear-gradient(135deg, #3e63dd, #8e4ec6); border-radius: 24px; box-shadow: 0 16px 32px -12px rgba(62, 99, 221, .6); }
+.bizcard { border: 0; box-shadow: var(--shadow); }
+@media (min-width: 900px) {
+  .nav { inset-inline: auto; bottom: auto; top: 0; height: 100vh; border-radius: 0; box-shadow: 1px 0 0 var(--line); padding: 20px 12px; }
+  .nav button { font-size: .95rem; }
+  .fab { bottom: 32px; }
+}
+.stats .card.selected .expense, .stats .card.selected .income { color: inherit; }

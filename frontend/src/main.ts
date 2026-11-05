@@ -1,4 +1,5 @@
 import "./style.css";
+import "./themes/radix-soft.css";
 import "./gestures";
 import "./widgets";
 import { el } from "./ui";
