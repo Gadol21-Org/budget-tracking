@@ -34,12 +34,24 @@ function BudgetBar({ spent, budget }: { spent: number; budget: number }) {
   );
 }
 
-function BagRow({ bag, depth }: { bag: Bag; depth: number }) {
+function BagRow({ bag, depth, open, onToggle }: { bag: Bag; depth: number; open?: boolean; onToggle?: () => void }) {
   const spent = bagSpent(bag.id);
   const kids = childBags(state.bags, bag.id).length;
   const sub = [dateRange(bag), kids ? (kids === 1 ? "תת-טיוג אחד" : `${kids} תתי-טיוגים`) : ""].filter(Boolean).join(" · ");
   return (
     <div className="row bagrow" style={{ paddingInlineStart: depth * 18 }} {...clickableProps(() => go("bag", { id: bag.id }))}>
+      {onToggle && (
+        <button
+          type="button"
+          className="bagtoggle"
+          aria-expanded={open}
+          aria-label={open ? `סגירת ${bag.name}` : `פתיחת ${bag.name}`}
+          onClick={(e) => (e.stopPropagation(), onToggle())}
+        >
+          {open ? "▾" : "◂"}
+        </button>
+      )}
+      {!onToggle && <span className="bagtoggle" aria-hidden="true" />}
       <div className="grow">
         <div className="name">{bag.name}</div>
         {sub && <div className="muted small">{sub}</div>}
@@ -56,17 +68,23 @@ function BagRow({ bag, depth }: { bag: Bag; depth: number }) {
   );
 }
 
-function Tree({ parent, depth, archived }: { parent: number | null; depth: number; archived: boolean }): ReactElement {
+/** The bags in a tree: a bag's sub-bags show only while it is open, and the businesses (עסקים) come first. */
+function Tree({ parent, depth, archived, opened, toggle }: { parent: number | null; depth: number; archived: boolean; opened: Set<number>; toggle: (id: number) => void }): ReactElement {
   return (
     <>
       {childBags(state.bags, parent)
+        .sort((a, b) => Number(b.role === "business_root") - Number(a.role === "business_root"))
         .filter((b) => isArchived(state.bags, b.id) === archived)
-        .map((b) => (
-          <div key={b.id}>
-            <BagRow bag={b} depth={depth} />
-            <Tree parent={b.id} depth={depth + 1} archived={archived} />
-          </div>
-        ))}
+        .map((b) => {
+          const hasKids = childBags(state.bags, b.id).some((k) => isArchived(state.bags, k.id) === archived);
+          const open = opened.has(b.id);
+          return (
+            <div key={b.id}>
+              <BagRow bag={b} depth={depth} open={open} onToggle={hasKids ? () => toggle(b.id) : undefined} />
+              {open && <Tree parent={b.id} depth={depth + 1} archived={archived} opened={opened} toggle={toggle} />}
+            </div>
+          );
+        })}
     </>
   );
 }
@@ -89,6 +107,13 @@ export function bagsView(): ReactElement {
 
 function BagsScreen() {
   const [archive, setArchive] = useState(false);
+  const [opened, setOpened] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setOpened((o) => {
+      const n = new Set(o);
+      if (!n.delete(id)) n.add(id);
+      return n;
+    });
   const active = state.bags.bags.filter((b) => !isArchived(state.bags, b.id));
   const archived = state.bags.bags.filter((b) => isArchived(state.bags, b.id));
   return (
@@ -109,7 +134,7 @@ function BagsScreen() {
         </div>
       )}
       {archive && !archived.length && <div className="empty">אין טיוגים בארכיון</div>}
-      {(archive ? archived.length > 0 : active.length > 0) && <div className="card rows">{archive ? <ArchivedList /> : <Tree parent={null} depth={0} archived={false} />}</div>}
+      {(archive ? archived.length > 0 : active.length > 0) && <div className="card rows">{archive ? <ArchivedList /> : <Tree parent={null} depth={0} archived={false} opened={opened} toggle={toggle} />}</div>}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <button className="btn" onClick={() => openBagForm()}>
           ＋ טיוג חדש
