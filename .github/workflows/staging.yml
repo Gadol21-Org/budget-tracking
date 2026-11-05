@@ -12,6 +12,10 @@ on:
         description: Wipe the staging data and reseed the sample data
         type: boolean
         default: false
+      sumit_probe:
+        description: After deploying, make 3 read-only calls to the Sumit test account and print the shape of its credit / refund documents
+        type: boolean
+        default: false
       teardown:
         description: Tear staging down (remove its containers, images and data) and deploy nothing
         type: boolean
@@ -89,7 +93,14 @@ jobs:
             {
               printf 'SUMIT_API_KEY=%s\nSUMIT_COMPANY_ID=%s\n' "$SUMIT_API_KEY" "$SUMIT_COMPANY_ID"
               if [ -n "$VAPID_PRIVATE_KEY_PEM_B64" ] && [ -n "$VAPID_PUBLIC_KEY" ]; then
-                printf 'VAPID_PRIVATE_KEY_PEM_B64=%s\nVAPID_PUBLIC_KEY=%s\n' "$VAPID_PRIVATE_KEY_PEM_B64" "$VAPID_PUBLIC_KEY"
+                # An env file is one line per value: a pasted PEM or a line-wrapped base64
+                # would be cut at the first newline, so make both single-line first.
+                case "$VAPID_PRIVATE_KEY_PEM_B64" in
+                  -----*) priv=$(printf '%s\n' "$VAPID_PRIVATE_KEY_PEM_B64" | base64 -w0) ;;
+                  *) priv=$(printf '%s' "$VAPID_PRIVATE_KEY_PEM_B64" | tr -d ' \r\n') ;;
+                esac
+                pub=$(printf '%s' "$VAPID_PUBLIC_KEY" | tr -d ' \r\n')
+                printf 'VAPID_PRIVATE_KEY_PEM_B64=%s\nVAPID_PUBLIC_KEY=%s\n' "$priv" "$pub"
               fi
             } | $ssh 'umask 077; cat > ~/budget-staging/sumit.env'
           else
@@ -100,6 +111,9 @@ jobs:
           $ssh bash '~/budget-staging/deploy-staging.sh' "$IMAGE:staging-${{ github.sha }}" "$RESET" || status=$?
           $ssh docker logout ghcr.io
           exit $status
+      - name: Sumit probe
+        if: ${{ inputs.sumit_probe && !inputs.teardown }}
+        run: ssh -i "$HOME/.ssh/id_deploy" -o BatchMode=yes "$TARGET" python3 - < deploy/sumit-probe.py
       - name: Summary
         run: |
           if [ "${{ inputs.teardown }}" = true ]; then

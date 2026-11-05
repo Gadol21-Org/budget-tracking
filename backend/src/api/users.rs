@@ -45,6 +45,8 @@ pub(crate) async fn list_users(State(db): State<Db>) -> Result<Json<Vec<KnownUse
     Ok(Json(
         emails
             .into_iter()
+            // The Sumit sync is not a person: it has no name to give.
+            .filter(|email| email != oplog::SYNC_ACTOR)
             .map(|email| KnownUser {
                 name: names.get(&email).cloned().unwrap_or_default(),
                 email,

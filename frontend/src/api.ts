@@ -200,15 +200,18 @@ export interface SumitOverview {
   products: { name: string; business_id: number | null; category_id: number | null }[];
   notices: SumitNotice[];
   /** Receipts waiting for an income sub-category (default or per product) before they can be imported. */
-  held: { id: number; customer: string; total: number; products: string[] }[];
+  held: { id: number; customer: string; total: number; products: string[]; needs_refund_category: boolean }[];
+  /** Expense category that refunds (credit documents) are booked on. */
+  refund_category_id: number | null;
   push_public_key: string | null;
 }
 
 export const api = {
   sumit: () => request<SumitOverview>("/api/sumit"),
   /** Look for new receipts now. Costs Sumit API calls (the server refuses within 10 minutes of the last check). */
-  sumitPoll: () => request<{ baseline: boolean; new_receipts: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
+  sumitPoll: () => request<{ baseline: boolean; new_receipts: number; refunds: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
   sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
+  sumitRefundCategory: (category_id: number | null) => request<void>("/api/sumit/refund-category", { method: "PUT", body: JSON.stringify({ category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
   pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
   pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),

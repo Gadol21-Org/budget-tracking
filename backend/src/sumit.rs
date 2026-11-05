@@ -34,11 +34,24 @@ pub const CALLS_KEY: &str = "sumit_calls";
 pub const NOTICES_KEY: &str = "sumit_notices";
 pub const RECEIPTS_KEY: &str = "sumit_receipts";
 pub const PRODUCTS_KEY: &str = "sumit_product_map";
+/// The expense category refunds are booked on (`{"category_id": n}`).
+pub const REFUND_KEY: &str = "sumit_refund_category";
+/// Stands in the list of what a held refund is waiting for when no refund category is set.
+pub const REFUND_NEED: &str = "קטגוריית זיכויים";
 
 const DEFAULT_BASE: &str = "https://api.sumit.co.il";
 const DEFAULT_LIMIT: u32 = 240;
 /// Receipt-like document types: InvoiceAndReceipt (1), Receipt (2), DonationReceipt (4).
-const RECEIPT_TYPES: [i64; 3] = [1, 2, 4];
+/// Credit invoice-receipt (6, seen on the test account), credit receipt, credit invoice, credit
+/// donation receipt: a refund of an earlier document.
+const CREDIT_TYPES: [i64; 4] = [5, 6, 7, 14];
+/// Is this document a refund (a credit document)?
+pub fn is_credit(doc: &DocSummary) -> bool {
+    CREDIT_TYPES.contains(&doc.doc_type)
+}
+
+/// Everything one list call asks for: invoice-receipt (1), receipt (2), donation receipt (4) and the credits.
+const DOC_TYPES: [i64; 7] = [1, 2, 4, 5, 6, 7, 14];
 const MAX_PAGES: usize = 3;
 const MAX_SEEN: usize = 1500;
 const MAX_NOTICES: usize = 30;
@@ -241,6 +254,10 @@ fn doc_type_of(v: &Value) -> i64 {
             "InvoiceAndReceipt" => 1,
             "Receipt" => 2,
             "DonationReceipt" => 4,
+            "CreditInvoice" => 5,
+            "CreditInvoiceAndReceipt" => 6,
+            "CreditReceipt" => 7,
+            "CreditDonationReceipt" => 14,
             other => other.parse().unwrap_or(-1),
         },
         _ => -1,
@@ -319,7 +336,7 @@ impl SumitApi for HttpApi {
             .call(
                 "/accounting/documents/list/",
                 json!({
-                    "DocumentTypes": RECEIPT_TYPES,
+                    "DocumentTypes": DOC_TYPES,
                     "DateFrom": format!("{from}T00:00:00"),
                     "DateTo": format!("{to}T23:59:59"),
                     "IncludeDrafts": false,
@@ -399,6 +416,17 @@ impl std::fmt::Display for NeedsCategory {
 }
 
 impl std::error::Error for NeedsCategory {}
+
+/// The expense category refunds go to.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug)]
+pub struct RefundRule {
+    pub category_id: Option<i64>,
+}
+
+/// Is `id` an expense category that transactions may be put on (it has no sub-categories)?
+pub fn is_usable_expense_category(cats: &[crate::storage::Category], id: i64) -> bool {
+    cats.iter().any(|c| c.id == id && !c.is_income) && !cats.iter().any(|c| c.parent_id == Some(id))
+}
 
 /// Is `id` an income category that transactions may be put on (it has no sub-categories)?
 pub fn is_usable_category(cats: &[crate::storage::Category], id: i64) -> bool {
@@ -609,40 +637,73 @@ pub async fn import_receipt(
             record: None,
         });
     }
-    let total = to_agorot(doc.total);
+    // A refund (credit document) is its own transaction with a negative amount: Sumit gives no
+    // way to tell which receipt it undoes, so nothing is matched or amended.
+    let credit = is_credit(doc);
+    let sign: i64 = if credit { -1 } else { 1 };
+    let total = to_agorot(doc.total.abs());
     if total <= 0 {
-        bail!("receipt {} has no positive amount", doc.id);
+        bail!("receipt {} has no amount", doc.id);
     }
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
     let usable = |c: i64| is_usable_category(&cats, c);
-    let rule_of = |name: &str| {
+    let own_rule = |name: &str| {
         let r = map.get(&product_key(name)).copied().unwrap_or_default();
         (
             r.business_id.filter(|b| known.iter().any(|k| k.id == *b)),
             r.category_id.filter(|c| usable(*c)),
         )
     };
-    // Every product needs its own income sub-category; a receipt without products has none.
-    let missing: Vec<String> = if items.is_empty() {
+    // A refund is an expense: it keeps the business of its product but goes on the refund
+    // category, so it can be edited like any other expense.
+    let refund_cat = if credit {
+        load::<RefundRule>(db, REFUND_KEY)
+            .await?
+            .category_id
+            .filter(|c| is_usable_expense_category(&cats, *c))
+    } else {
+        None
+    };
+    let rule_of = |name: &str| {
+        let (b, c) = own_rule(name);
+        if credit {
+            (b, c.and(refund_cat))
+        } else {
+            (b, c)
+        }
+    };
+    // Every product needs its own income sub-category (a refund also needs the refund
+    // category); a receipt without products has none.
+    let mut missing: Vec<String> = if items.is_empty() {
         vec![String::new()]
     } else {
         items
             .iter()
-            .filter(|i| rule_of(&i.name).1.is_none())
+            .filter(|i| own_rule(&i.name).1.is_none())
             .map(|i| i.name.clone())
             .collect()
     };
+    if credit && refund_cat.is_none() {
+        missing.push(REFUND_NEED.to_string());
+    }
     if !missing.is_empty() {
         return Err(NeedsCategory(missing).into());
     }
     let biz_of = |name: &str| rule_of(name).0;
-    let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
+    let priced: Vec<(Group, f64)> = items
+        .iter()
+        .map(|i| (rule_of(&i.name), i.total.abs()))
+        .collect();
     let parts = split_total(total, &priced, (None, None));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
     for ((b, cat), amount) in &parts {
-        let mut note = format!("קבלה {}", doc.number.unwrap_or(doc.id));
+        let mut note = format!(
+            "{} {}",
+            if credit { "זיכוי" } else { "קבלה" },
+            doc.number.unwrap_or(doc.id)
+        );
         if !doc.customer.is_empty() {
             note.push_str(&format!(" – {}", doc.customer));
         }
@@ -659,7 +720,7 @@ pub async fn import_receipt(
         let id = db
             .create_transaction(&NewTransaction {
                 date: date.clone(),
-                amount_agorot: *amount,
+                amount_agorot: *amount * sign,
                 category_id: *cat,
                 payment_method_id: None,
                 note,
@@ -675,7 +736,7 @@ pub async fn import_receipt(
         number: doc.number,
         date,
         customer: doc.customer.clone(),
-        total_agorot: total,
+        total_agorot: total * sign,
         items: items
             .iter()
             .map(|i| RecordItem {
@@ -739,6 +800,8 @@ pub struct PollSummary {
     /// Receipts newly put on hold for want of a usable category.
     pub held: usize,
     pub new_receipts: usize,
+    /// Refund (credit) documents imported as negative transactions.
+    pub refunds: usize,
     pub transactions: usize,
     pub calls: u32,
 }
@@ -823,7 +886,7 @@ async fn run_poll(
     }
     let receipts: Vec<DocSummary> = docs
         .into_iter()
-        .filter(|d| RECEIPT_TYPES.contains(&d.doc_type))
+        .filter(|d| DOC_TYPES.contains(&d.doc_type))
         .collect();
     if baseline {
         // First poll: remember where things stand, import nothing.
@@ -867,6 +930,7 @@ async fn run_poll(
         };
         state.failures.remove(&doc.id);
         let id = doc.id;
+        let credit = is_credit(&doc);
         let done = settle_doc(db, state, doc, items, now, &mut recs, &mut notices).await?;
         // Looked at (imported or held): the next poll starts after it.
         state.watermark = state.watermark.max(Some(id));
@@ -874,7 +938,11 @@ async fn run_poll(
             summary.held += 1;
         }
         if let Some(n) = done {
-            summary.new_receipts += 1;
+            if credit {
+                summary.refunds += 1;
+            } else {
+                summary.new_receipts += 1;
+            }
             summary.transactions += n;
         }
     }
@@ -920,7 +988,11 @@ async fn settle_doc(
             notices.push(Notice {
                 id: doc.id,
                 at: now.to_rfc3339(),
-                title: format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total),
+                title: if is_credit(&doc) {
+                    format!("התקבל זיכוי: ₪{:.2}", doc.total.abs())
+                } else {
+                    format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total)
+                },
                 body: notice_body(&doc, &items, unmapped),
                 tx_ids: imported.tx_ids,
                 read: false,
@@ -938,7 +1010,16 @@ async fn settle_doc(
                     notices.push(Notice {
                         id: doc.id,
                         at: now.to_rfc3339(),
-                        title: format!("קבלה ממתינה לסיווג: ₪{:.2}", doc.total),
+                        title: format!(
+                            "{} ממתי{} לסיווג: ₪{:.2}",
+                            if is_credit(&doc) {
+                                "זיכוי"
+                            } else {
+                                "קבלה"
+                            },
+                            if is_credit(&doc) { "ן" } else { "נה" },
+                            doc.total.abs()
+                        ),
                         body: format!(
                             "{}הגדירו תת-קטגוריית הכנסה {} ב\"קבלות מ-Sumit\" והקבלה תיובא",
                             if doc.customer.is_empty() {
@@ -993,6 +1074,10 @@ async fn persist_lists(
 /// Try the held receipts again with the current mapping. Makes no Sumit calls. Returns how
 /// many were imported.
 pub async fn retry_held(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize> {
+    crate::oplog::as_sync(retry_held_inner(db, now)).await
+}
+
+async fn retry_held_inner(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize> {
     let mut state: State = load(db, STATE_KEY).await?;
     if state.held.is_empty() {
         return Ok(0);
@@ -1071,15 +1156,16 @@ pub async fn poll_and_notify(
     api: &dyn SumitApi,
     cfg: &Config,
 ) -> Result<PollSummary> {
-    match poll_once(db, api, cfg, Utc::now()).await {
+    match crate::oplog::as_sync(poll_once(db, api, cfg, Utc::now())).await {
         Ok(s) => {
             tracing::info!(
-                "sumit: {} new receipts, {} transactions, {} calls",
+                "sumit: {} new receipts, {} refunds, {} transactions, {} calls",
                 s.new_receipts,
+                s.refunds,
                 s.transactions,
                 s.calls
             );
-            if s.new_receipts > 0 || s.held > 0 {
+            if s.new_receipts > 0 || s.held > 0 || s.refunds > 0 {
                 crate::push::notify_all(db).await;
             }
             Ok(s)
@@ -1498,5 +1584,150 @@ mod tests {
         assert_eq!((s.new_receipts, s.transactions), (1, 1));
         let st: State = load(&db, STATE_KEY).await.unwrap();
         assert_eq!(st.watermark, Some(11));
+    }
+
+    fn doc_of(id: i64, doc_type: i64, total: f64) -> DocSummary {
+        DocSummary {
+            id,
+            number: Some(id),
+            date: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            customer: "דנה".into(),
+            total,
+            doc_type,
+        }
+    }
+
+    #[test]
+    fn credit_documents_are_listed_and_negative() {
+        let v: Value = serde_json::from_str(
+            r#"{"Data":{"Documents":[{"DocumentID":9,"DocumentNumber":4000,"Date":"2026-11-05T00:00:00+02:00","CustomerName":"x","Type":6,"DocumentValue":-100.0,"CompanyValue":-100.0}]}}"#,
+        )
+        .unwrap();
+        let d = &parse_list(&v).docs[0];
+        assert_eq!((d.doc_type, d.total), (6, -100.0));
+        assert!(CREDIT_TYPES.contains(&d.doc_type));
+    }
+
+    #[tokio::test]
+    async fn a_refund_is_its_own_negative_transaction() {
+        let db = crate::testdb::fresh().await;
+        let biz = db.insert_business("שמלות", false).await.unwrap();
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        armed(&db).await;
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(Some(biz), Some(cat))),
+                (product_key("משלוח"), rule(None, Some(cat))),
+            ]),
+        )
+        .await
+        .unwrap();
+        let refunds = db.insert_category("החזרים", false, None).await.unwrap();
+        save(
+            &db,
+            REFUND_KEY,
+            &RefundRule {
+                category_id: Some(refunds),
+            },
+        )
+        .await
+        .unwrap();
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let api = Fake {
+            docs: vec![doc_of(77, 2, 118.0), doc_of(78, 6, -59.0)],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        // The fake returns the same two lines (80 and 20) for every document: the refund is half of it.
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!(
+            (s.new_receipts, s.refunds, s.transactions, s.calls),
+            (1, 1, 4, 3)
+        );
+        let txs = db.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 4);
+        let mut amounts: Vec<i64> = txs.iter().map(|t| t.amount_agorot).collect();
+        amounts.sort();
+        // 118.00 split 94.40 / 23.60, and the refund 59.00 split the same way, negative.
+        assert_eq!(amounts, vec![-4_720, -1_180, 2_360, 9_440]);
+        assert_eq!(txs.iter().map(|t| t.amount_agorot).sum::<i64>(), 5_900);
+        let refunds_txs: Vec<_> = txs.iter().filter(|t| t.amount_agorot < 0).collect();
+        // Refunds are expenses on the refund category, not on the income one.
+        assert!(refunds_txs.iter().all(|t| t.category_id == Some(refunds)));
+        let refunds = refunds_txs;
+        assert!(refunds
+            .iter()
+            .all(|t| t.note.starts_with("זיכוי 78") && t.note.contains("[sumit:78]")));
+        // The refunded dress carries the business of its product, like the receipt.
+        assert_eq!(db.business_links().await.unwrap().transactions.len(), 2);
+        let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
+        assert!(notices[1].title.starts_with("התקבל זיכוי: ₪59.00"));
+    }
+
+    #[tokio::test]
+    async fn a_refund_of_an_unmapped_product_is_held_like_a_receipt() {
+        let db = crate::testdb::fresh().await;
+        armed(&db).await;
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let api = Fake {
+            docs: vec![doc_of(78, 6, -59.0)],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.held), (0, 1));
+        assert!(db.list_transactions().await.unwrap().is_empty());
+        let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
+        assert!(notices[0].title.starts_with("זיכוי ממתין לסיווג"));
+    }
+
+    #[tokio::test]
+    async fn a_refund_waits_for_the_refund_category_and_then_imports() {
+        let db = crate::testdb::fresh().await;
+        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
+        armed(&db).await;
+        save(
+            &db,
+            PRODUCTS_KEY,
+            &BTreeMap::from([
+                (product_key("שמלה"), rule(None, Some(cat))),
+                (product_key("משלוח"), rule(None, Some(cat))),
+            ]),
+        )
+        .await
+        .unwrap();
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let api = Fake {
+            docs: vec![doc_of(78, 6, -59.0)],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.held), (0, 1));
+        // An income category is not accepted as the refund category.
+        assert!(!is_usable_expense_category(
+            &db.list_categories().await.unwrap(),
+            cat
+        ));
+        let refunds = db.insert_category("החזרים", false, None).await.unwrap();
+        save(
+            &db,
+            REFUND_KEY,
+            &RefundRule {
+                category_id: Some(refunds),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry_held(&db, now).await.unwrap(), 1);
+        let txs = db.list_transactions().await.unwrap();
+        assert!(
+            !txs.is_empty()
+                && txs
+                    .iter()
+                    .all(|t| t.category_id == Some(refunds) && t.amount_agorot < 0)
+        );
     }
 }
