@@ -80,8 +80,16 @@ h2 { font-size: .8125rem; font-weight: 400; text-transform: uppercase; letter-sp
 .chip[aria-pressed="true"], .qchip[aria-pressed="true"] { background: var(--ios-blue); color: #fff; }
 
 /* Buttons: filled blue with big radius; secondary = tinted. */
-.btn { border: 0; border-radius: 12px; background: color-mix(in srgb, var(--ios-blue) 14%, transparent); color: var(--ios-blue); font-weight: 600; padding: 13px 18px; }
-.btn.primary { background: var(--ios-blue); color: #fff; }
+.btn { border: 0; border-radius: 999px; background: color-mix(in srgb, var(--ios-blue) 14%, transparent); color: var(--ios-blue); font-weight: 600; padding: 9px 18px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: .95rem; line-height: 1.2; }
+.btn:active { background: color-mix(in srgb, var(--ios-blue) 24%, transparent); }
+.icon { flex: none; display: block; }
+/* Round icon buttons (edit, delete, remove, add sub-category, drag handle): equal width and height, glyph centred. */
+.btn.iconbtn { width: 36px; height: 36px; min-width: 36px; min-height: 36px; padding: 0; border-radius: 50%; font-size: 1rem; }
+.btn.iconbtn .icon { width: 20px; height: 20px; }
+.btn.iconbtn[title="הסרה"], .btn.iconbtn[title="מחיקה"] { background: color-mix(in srgb, var(--expense) 12%, transparent); color: var(--expense); }
+.draghandle.btn.iconbtn { background: transparent; color: var(--ios-label2); }
+.card .actions .btn, .card > .btn { padding: 9px 20px; }
+.btn.primary { background: var(--ios-blue); color: #fff; padding: 12px 22px; font-size: 1rem; }
 .btn:disabled { opacity: .4; }
 
 /* Sheets and form fields: iOS grouped-form look. */
@@ -94,12 +102,17 @@ dialog:not(.fullpage) form.add input, dialog:not(.fullpage) form.add select { ba
 form.add input:focus { outline: 2px solid var(--ios-blue); }
 form.add label, form.add .field { font-size: .8rem; text-transform: uppercase; letter-spacing: .02em; color: var(--ios-label2); padding-inline: 14px; }
 .combo-list, .menu { background: var(--ios-card); border: 0; border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
-.combo-list button:hover, .menu button:hover { background: var(--ios-fill); }
+@media (hover: hover) { .combo-list button:hover, .menu button:hover { background: var(--ios-fill); } }
 .partialnote { background: color-mix(in srgb, #ff9500 14%, transparent); border-radius: 12px; }
 .bizhero { background: linear-gradient(135deg, #5856d6, #af52de); }
-.crumb, .linkbtn, .del:hover { color: var(--ios-blue); }
+.crumb, .linkbtn { color: var(--ios-blue); }
 @media (min-width: 900px) {
   .nav { backdrop-filter: none; background: var(--ios-card); height: 100vh; }
   .nav button { font-size: .95rem; border-radius: 10px; color: var(--text); }
   .nav button[aria-current="page"] { background: var(--ios-fill); color: var(--ios-blue); }
 }
+
+/* Row actions stay quiet: bare icons, tinted only by meaning. */
+.row .btn.iconbtn { background: transparent; }
+.row .btn.iconbtn[title="הסרה"], .row .btn.iconbtn[title="מחיקה"] { background: transparent; }
+.cursearch { background: var(--ios-fill); border: 0; border-radius: 10px; padding: 10px 12px; }

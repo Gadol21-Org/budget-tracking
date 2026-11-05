@@ -1,3 +1,4 @@
+import { Icon } from "../components/Icon";
 import { type PointerEvent as ReactPointerEvent, type ReactElement, useEffect, useRef, useState } from "react";
 import { api, currencyInfo, type Currency } from "../api";
 import { BackButton } from "../components/BackButton";
@@ -138,11 +139,11 @@ function CurrenciesScreen({ back }: { back: () => void }) {
                   void save(reorder(list, i, to), to);
                 }}
               >
-                ⠿
+                <Icon name="grip" />
               </button>
               <CurrencyLabel c={c} />
               <button type="button" className="btn iconbtn" title="הסרה" aria-label="הסרה" onClick={() => void save(list.filter((x) => x !== c))}>
-                ✕
+                <Icon name="x" />
               </button>
             </div>
           ))}
@@ -159,6 +160,7 @@ function CurrenciesScreen({ back }: { back: () => void }) {
               <div className="row" key={c}>
                 <CurrencyLabel c={c} />
                 <button type="button" className="btn" style={{ whiteSpace: "nowrap" }} title={`הוספת ${currencyInfo(c).name}`} aria-label={`הוספת ${currencyInfo(c).name}`} onClick={() => void save([...list, c])}>
+                  <Icon name="plus" size={16} />
                   הוספה
                 </button>
               </div>

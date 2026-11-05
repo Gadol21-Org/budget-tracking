@@ -1,3 +1,4 @@
+import { Icon } from "../components/Icon";
 import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import { api, type Business, type Category, type Transaction } from "../api";
 import {
@@ -424,20 +425,21 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
                   <div className="name">{b.is_general ? `${b.name} (משותף)` : b.name}</div>
                   <div className="muted">{`${tagged(b.id)} תנועות`}</div>
                 </div>
-                <button type="button" className="btn" title="שינוי שם" onClick={() => openNameDialog(ctx, b)}>
-                  ✎
+                <button type="button" className="btn iconbtn" title="שינוי שם" aria-label="שינוי שם" onClick={() => openNameDialog(ctx, b)}>
+                  <Icon name="pencil" />
                 </button>
                 <button
                   type="button"
-                  className="btn"
+                  className="btn iconbtn"
                   title="מחיקה"
+                  aria-label="מחיקה"
                   onClick={async () => {
                     if (!confirm(`למחוק את "${b.name}"? התנועות נשארות, רק הסימון שלהן לעסק יוסר.`)) return;
                     await api.deleteBusiness(b.id);
                     await ctx.reload();
                   }}
                 >
-                  🗑
+                  <Icon name="trash" />
                 </button>
               </div>
             ))
@@ -447,6 +449,7 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
         </div>
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button type="button" className="btn" onClick={() => openNameDialog(ctx)}>
+            <Icon name="plus" size={18} />
             הוספת עסק
           </button>
         </div>
