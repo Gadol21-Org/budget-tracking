@@ -29,7 +29,7 @@ export async function enablePush(key: string): Promise<string> {
 export function SumitBanner() {
   const { held, unread } = state.sumit;
   if (!held && !unread) return null;
-  const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} קבלות חדשות מ-Sumit יובאו`;
+  const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} עדכונים חדשים מ-Sumit (קבלות וזיכויים)`;
   const open = () => {
     const o = state.sumitData;
     // Held receipts: open the classification of just their products; new ones: the settings card that lists them.
@@ -97,7 +97,7 @@ export function SumitCard() {
     setOut({ text: "בודק…", error: false });
     try {
       const r = await api.sumitPoll();
-      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "אין קבלות חדשות." });
+      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts || r.refunds ? [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "", r.refunds ? `טופלו ${r.refunds} זיכויים.` : ""].filter(Boolean).join(" ") : "אין קבלות חדשות." });
       await load();
     } catch (e) {
       setOut({ error: true, text: `שגיאה: ${e instanceof Error ? e.message : e}` });
