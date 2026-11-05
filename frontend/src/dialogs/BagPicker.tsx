@@ -21,6 +21,7 @@ interface Props {
 /** Bags in tree order (a bag, then its sub-bags), with how deep each one is. A bag's sub-bags show only while it is open (or while searching). */
 function ordered(s: BagState, parent: number | null, depth: number, keep: (id: number) => boolean, open: (id: number) => boolean): { id: number; depth: number }[] {
   return childBags(s, parent)
+    .sort((a, b) => Number(b.role === "business_root") - Number(a.role === "business_root")) // the businesses come first
     .filter((b) => keep(b.id) || hasKept(s, b.id, keep))
     .flatMap((b) => [{ id: b.id, depth }, ...(open(b.id) ? ordered(s, b.id, depth + 1, keep, open) : [])]);
 }

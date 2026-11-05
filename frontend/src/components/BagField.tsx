@@ -23,7 +23,7 @@ export function BagField({ value, onChange, biz }: { value: number[]; onChange: 
   const toggle = (id: number) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
   return (
     <div className="bagfield">
-      <div className="muted small">{biz?.required && biz.givenName == null ? "טיוגים ועסק (חובה לבחור עסק, או ״ללא עסק״)" : biz ? "טיוגים ועסק" : "טיוגים"}</div>
+      <div className="muted small">{biz?.required && biz.givenName == null ? "טיוגים (חובה לבחור עסק, או ״ללא עסק״)" : "טיוגים"}</div>
       <div className="qchips">
         {biz?.givenName != null && (
           <span className="bizchip big">

@@ -388,7 +388,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .selbox { width: 22px; height: 22px; accent-color: var(--biz); flex: none; }
 .small { font-size: .82rem; }
 .linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
-.bizchip.big { font-size: .9rem; padding: 3px 12px; }
+.bizchip.big { font-size: .88rem; padding: 4px 6px 4px 12px; gap: 4px; }
 .bizpick [hidden] { display: none !important; }
 
 /* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
@@ -429,7 +429,7 @@ dialog { overscroll-behavior: contain; }
 .bagchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .bagchip { display: inline-flex; align-items: center; gap: 4px; background: var(--bag-soft); color: var(--bag); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; }
 .bagchip.big { font-size: .88rem; padding: 4px 6px 4px 12px; }
-.bagchip .x { border: 0; background: none; color: inherit; cursor: pointer; opacity: .7; padding: 4px 6px; font-size: .8rem; }
+.bagchip .x, .bizchip .x { border: 0; background: none; color: inherit; cursor: pointer; opacity: .7; padding: 4px 6px; font-size: .8rem; }
 .bagfield { display: flex; flex-direction: column; gap: 6px; }
 .bagtabs { grid-template-columns: repeat(2, 1fr); max-width: 320px; }
 .bagrow { cursor: pointer; }
