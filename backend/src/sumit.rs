@@ -41,6 +41,11 @@ const DEFAULT_LIMIT: u32 = 240;
 /// Credit invoice-receipt (6, seen on the test account), credit receipt, credit invoice, credit
 /// donation receipt: a refund of an earlier document.
 const CREDIT_TYPES: [i64; 4] = [5, 6, 7, 14];
+/// Is this document a refund (a credit document)?
+pub fn is_credit(doc: &DocSummary) -> bool {
+    CREDIT_TYPES.contains(&doc.doc_type)
+}
+
 /// Everything one list call asks for: invoice-receipt (1), receipt (2), donation receipt (4) and the credits.
 const DOC_TYPES: [i64; 7] = [1, 2, 4, 5, 6, 7, 14];
 const MAX_PAGES: usize = 3;
@@ -450,9 +455,6 @@ pub struct RecordItem {
     pub quantity: f64,
     pub total: f64,
     pub business_id: Option<i64>,
-    /// The transaction this item's money went to (for amending it on a refund).
-    #[serde(default)]
-    pub tx_id: Option<i64>,
 }
 
 pub async fn load<T: for<'de> Deserialize<'de> + Default>(
@@ -620,9 +622,13 @@ pub async fn import_receipt(
             record: None,
         });
     }
-    let total = to_agorot(doc.total);
+    // A refund (credit document) is its own transaction with a negative amount: Sumit gives no
+    // way to tell which receipt it undoes, so nothing is matched or amended.
+    let credit = is_credit(doc);
+    let sign: i64 = if credit { -1 } else { 1 };
+    let total = to_agorot(doc.total.abs());
     if total <= 0 {
-        bail!("receipt {} has no positive amount", doc.id);
+        bail!("receipt {} has no amount", doc.id);
     }
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
@@ -648,13 +654,19 @@ pub async fn import_receipt(
         return Err(NeedsCategory(missing).into());
     }
     let biz_of = |name: &str| rule_of(name).0;
-    let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
+    let priced: Vec<(Group, f64)> = items
+        .iter()
+        .map(|i| (rule_of(&i.name), i.total.abs()))
+        .collect();
     let parts = split_total(total, &priced, (None, None));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
-    let mut tx_for: BTreeMap<Group, i64> = BTreeMap::new();
     for ((b, cat), amount) in &parts {
-        let mut note = format!("קבלה {}", doc.number.unwrap_or(doc.id));
+        let mut note = format!(
+            "{} {}",
+            if credit { "זיכוי" } else { "קבלה" },
+            doc.number.unwrap_or(doc.id)
+        );
         if !doc.customer.is_empty() {
             note.push_str(&format!(" – {}", doc.customer));
         }
@@ -671,7 +683,7 @@ pub async fn import_receipt(
         let id = db
             .create_transaction(&NewTransaction {
                 date: date.clone(),
-                amount_agorot: *amount,
+                amount_agorot: *amount * sign,
                 category_id: *cat,
                 payment_method_id: None,
                 note,
@@ -681,14 +693,13 @@ pub async fn import_receipt(
             db.set_transactions_business(&[id], Some(*b)).await?;
         }
         tx_ids.push(id);
-        tx_for.insert((*b, *cat), id);
     }
     let record = ReceiptRecord {
         doc_id: doc.id,
         number: doc.number,
         date,
         customer: doc.customer.clone(),
-        total_agorot: total,
+        total_agorot: total * sign,
         items: items
             .iter()
             .map(|i| RecordItem {
@@ -696,7 +707,6 @@ pub async fn import_receipt(
                 quantity: i.quantity,
                 total: i.total,
                 business_id: biz_of(&i.name),
-                tx_id: tx_for.get(&rule_of(&i.name)).copied(),
             })
             .collect(),
         tx_ids: tx_ids.clone(),
@@ -706,169 +716,6 @@ pub async fn import_receipt(
         tx_ids,
         record: Some(record),
     })
-}
-
-// ---------------------------------------------------------------------------------------------
-// Refunds
-
-/// Sumit's credit documents carry negative amounts and, as far as the API shows, no pointer to the
-/// document they undo (`ExternalReference` and `Description` are usually empty). So a refund is
-/// matched to an imported receipt of the same customer that still holds every refunded product for
-/// at least the refunded amount. Exactly one such receipt: its transactions are reduced (or deleted
-/// when nothing is left). None or several: nothing is changed and a notice asks for manual handling.
-fn same_customer(a: &str, b: &str) -> bool {
-    a.trim().to_lowercase() == b.trim().to_lowercase()
-}
-
-/// How much of each refunded product to take from which item of `r`; `None` if `r` cannot
-/// absorb the whole refund.
-fn take_from(r: &ReceiptRecord, lines: &[(String, f64)]) -> Option<Vec<(usize, f64)>> {
-    let mut left: Vec<f64> = r.items.iter().map(|i| i.total).collect();
-    let mut taken = Vec::new();
-    for (name, amount) in lines {
-        let key = product_key(name);
-        let at = r.items.iter().enumerate().position(|(n, i)| {
-            product_key(&i.name) == key && i.tx_id.is_some() && left[n] >= amount - 0.005
-        })?;
-        left[at] -= amount;
-        taken.push((at, *amount));
-    }
-    Some(taken)
-}
-
-/// Apply one refund document. Returns whether a transaction was changed.
-async fn settle_refund(
-    db: &dyn Storage,
-    state: &mut State,
-    doc: &DocSummary,
-    items: &[DocItem],
-    now: DateTime<Utc>,
-    recs: &mut [ReceiptRecord],
-    notices: &mut Vec<Notice>,
-) -> Result<bool> {
-    let refund_total = doc.total.abs();
-    let refund_agorot = to_agorot(refund_total);
-    let lines: Vec<(String, f64)> = items
-        .iter()
-        .filter(|i| i.total != 0.0)
-        .map(|i| (i.name.clone(), i.total.abs()))
-        .collect();
-    let line_sum: f64 = lines.iter().map(|(_, a)| a).sum();
-    // The lines are net of VAT where the receipt has some; the transactions hold the gross share.
-    let scale = if line_sum > 0.0 {
-        refund_total / line_sum
-    } else {
-        1.0
-    };
-    let date = doc.date.to_string();
-    let candidates: Vec<usize> = recs
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| same_customer(&r.customer, &doc.customer) && r.date <= date)
-        .filter(|(_, r)| {
-            if lines.is_empty() {
-                r.total_agorot == refund_agorot
-            } else {
-                take_from(r, &lines).is_some()
-            }
-        })
-        .map(|(n, _)| n)
-        .collect();
-    let who = if doc.customer.is_empty() {
-        String::new()
-    } else {
-        format!("{} · ", doc.customer)
-    };
-    let (title, body, tx_ids) = match candidates.as_slice() {
-        [] => (
-            format!("זיכוי ללא קבלה מתאימה: ₪{refund_total:.2}"),
-            format!("{who}לא נמצאה קבלה מיובאת שאפשר לקזז ממנה (אולי הקבלה ישנה מהסנכרון). טפלו בתנועה ידנית."),
-            Vec::new(),
-        ),
-        [one] => {
-            let r = &mut recs[*one];
-            let all = db.list_transactions().await?;
-            let mut changed: Vec<i64> = Vec::new();
-            let mut deleted = 0;
-            let mut cut: BTreeMap<i64, i64> = BTreeMap::new();
-            if lines.is_empty() {
-                for i in &mut r.items {
-                    i.total = 0.0;
-                }
-                for tx in r.tx_ids.clone() {
-                    cut.insert(tx, i64::MAX);
-                }
-            } else if let Some(taken) = take_from(r, &lines) {
-                for (at, amount) in taken {
-                    r.items[at].total = (r.items[at].total - amount).max(0.0);
-                    if let Some(tx) = r.items[at].tx_id {
-                        *cut.entry(tx).or_default() += to_agorot(amount * scale);
-                    }
-                }
-            }
-            for (tx, minus) in cut {
-                let Some(t) = all.iter().find(|t| t.id == tx) else {
-                    continue;
-                };
-                // Nothing left of what the transaction was made from: it goes.
-                let empty = r
-                    .items
-                    .iter()
-                    .filter(|i| i.tx_id == Some(tx))
-                    .all(|i| i.total <= 0.005);
-                if empty || minus >= t.amount_agorot {
-                    db.delete_transaction(tx).await?;
-                    r.tx_ids.retain(|x| *x != tx);
-                    deleted += 1;
-                } else {
-                    db.update_transaction(
-                        tx,
-                        &NewTransaction {
-                            date: t.date.clone(),
-                            amount_agorot: t.amount_agorot - minus,
-                            category_id: t.category_id,
-                            payment_method_id: t.payment_method_id,
-                            note: t.note.clone(),
-                        },
-                    )
-                    .await?;
-                }
-                changed.push(tx);
-            }
-            r.total_agorot = (r.total_agorot - refund_agorot).max(0);
-            let updated = changed.len() - deleted;
-            let what = match (deleted, updated) {
-                (d, 0) => format!("נמחקו {d} תנועות"),
-                (0, u) => format!("עודכנו {u} תנועות"),
-                (d, u) => format!("נמחקו {d} תנועות ועודכנו {u}"),
-            };
-            (
-                format!("זיכוי: ₪{refund_total:.2}"),
-                format!("{who}לפי קבלה {}: {what}", r.number.unwrap_or(r.doc_id)),
-                changed,
-            )
-        }
-        _ => (
-            format!("זיכוי שאינו חד-משמעי: ₪{refund_total:.2}"),
-            format!("{who}נמצאו כמה קבלות מתאימות לזיכוי, ולכן דבר לא שונה. טפלו בתנועה ידנית."),
-            Vec::new(),
-        ),
-    };
-    let applied = !tx_ids.is_empty();
-    state.seen.push(doc.id);
-    let d = doc.date.to_string();
-    if state.last_date.as_deref().is_none_or(|l| l < d.as_str()) {
-        state.last_date = Some(d);
-    }
-    notices.push(Notice {
-        id: doc.id,
-        at: now.to_rfc3339(),
-        title,
-        body,
-        tx_ids,
-        read: false,
-    });
-    Ok(applied)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -916,7 +763,7 @@ pub struct PollSummary {
     /// Receipts newly put on hold for want of a usable category.
     pub held: usize,
     pub new_receipts: usize,
-    /// Refund documents that changed or removed an imported transaction.
+    /// Refund (credit) documents imported as negative transactions.
     pub refunds: usize,
     pub transactions: usize,
     pub calls: u32,
@@ -1046,14 +893,7 @@ async fn run_poll(
         };
         state.failures.remove(&doc.id);
         let id = doc.id;
-        if CREDIT_TYPES.contains(&doc.doc_type) {
-            let done = settle_refund(db, state, &doc, &items, now, &mut recs, &mut notices).await?;
-            state.watermark = state.watermark.max(Some(id));
-            if done {
-                summary.refunds += 1;
-            }
-            continue;
-        }
+        let credit = is_credit(&doc);
         let done = settle_doc(db, state, doc, items, now, &mut recs, &mut notices).await?;
         // Looked at (imported or held): the next poll starts after it.
         state.watermark = state.watermark.max(Some(id));
@@ -1061,7 +901,11 @@ async fn run_poll(
             summary.held += 1;
         }
         if let Some(n) = done {
-            summary.new_receipts += 1;
+            if credit {
+                summary.refunds += 1;
+            } else {
+                summary.new_receipts += 1;
+            }
             summary.transactions += n;
         }
     }
@@ -1107,7 +951,11 @@ async fn settle_doc(
             notices.push(Notice {
                 id: doc.id,
                 at: now.to_rfc3339(),
-                title: format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total),
+                title: if is_credit(&doc) {
+                    format!("התקבל זיכוי: ₪{:.2}", doc.total.abs())
+                } else {
+                    format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total)
+                },
                 body: notice_body(&doc, &items, unmapped),
                 tx_ids: imported.tx_ids,
                 read: false,
@@ -1125,7 +973,16 @@ async fn settle_doc(
                     notices.push(Notice {
                         id: doc.id,
                         at: now.to_rfc3339(),
-                        title: format!("קבלה ממתינה לסיווג: ₪{:.2}", doc.total),
+                        title: format!(
+                            "{} ממתי{} לסיווג: ₪{:.2}",
+                            if is_credit(&doc) {
+                                "זיכוי"
+                            } else {
+                                "קבלה"
+                            },
+                            if is_credit(&doc) { "ן" } else { "נה" },
+                            doc.total.abs()
+                        ),
                         body: format!(
                             "{}הגדירו תת-קטגוריית הכנסה {} ב\"קבלות מ-Sumit\" והקבלה תיובא",
                             if doc.customer.is_empty() {
@@ -1714,152 +1571,17 @@ mod tests {
         assert!(CREDIT_TYPES.contains(&d.doc_type));
     }
 
-    /// A receipt of a dress (80, business) and shipping (20), then refunds against it.
-    async fn refund_setup(db: &crate::mysql::MySqlStorage) -> (Vec<ReceiptRecord>, Vec<i64>) {
-        let cat = db.insert_category("הכנסות", true, None).await.unwrap();
-        let map = BTreeMap::from([
-            (product_key("שמלה"), rule(None, Some(cat))),
-            (product_key("משלוח"), rule(None, Some(cat))),
-        ]);
-        let items = [
-            DocItem {
-                name: "שמלה".into(),
-                quantity: 1.0,
-                total: 80.0,
-            },
-            DocItem {
-                name: "משלוח".into(),
-                quantity: 1.0,
-                total: 20.0,
-            },
-        ];
-        let rec = import_receipt(db, &doc_of(77, 2, 118.0), &items, &map)
-            .await
-            .unwrap();
-        (vec![rec.record.unwrap()], rec.tx_ids)
-    }
-
-    fn neg(name: &str, total: f64) -> DocItem {
-        DocItem {
-            name: name.into(),
-            quantity: 1.0,
-            total: -total,
-        }
-    }
-
     #[tokio::test]
-    async fn a_partial_refund_amends_and_a_full_one_deletes() {
+    async fn a_refund_is_its_own_negative_transaction() {
         let db = crate::testdb::fresh().await;
-        let (mut recs, _) = refund_setup(&db).await;
-        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
-        let mut state = State::default();
-        let mut notices = Vec::new();
-        // Half of the dress: 40 net = 47.20 gross.
-        let credit = doc_of(78, 6, -47.2);
-        let changed = settle_refund(
-            &db,
-            &mut state,
-            &credit,
-            &[neg("שמלה", 40.0)],
-            now,
-            &mut recs,
-            &mut notices,
-        )
-        .await
-        .unwrap();
-        assert!(changed);
-        let amounts = |txs: Vec<crate::storage::Transaction>| {
-            let mut a: Vec<i64> = txs.iter().map(|t| t.amount_agorot).collect();
-            a.sort();
-            a
-        };
-        assert_eq!(
-            amounts(db.list_transactions().await.unwrap()),
-            vec![11_800 - 4_720]
-        );
-        // The rest of the dress and the shipping: everything goes.
-        let credit = doc_of(79, 6, -70.8);
-        settle_refund(
-            &db,
-            &mut state,
-            &credit,
-            &[neg("שמלה", 40.0), neg("משלוח", 20.0)],
-            now,
-            &mut recs,
-            &mut notices,
-        )
-        .await
-        .unwrap();
-        assert!(db.list_transactions().await.unwrap().is_empty());
-        assert_eq!(notices.len(), 2);
-        // Nothing is left to refund: a third one finds no receipt and changes nothing.
-        let credit = doc_of(80, 6, -10.0);
-        let changed = settle_refund(
-            &db,
-            &mut state,
-            &credit,
-            &[neg("שמלה", 10.0)],
-            now,
-            &mut recs,
-            &mut notices,
-        )
-        .await
-        .unwrap();
-        assert!(!changed);
-        assert!(notices[2].title.contains("ללא קבלה מתאימה"));
-    }
-
-    #[tokio::test]
-    async fn an_ambiguous_or_foreign_refund_changes_nothing() {
-        let db = crate::testdb::fresh().await;
-        let (mut recs, _) = refund_setup(&db).await;
-        let mut twin = recs[0].clone();
-        twin.doc_id = 99;
-        recs.push(twin);
-        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
-        let mut state = State::default();
-        let mut notices = Vec::new();
-        let credit = doc_of(78, 6, -118.0);
-        let lines = [neg("שמלה", 80.0), neg("משלוח", 20.0)];
-        assert!(!settle_refund(
-            &db,
-            &mut state,
-            &credit,
-            &lines,
-            now,
-            &mut recs,
-            &mut notices
-        )
-        .await
-        .unwrap());
-        assert!(notices[0].title.contains("שאינו חד-משמעי"));
-        // Another customer's refund does not touch this customer's receipt.
-        let mut other = doc_of(81, 6, -118.0);
-        other.customer = "אחר".into();
-        assert!(!settle_refund(
-            &db,
-            &mut state,
-            &other,
-            &lines,
-            now,
-            &mut recs,
-            &mut notices
-        )
-        .await
-        .unwrap());
-        assert_eq!(db.list_transactions().await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn the_poll_applies_a_refund_that_follows_its_receipt() {
-        let db = crate::testdb::fresh().await;
+        let biz = db.insert_business("שמלות", false).await.unwrap();
         let cat = db.insert_category("הכנסות", true, None).await.unwrap();
         armed(&db).await;
         save(
             &db,
             PRODUCTS_KEY,
             &BTreeMap::from([
-                (product_key("שמלה"), rule(None, Some(cat))),
+                (product_key("שמלה"), rule(Some(biz), Some(cat))),
                 (product_key("משלוח"), rule(None, Some(cat))),
             ]),
         )
@@ -1867,13 +1589,47 @@ mod tests {
         .unwrap();
         let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
         let api = Fake {
-            docs: vec![doc_of(77, 2, 118.0), doc_of(78, 6, -118.0)],
+            docs: vec![doc_of(77, 2, 118.0), doc_of(78, 6, -59.0)],
             lists: Mutex::new(0),
             details: Mutex::new(0),
         };
-        // The fake returns the same two lines for every document, so the credit takes both back.
+        // The fake returns the same two lines (80 and 20) for every document: the refund is half of it.
         let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
-        assert_eq!((s.new_receipts, s.refunds, s.calls), (1, 1, 3));
+        assert_eq!(
+            (s.new_receipts, s.refunds, s.transactions, s.calls),
+            (1, 1, 4, 3)
+        );
+        let txs = db.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 4);
+        let mut amounts: Vec<i64> = txs.iter().map(|t| t.amount_agorot).collect();
+        amounts.sort();
+        // 118.00 split 94.40 / 23.60, and the refund 59.00 split the same way, negative.
+        assert_eq!(amounts, vec![-4_720, -1_180, 2_360, 9_440]);
+        assert_eq!(txs.iter().map(|t| t.amount_agorot).sum::<i64>(), 5_900);
+        let refunds: Vec<_> = txs.iter().filter(|t| t.amount_agorot < 0).collect();
+        assert!(refunds
+            .iter()
+            .all(|t| t.note.starts_with("זיכוי 78") && t.note.contains("[sumit:78]")));
+        // The refunded dress carries the business of its product, like the receipt.
+        assert_eq!(db.business_links().await.unwrap().transactions.len(), 2);
+        let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
+        assert!(notices[1].title.starts_with("התקבל זיכוי: ₪59.00"));
+    }
+
+    #[tokio::test]
+    async fn a_refund_of_an_unmapped_product_is_held_like_a_receipt() {
+        let db = crate::testdb::fresh().await;
+        armed(&db).await;
+        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
+        let api = Fake {
+            docs: vec![doc_of(78, 6, -59.0)],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.held), (0, 1));
         assert!(db.list_transactions().await.unwrap().is_empty());
+        let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
+        assert!(notices[0].title.starts_with("זיכוי ממתין לסיווג"));
     }
 }

@@ -97,7 +97,7 @@ export function SumitCard() {
     setOut({ text: "בודק…", error: false });
     try {
       const r = await api.sumitPoll();
-      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts || r.refunds ? [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "", r.refunds ? `טופלו ${r.refunds} זיכויים.` : ""].filter(Boolean).join(" ") : "אין קבלות חדשות." });
+      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts || r.refunds ? [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "", r.refunds ? `יובאו ${r.refunds} זיכויים (תנועות שליליות).` : ""].filter(Boolean).join(" ") : "אין קבלות חדשות." });
       await load();
     } catch (e) {
       setOut({ error: true, text: `שגיאה: ${e instanceof Error ? e.message : e}` });
