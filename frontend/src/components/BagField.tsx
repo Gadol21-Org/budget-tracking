@@ -64,7 +64,7 @@ export function BagField({ value, onChange, biz }: { value: number[]; onChange: 
           ))}
         {!open && (
           <button type="button" className="qchip" onClick={() => setOpen(true)}>
-            {value.length || (biz && biz.value != null) ? "＋ עוד" : "＋ טיוב"}
+            {value.length || (biz && biz.value != null) ? "＋ עוד" : "＋ טיוג"}
           </button>
         )}
       </div>

@@ -148,7 +148,7 @@ function SelectionBar() {
           })
         }
       >
-        🎒 טיוב
+        🎒 טיוג
       </button>
       {inBags.length > 0 && (
         <button
