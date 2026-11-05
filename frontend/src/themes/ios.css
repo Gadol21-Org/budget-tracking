@@ -1,0 +1,105 @@
+/* Option C: iOS-style — grouped inset cards on a grey canvas, system blue, large titles,
+   translucent tab bar, iOS segmented control. Token values are Apple's system colours (light/dark). */
+@import "@fontsource/heebo/latin-400.css";
+@import "@fontsource/heebo/latin-600.css";
+@import "@fontsource/heebo/latin-700.css";
+@import "@fontsource/heebo/hebrew-400.css";
+@import "@fontsource/heebo/hebrew-600.css";
+@import "@fontsource/heebo/hebrew-700.css";
+
+:root {
+  --ios-blue: #007aff;
+  --ios-canvas: #f2f2f7;
+  --ios-card: #fff;
+  --ios-fill: rgba(118, 118, 128, .12);
+  --ios-sep: rgba(60, 60, 67, .2);
+  --ios-label2: rgba(60, 60, 67, .6);
+  --bg: var(--ios-canvas);
+  --surface: var(--ios-card);
+  --text: #000;
+  --muted: var(--ios-label2);
+  --line: var(--ios-sep);
+  --brand: var(--ios-blue);
+  --brand-contrast: #fff;
+  --expense: #ff3b30;
+  --income: #34c759;
+  --radius: 12px;
+  --nav-h: 56px;
+  --biz: #5856d6;
+  --biz-soft: rgba(88, 86, 214, .12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ios-blue: #0a84ff;
+    --ios-canvas: #000;
+    --ios-card: #1c1c1e;
+    --ios-fill: rgba(118, 118, 128, .24);
+    --ios-sep: rgba(84, 84, 88, .65);
+    --ios-label2: rgba(235, 235, 245, .6);
+    --text: #fff;
+    --expense: #ff453a;
+    --income: #30d158;
+    --biz: #7d7aff;
+    --biz-soft: rgba(125, 122, 255, .2);
+  }
+}
+body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Heebo", system-ui, sans-serif; font-size: 17px; line-height: 1.35; letter-spacing: -.01em; -webkit-font-smoothing: antialiased; }
+/* Large title. */
+h1 { font-size: 2.1rem; font-weight: 700; letter-spacing: .01em; margin: 8px 4px 12px; }
+h2 { font-size: .8125rem; font-weight: 400; text-transform: uppercase; letter-spacing: .02em; color: var(--ios-label2); margin: 24px 16px 6px; }
+
+/* Grouped inset cards: no outline, 10–12px corners. */
+.card, .kpi { border: 0; border-radius: 12px; background: var(--ios-card); }
+.stats .card { border-radius: 12px; }
+.stats .label, .kpi .l { font-size: .75rem; }
+.stats .value, .kpi .v { font-weight: 600; }
+.stats .card.selected { box-shadow: 0 0 0 2px var(--ios-blue); border: 0; }
+.row { border-bottom: 0.5px solid var(--ios-sep); }
+.bar { height: 5px; border-radius: 3px; background: var(--ios-fill); }
+
+.iconbtn { background: transparent; border: 0; color: var(--ios-blue); font-size: 1.4rem; width: 40px; height: 40px; min-width: 40px; }
+.monthbar .title { font-size: 1.05rem; font-weight: 600; }
+.periodbtn { color: var(--ios-blue); }
+
+/* Tab bar: blurred, hairline top, blue active. */
+.nav { background: color-mix(in srgb, var(--ios-card) 78%, transparent); backdrop-filter: saturate(180%) blur(20px); border-top: 0.5px solid var(--ios-sep); height: 64px; --nav-h: 64px; padding-top: 4px; }
+:root { --nav-h: 64px; }
+.nav button { font-size: .65rem; font-weight: 500; color: #8e8e93; gap: 2px; letter-spacing: 0; }
+.nav button .ico { width: 26px; height: 26px; stroke-width: 1.75; }
+.nav button[aria-current="page"] { color: var(--ios-blue); font-weight: 500; }
+
+.fab { background: var(--ios-blue); color: #fff; width: 56px; height: 56px; box-shadow: 0 4px 16px rgba(0, 122, 255, .4); font-weight: 300; }
+
+/* Segmented control. */
+.seg, .seg3, .seg4, .seg3b { background: var(--ios-fill); border: 0; border-radius: 9px; padding: 2px; gap: 2px; margin-bottom: 10px; }
+.seg button, .seg3 button, .seg4 button, .seg3b button { background: transparent; color: var(--text); border-radius: 7px; font-size: .85rem; font-weight: 500; padding: 7px; }
+.seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg4 button[aria-pressed="true"], .seg3b button[aria-pressed="true"] { background: var(--ios-card); color: var(--text); font-weight: 600; box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
+@media (prefers-color-scheme: dark) { .seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg4 button[aria-pressed="true"], .seg3b button[aria-pressed="true"] { background: #636366; } }
+
+.chip, .cmpbtn, .qchip { border: 0; background: var(--ios-fill); border-radius: 999px; color: var(--text); font-size: .85rem; padding: 7px 14px; }
+.chip[aria-pressed="true"], .qchip[aria-pressed="true"] { background: var(--ios-blue); color: #fff; }
+
+/* Buttons: filled blue with big radius; secondary = tinted. */
+.btn { border: 0; border-radius: 12px; background: color-mix(in srgb, var(--ios-blue) 14%, transparent); color: var(--ios-blue); font-weight: 600; padding: 13px 18px; }
+.btn.primary { background: var(--ios-blue); color: #fff; }
+.btn:disabled { opacity: .4; }
+
+/* Sheets and form fields: iOS grouped-form look. */
+dialog { border-radius: 14px; background: var(--ios-card); }
+dialog.fullpage { background: var(--ios-canvas); border-radius: 0; }
+dialog.fullpage::backdrop { background: var(--ios-canvas); }
+form.add { gap: 10px; }
+form.add input, form.add select, .datefield .dateshown { background: var(--ios-card); border: 0; border-radius: 12px; padding: 13px 14px; font-size: 1.05rem; }
+dialog:not(.fullpage) form.add input, dialog:not(.fullpage) form.add select { background: var(--ios-fill); }
+form.add input:focus { outline: 2px solid var(--ios-blue); }
+form.add label, form.add .field { font-size: .8rem; text-transform: uppercase; letter-spacing: .02em; color: var(--ios-label2); padding-inline: 14px; }
+.combo-list, .menu { background: var(--ios-card); border: 0; border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
+.combo-list button:hover, .menu button:hover { background: var(--ios-fill); }
+.partialnote { background: color-mix(in srgb, #ff9500 14%, transparent); border-radius: 12px; }
+.bizhero { background: linear-gradient(135deg, #5856d6, #af52de); }
+.crumb, .linkbtn, .del:hover { color: var(--ios-blue); }
+@media (min-width: 900px) {
+  .nav { backdrop-filter: none; background: var(--ios-card); height: 100vh; }
+  .nav button { font-size: .95rem; border-radius: 10px; color: var(--text); }
+  .nav button[aria-current="page"] { background: var(--ios-fill); color: var(--ios-blue); }
+}
