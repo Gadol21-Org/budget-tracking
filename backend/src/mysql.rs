@@ -160,9 +160,10 @@ impl MySqlStorage {
             let server = opts.clone().database("");
             let mut conn = server.connect().await.context("connecting to MySQL")?;
             let name = db.replace('`', "``");
-            if let Err(e) = sqlx::query(&format!(
+            // The name is quoted as an identifier (backticks doubled) above.
+            if let Err(e) = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "CREATE DATABASE IF NOT EXISTS `{name}` CHARACTER SET utf8mb4"
-            ))
+            )))
             .execute(&mut conn)
             .await
             {
