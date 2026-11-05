@@ -462,7 +462,7 @@ export function DrillCrumbs({ ctx }: { ctx: Ctx }) {
 }
 
 /** The monthly chart of one category or sub-category. */
-function useTrend(ctx: Ctx, value: (a: Agg) => number, color: string) {
+function trendCard(ctx: Ctx, value: (a: Agg) => number, color: string) {
   const months = monthsEnding(ctx.period);
   const series = months.map((m) => value(aggregate(ctx, { kind: "month", month: m }, sideOf(ctx))));
   const full = series.filter((_, i) => months[i]! < todayIso().slice(0, 7));
@@ -490,7 +490,7 @@ function CatDetail({ ctx, baseLabel }: BodyProps) {
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => aggregate(ctx, p, side));
   const g = cur.groups.get(id) ?? { total: 0, direct: 0, kids: new Map<number, number>() };
   const was = bases.reduce((s, b) => s + (b.groups.get(id)?.total ?? 0), 0) / bases.length;
-  const trend = useTrend(ctx, (a) => a.groups.get(id)?.total ?? 0, catColor(ctx, id));
+  const trend = trendCard(ctx, (a) => a.groups.get(id)?.total ?? 0, catColor(ctx, id));
   const kids = [...g.kids.entries()].sort((a, b) => b[1] - a[1]);
   const kidMax = Math.max(1, kids[0]?.[1] ?? 0, g.direct);
   const kidRow = (key: string, name: string, v: number, wasV: number, onTap?: () => void) => (
@@ -558,7 +558,7 @@ function SubDetail({ ctx }: { ctx: Ctx }) {
   const cur = value(aggregate(ctx, ctx.period, side));
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => value(aggregate(ctx, p, side)));
   const was = bases.reduce((a, b) => a + b, 0) / bases.length;
-  const trend = useTrend(ctx, value, catColor(ctx, id));
+  const trend = trendCard(ctx, value, catColor(ctx, id));
   const txs = ctx.txs.filter((t) => t.category_id === sub && S.pick(t) && contains(ctx.period, t.date)).sort((a, b) => Math.abs(b.amount_agorot) - Math.abs(a.amount_agorot)).slice(0, 8);
   return (
     <div className="dash dash-cats">

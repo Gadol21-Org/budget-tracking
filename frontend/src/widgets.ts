@@ -1,8 +1,3 @@
-import { el } from "./ui";
-import { contains } from "./period";
-import { go } from "./nav";
-import { root } from "./state";
-
 /**
  * When a pick list (category, sub-category, currency) opens with the keyboard up, make the page as tall as the visible area
  * above the keyboard (as the browser reports it) and scroll the field's label to the top, so the list under the field is
