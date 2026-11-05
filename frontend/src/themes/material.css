@@ -1,0 +1,120 @@
+/* Option A: Material Design 3 ("Material You") — tonal surfaces, pill nav indicator, rounded-square FAB.
+   Tokens follow the M3 colour roles (primary / secondary-container / surface-container / on-surface-variant). */
+
+@import "@fontsource/heebo/latin-400.css";
+@import "@fontsource/heebo/latin-500.css";
+@import "@fontsource/heebo/latin-700.css";
+@import "@fontsource/heebo/hebrew-400.css";
+@import "@fontsource/heebo/hebrew-500.css";
+@import "@fontsource/heebo/hebrew-700.css";
+
+:root {
+  --md-primary: #006a61;
+  --md-on-primary: #fff;
+  --md-primary-container: #9df2e6;
+  --md-on-primary-container: #00201d;
+  --md-secondary-container: #cce8e3;
+  --md-on-secondary-container: #05201d;
+  --md-surface: #f4fbf9;
+  --md-container-low: #ecf3f1;
+  --md-container: #e6eeec;
+  --md-container-high: #e0e9e6;
+  --md-container-highest: #dae4e1;
+  --md-on-surface: #161d1c;
+  --md-on-surface-variant: #3f4947;
+  --md-outline: #6f7977;
+  --md-outline-variant: #bec9c6;
+  --bg: var(--md-surface);
+  --surface: var(--md-container-low);
+  --text: var(--md-on-surface);
+  --muted: var(--md-on-surface-variant);
+  --line: var(--md-outline-variant);
+  --brand: var(--md-primary);
+  --brand-contrast: var(--md-on-primary);
+  --expense: #ba1a1a;
+  --income: #1b6c3a;
+  --radius: 20px;
+  --biz: #5b4fc4;
+  --biz-soft: rgba(91, 79, 196, .12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --md-primary: #82d5ca;
+    --md-on-primary: #003732;
+    --md-primary-container: #005049;
+    --md-on-primary-container: #9df2e6;
+    --md-secondary-container: #324b47;
+    --md-on-secondary-container: #cce8e3;
+    --md-surface: #0e1514;
+    --md-container-low: #161d1c;
+    --md-container: #1a2120;
+    --md-container-high: #252b2a;
+    --md-container-highest: #2f3635;
+    --md-on-surface: #dde4e2;
+    --md-on-surface-variant: #bec9c6;
+    --md-outline: #899390;
+    --md-outline-variant: #3f4947;
+    --expense: #ffb4ab;
+    --income: #7fd99b;
+    --biz: #c6bfff;
+    --biz-soft: rgba(198, 191, 255, .16);
+  }
+}
+body { font-family: "Heebo", system-ui, -apple-system, "Segoe UI", Arial, sans-serif; letter-spacing: .01em; }
+h1 { font-size: 1.75rem; font-weight: 400; }
+h2 { font-size: .9rem; font-weight: 500; letter-spacing: .05em; color: var(--brand); margin: 24px 4px 8px; }
+
+/* Tonal cards: no outline, a surface tint instead of a border. */
+.card, .kpi, .stats .card { border: 0; border-radius: var(--radius); background: var(--md-container-low); }
+.stats .card.selected { background: var(--md-primary-container); color: var(--md-on-primary-container); box-shadow: none; }
+.stats .card.selected .label { color: inherit; }
+.stats .value, .kpi .v { font-weight: 500; }
+.row { border-bottom-color: var(--md-outline-variant); }
+.bar { height: 8px; border-radius: 4px; background: var(--md-container-highest); }
+.bar > span { border-radius: 4px; }
+
+/* Month bar: tonal icon buttons. */
+.iconbtn { border: 0; background: var(--md-container-highest); border-radius: 50%; color: var(--md-on-surface-variant); }
+.monthbar .title, .periodbtn { font-weight: 500; }
+.periodbtn:hover { background: var(--md-container-high); }
+
+/* Navigation bar: label under a pill-shaped active indicator. */
+.nav { background: var(--md-container); border-top: 0; height: 80px; padding-top: 12px; align-items: flex-start; --nav-h: 80px; }
+.nav button { gap: 4px; font-size: .75rem; font-weight: 500; color: var(--md-on-surface-variant); letter-spacing: .03em; }
+.nav button .ico { width: 64px; height: 32px; padding: 4px 20px; border-radius: 16px; transition: background .2s; }
+.nav button[aria-current="page"] { color: var(--md-on-surface); font-weight: 700; }
+.nav button[aria-current="page"] .ico { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+:root { --nav-h: 80px; }
+
+/* FAB: M3 large rounded square in the primary container tone. */
+.fab { width: 64px; height: 64px; border-radius: 20px; background: var(--md-primary-container); color: var(--md-on-primary-container); box-shadow: 0 3px 8px rgba(0,0,0,.2), 0 1px 3px rgba(0,0,0,.14); font-size: 2.2rem; }
+
+/* Filter chips and segmented buttons. */
+.chip, .cmpbtn, .qchip { border: 1px solid var(--md-outline); background: transparent; border-radius: 8px; color: var(--md-on-surface-variant); font-weight: 500; }
+.chip[aria-pressed="true"], .qchip[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+.seg, .seg3, .seg4, .seg3b { border: 1px solid var(--md-outline); border-radius: 999px; background: transparent; }
+.seg button, .seg3 button, .seg4 button, .seg3b button { background: transparent; color: var(--md-on-surface); }
+.seg button[aria-pressed="true"], .seg3 button[aria-pressed="true"], .seg3b button[aria-pressed="true"], .seg4 button[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); font-weight: 700; }
+.seg button + button, .seg3 button + button { border-inline-start: 1px solid var(--md-outline); }
+
+/* Buttons: pill, filled and tonal. */
+.btn { border-radius: 999px; border: 1px solid var(--md-outline); background: transparent; color: var(--md-primary); font-weight: 500; padding: 10px 24px; }
+.btn.primary { background: var(--md-primary); color: var(--md-on-primary); border-color: transparent; }
+.card + .btn, .rows + .btn { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+
+/* Dialog: M3 dialog, 28px corners; the add form stays full page. */
+dialog { border-radius: 28px; background: var(--md-container-high); }
+dialog.fullpage { border-radius: 0; background: var(--md-surface); }
+form.add input, form.add select, .datefield .dateshown { background: var(--md-container-highest); border: 0; border-bottom: 2px solid var(--md-outline); border-radius: 12px 12px 0 0; padding: 14px 16px; }
+form.add input:focus { outline: 0; border-bottom-color: var(--md-primary); background: var(--md-container-high); }
+form.add label, form.add .field { color: var(--md-on-surface-variant); font-weight: 500; }
+.combo-list, .menu { background: var(--md-container); border: 0; border-radius: 12px; box-shadow: 0 6px 16px rgba(0,0,0,.22); }
+.partialnote { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-radius: 16px; }
+.bizhero { background: linear-gradient(135deg, var(--md-primary), #2a8f84); }
+.update-banner, .loading-toast, .banner { border-radius: 16px; }
+@media (min-width: 900px) {
+  .nav { height: 100vh; padding: 20px 12px; align-items: stretch; background: var(--md-surface); border-inline-end: 0; }
+  .nav button .ico { width: 24px; height: 24px; padding: 0; background: none !important; }
+  .nav button { border-radius: 999px; }
+  .nav button[aria-current="page"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+}

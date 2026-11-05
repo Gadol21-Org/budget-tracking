@@ -1,4 +1,5 @@
 import "./style.css";
+import "./themes/material.css";
 import "./gestures";
 import "./widgets";
 import { el } from "./ui";
