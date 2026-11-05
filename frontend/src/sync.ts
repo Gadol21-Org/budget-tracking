@@ -1,5 +1,6 @@
 import { dequeue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
 import { toBizData } from "./business";
+import { toBagState } from "./bags";
 import { loadEnabledCurrencies } from "./currencies";
 import { api, type Fx, type LogEntry, type Transaction } from "./api";
 import { state } from "./state";
@@ -18,6 +19,7 @@ export async function flushQueue() {
     try {
       const id = await api.addTransaction(q.tx);
       if (q.business != null) await api.tagTransactions([id], q.business).catch(() => {});
+      if (q.bags?.length) await api.assignBags([id], q.bags, []).catch(() => {});
     } catch (e) {
       if (isNetworkError(e)) return;
       // The server refused this line (it would be refused again): drop it rather than block the rest.
@@ -26,12 +28,12 @@ export async function flushQueue() {
   }
 }
 
-export type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx" | "biz">;
+export type ServerData = Pick<Snapshot, "cats" | "txs" | "recurring" | "occurrences" | "mirror" | "fx" | "biz" | "bags">;
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export async function fetchAll(from?: string): Promise<ServerData & { log?: LogEntry[] }> {
-  const [cats, txs, recurring, occurrences, log, mirror, fx, biz] = await Promise.all([
+  const [cats, txs, recurring, occurrences, log, mirror, fx, biz, bags] = await Promise.all([
     api.categories(),
     api.transactions(from || undefined),
     api.recurring(),
@@ -41,8 +43,10 @@ export async function fetchAll(from?: string): Promise<ServerData & { log?: LogE
     api.foreign().catch((e) => (isNetworkError(e) ? Promise.reject(e) : undefined)),
     // Businesses are optional: a failure leaves the last ones in place.
     api.businesses().catch(() => undefined),
+    // Bags are optional too.
+    api.bags().catch(() => undefined),
   ]);
-  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx, biz };
+  return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx, biz, bags };
 }
 
 export async function load() {
@@ -86,6 +90,7 @@ async function apply(data: ServerData & { log?: LogEntry[] }) {
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
   // Businesses come with the offline copy too, so the business card shows at once; a missing one keeps what we had.
   if (data.biz) state.biz = toBizData(data.biz);
+  if (data.bags) state.bags = toBagState(data.bags);
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();
   // A queued foreign line has no shekel amount yet: the server converts it when it is sent.
@@ -153,6 +158,8 @@ export async function loadHistory(from: string): Promise<void> {
 
 /** The earliest day the screen shown needs: its period, and for the dashboards the months they compare with. */
 export function neededFrom(): string {
+  // A bag's figures cover all its lines, whenever they were made.
+  if (state.view === "bags" || state.view === "bag") return "";
   let from = bounds(state.period).from;
   const cmp = state.insights.cmp;
   if (state.view === "insights" || state.view === "business") {
@@ -175,7 +182,7 @@ export function ensureHistory() {
   const needed = neededFrom();
   if (state.loadedFrom === undefined || needed >= state.loadedFrom || extending || historyFailed) return;
   // Fetch 3 months more than needed, so paging back a month or two does not fetch again.
-  const from = `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
+  const from = needed === "" ? "" : `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
   state.loadingOlder = true;
   void loadHistory(from);
 }

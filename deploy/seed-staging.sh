@@ -82,4 +82,23 @@ post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":28,\"amount_ago
 # A subscription in dollars: each month is priced at that day's rate (needs the rate service; skipped if it is unreachable).
 post /api/recurring "{\"start_month\":\"$(date +%Y-%m)\",\"day\":20,\"amount_agorot\":-1,\"currency\":\"USD\",\"orig_minor\":-1500,\"category_id\":$movies,\"note\":\"מנוי סטרימינג\"}" >/dev/null || echo "skipped the dollar subscription"
 
+# Bags (טיוגים): a trip with its own sub-bag, and a bag that cuts across categories. A line can be in several bags.
+put() { curl -fsS -X PUT -H 'Content-Type: application/json' -d "$2" "$base$1" >/dev/null; }
+vacations=$(post /api/bags '{"name":"חופשות"}')
+japan=$(post /api/bags "{\"name\":\"יפן 2026\",\"parent_id\":$vacations,\"start_date\":\"$(date -d '-20 day' +%F)\",\"end_date\":\"$(date -d '-8 day' +%F)\",\"budget_agorot\":1200000}")
+kyoto=$(post /api/bags "{\"name\":\"קיוטו\",\"parent_id\":$japan}")
+dinners=$(post /api/bags '{"name":"ארוחות זוגיות"}')
+trip() { # <days ago> <shekels> <category id> <note> <bag ids as JSON list>
+  local id d
+  d=$(date -d "-$1 day" +%F)
+  id=$(post /api/transactions "{\"date\":\"$d\",\"amount_agorot\":$(( $2 * -100 )),\"category_id\":$3,\"note\":\"$4\"}")
+  put /api/bags/assign "{\"ids\":[$id],\"add\":$5}"
+}
+trip 20 4200 "$trips" "טיסות לטוקיו" "[$japan]"
+trip 18 1850 "$trips" "מלון בקיוטו" "[$kyoto]"
+trip 17 360 "$eating" "ארוחת ערב בגינזה" "[$japan,$dinners]"
+trip 15 1360 "$groceries" "אוכל ושווקים" "[$japan]"
+trip 12 480 "$trips" "רכבות" "[$japan]"
+trip 9 240 "$eating" "ארוחת ערב רומנטית" "[$dinners]"
+
 echo "seeded sample data"

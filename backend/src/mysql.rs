@@ -16,12 +16,12 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
-    MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
+    rounds_to, Bag, BagInput, Business, BusinessLinks, Category, ImportBatch, ImportSummary,
+    LineDelete, MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
     RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
 };
 
-const SCHEMA: [&str; 15] = [
+const SCHEMA: [&str; 17] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -129,6 +129,21 @@ const SCHEMA: [&str; 15] = [
      )",
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
+     )",
+    "CREATE TABLE IF NOT EXISTS bags (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         name VARCHAR(400) NOT NULL,
+         parent_id BIGINT NULL,
+         archived BOOLEAN NOT NULL DEFAULT FALSE,
+         budget_agorot BIGINT NULL,
+         start_date VARCHAR(10) NULL,
+         end_date VARCHAR(10) NULL
+     )",
+    "CREATE TABLE IF NOT EXISTS transaction_bags (
+         transaction_id BIGINT NOT NULL,
+         bag_id BIGINT NOT NULL,
+         PRIMARY KEY (transaction_id, bag_id),
+         INDEX idx_transaction_bags_bag (bag_id)
      )",
 ];
 
@@ -524,6 +539,124 @@ impl Storage for MySqlStorage {
                         .await?
                 }
             };
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn list_bags(&self) -> Result<Vec<Bag>> {
+        let rows = sqlx::query(
+            "SELECT id, name, parent_id, CAST(archived AS SIGNED) AS archived, budget_agorot,
+                    start_date, end_date FROM bags ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(Bag {
+                    id: r.try_get("id")?,
+                    name: r.try_get("name")?,
+                    parent_id: r.try_get("parent_id")?,
+                    archived: r.try_get::<i64, _>("archived")? != 0,
+                    budget_agorot: r.try_get("budget_agorot")?,
+                    start_date: r.try_get("start_date")?,
+                    end_date: r.try_get("end_date")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_bag(&self, b: &BagInput) -> Result<i64> {
+        let r = sqlx::query(
+            "INSERT INTO bags (name, parent_id, archived, budget_agorot, start_date, end_date)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&b.name)
+        .bind(b.parent_id)
+        .bind(b.archived)
+        .bind(b.budget_agorot)
+        .bind(&b.start_date)
+        .bind(&b.end_date)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.last_insert_id() as i64)
+    }
+
+    async fn update_bag(&self, id: i64, b: &BagInput) -> Result<()> {
+        sqlx::query(
+            "UPDATE bags SET name = ?, parent_id = ?, archived = ?, budget_agorot = ?,
+                    start_date = ?, end_date = ? WHERE id = ?",
+        )
+        .bind(&b.name)
+        .bind(b.parent_id)
+        .bind(b.archived)
+        .bind(b.budget_agorot)
+        .bind(&b.start_date)
+        .bind(&b.end_date)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_bag(&self, id: i64) -> Result<()> {
+        // The bag and everything under it.
+        let all = self.list_bags().await?;
+        let mut gone = vec![id];
+        let mut i = 0;
+        while i < gone.len() {
+            let cur = gone[i];
+            gone.extend(
+                all.iter()
+                    .filter(|b| b.parent_id == Some(cur))
+                    .map(|b| b.id),
+            );
+            i += 1;
+        }
+        let mut tx = self.pool.begin().await?;
+        for g in gone {
+            for q in [
+                "DELETE FROM transaction_bags WHERE bag_id = ?",
+                "DELETE FROM bags WHERE id = ?",
+            ] {
+                sqlx::query(q).bind(g).execute(&mut *tx).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn bag_links(&self) -> Result<Vec<(i64, i64)>> {
+        let rows = sqlx::query(
+            "SELECT b.transaction_id, b.bag_id FROM transaction_bags b
+             JOIN transactions t ON t.id = b.transaction_id ORDER BY b.transaction_id, b.bag_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+            .collect()
+    }
+
+    async fn assign_bags(&self, ids: &[i64], add: &[i64], remove: &[i64]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            for b in add {
+                sqlx::query(
+                    "INSERT IGNORE INTO transaction_bags (transaction_id, bag_id) VALUES (?, ?)",
+                )
+                .bind(id)
+                .bind(b)
+                .execute(&mut *tx)
+                .await?;
+            }
+            for b in remove {
+                sqlx::query("DELETE FROM transaction_bags WHERE transaction_id = ? AND bag_id = ?")
+                    .bind(id)
+                    .bind(b)
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
@@ -1098,6 +1231,10 @@ impl Storage for MySqlStorage {
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM transaction_fx WHERE transaction_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM transaction_bags WHERE transaction_id = ?")
             .bind(id)
             .execute(&mut *tx)
             .await?;

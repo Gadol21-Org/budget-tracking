@@ -114,6 +114,37 @@ pub struct BusinessLinks {
     pub required: Vec<i64>,
 }
 
+/// A bag (טיוג): a named group of transactions across categories, nested like "Vacations › Japan 2026".
+/// A transaction can sit in several bags. Bags exist only in this app (Paamonim has no such thing).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Bag {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub archived: bool,
+    /// An optional budget for the whole bag (its own and its sub-bags' transactions).
+    pub budget_agorot: Option<i64>,
+    /// Optional dates (YYYY-MM-DD), shown with the bag.
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+/// What a bag is created or changed to.
+#[derive(Deserialize, Clone, Debug)]
+pub struct BagInput {
+    pub name: String,
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub budget_agorot: Option<i64>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
+}
+
 #[derive(Serialize, Clone)]
 pub struct PaymentMethod {
     pub id: i64,
@@ -353,6 +384,15 @@ pub trait Storage: Send + Sync {
         category: i64,
         required: bool,
     ) -> anyhow::Result<()>;
+    async fn list_bags(&self) -> anyhow::Result<Vec<Bag>>;
+    async fn insert_bag(&self, bag: &BagInput) -> anyhow::Result<i64>;
+    async fn update_bag(&self, id: i64, bag: &BagInput) -> anyhow::Result<()>;
+    /// Also removes its sub-bags and every link that pointed at them (the transactions stay).
+    async fn remove_bag(&self, id: i64) -> anyhow::Result<()>;
+    /// (transaction id, bag id) of transactions that still exist.
+    async fn bag_links(&self) -> anyhow::Result<Vec<(i64, i64)>>;
+    /// Put `ids` in the bags of `add` and take them out of the bags of `remove`.
+    async fn assign_bags(&self, ids: &[i64], add: &[i64], remove: &[i64]) -> anyhow::Result<()>;
     /// Raw rows for the full Google Sheets backup.
     async fn raw_backup(&self) -> anyhow::Result<RawBackup>;
     /// Transactions in state `pending`, `modified` or `verifying`, oldest first.
@@ -788,6 +828,61 @@ mod tests {
             payment_method_id: None,
             note: String::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn bags_hold_a_transaction_in_several_places_and_follow_their_rows() {
+        let s = crate::testdb::fresh().await;
+        let bag = |name: &str, parent: Option<i64>| BagInput {
+            name: name.into(),
+            parent_id: parent,
+            archived: false,
+            budget_agorot: None,
+            start_date: None,
+            end_date: None,
+        };
+        let trips = s.insert_bag(&bag("Vacations", None)).await.unwrap();
+        let japan = s.insert_bag(&bag("Japan 2026", Some(trips))).await.unwrap();
+        let dinners = s.insert_bag(&bag("Dinners", None)).await.unwrap();
+        let t1 = s
+            .create_transaction(&tx("2026-10-03", -100, None))
+            .await
+            .unwrap();
+        let t2 = s
+            .create_transaction(&tx("2026-10-04", -200, None))
+            .await
+            .unwrap();
+        s.assign_bags(&[t1, t2], &[japan], &[]).await.unwrap();
+        s.assign_bags(&[t1], &[dinners, japan], &[]).await.unwrap(); // adding twice is harmless
+        assert_eq!(
+            s.bag_links().await.unwrap(),
+            vec![(t1, japan), (t1, dinners), (t2, japan)]
+        );
+        s.assign_bags(&[t1], &[], &[dinners]).await.unwrap();
+        assert_eq!(s.bag_links().await.unwrap().len(), 2);
+        // A deleted transaction drops out of the bags.
+        s.delete_transaction(t2).await.unwrap();
+        assert_eq!(s.bag_links().await.unwrap(), vec![(t1, japan)]);
+        // Changing a bag keeps its links; removing one takes its sub-bags and links with it.
+        let mut changed = bag("Japan trip", Some(trips));
+        changed.archived = true;
+        changed.budget_agorot = Some(1_200_000);
+        s.update_bag(japan, &changed).await.unwrap();
+        let all = s.list_bags().await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .any(|b| b.name == "Japan trip" && b.archived && b.budget_agorot == Some(1_200_000)));
+        s.remove_bag(trips).await.unwrap();
+        assert_eq!(s.list_bags().await.unwrap().len(), 1);
+        assert!(s.bag_links().await.unwrap().is_empty());
+        // The line still exists.
+        assert!(s
+            .list_transactions()
+            .await
+            .unwrap()
+            .iter()
+            .any(|t| t.id == t1));
     }
 
     #[tokio::test]

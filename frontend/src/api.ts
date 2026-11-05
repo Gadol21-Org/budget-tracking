@@ -69,6 +69,27 @@ export interface BusinessData {
   links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
+/** A bag (טיוג): a named group of transactions across categories, nested like "Vacations › Japan 2026". */
+export interface Bag {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  archived: boolean;
+  /** An optional budget for the bag and everything under it. */
+  budget_agorot: number | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+/** What a bag is created or changed to. */
+export type BagInput = Omit<Bag, "id">;
+
+/** The bags, and which transactions sit in which as [transaction id, bag id] pairs (a transaction can be in several). */
+export interface BagData {
+  bags: Bag[];
+  links: [number, number][];
+}
+
 /** A currency code: "ILS" or one the server supports (`CURRENCIES` in backend/src/fx.rs). */
 export type Currency = string;
 export interface CurrencyInfo {
@@ -241,6 +262,14 @@ export const api = {
   /** Tag transactions as a business's (null removes their tags). */
   tagTransactions: (ids: number[], business: number | null) =>
     request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: business }) }),
+  bags: () => request<BagData>("/api/bags"),
+  addBag: (b: BagInput) => request<number>("/api/bags", { method: "POST", body: JSON.stringify(b) }),
+  changeBag: (id: number, b: BagInput) => request<void>(`/api/bags/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+  /** Also removes its sub-bags; the transactions stay. */
+  deleteBag: (id: number) => request<void>(`/api/bags/${id}`, { method: "DELETE" }),
+  /** Put transactions in some bags and take them out of others. */
+  assignBags: (ids: number[], add: number[], remove: number[]) =>
+    request<void>("/api/bags/assign", { method: "PUT", body: JSON.stringify({ ids, add, remove }) }),
   exportSheets: () => request<{ transactions: number; tabs: number }>("/api/export/sheets", { method: "POST" }),
   updateTransaction: (id: number, t: TxInput) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),

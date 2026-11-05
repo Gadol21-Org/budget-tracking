@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
+import { bagView, bagsView } from "./views/bags";
 import { businessDashboard, businessesView } from "./views/business";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
@@ -20,6 +21,7 @@ const TABS: [View, string, string][] = [
   ["month", "📊", "סיכום"],
   ["list", "📋", "תנועות"],
   ["insights", "📈", "תובנות"],
+  ["bags", "🎒", "טיוגים"],
   ["settings", "⚙️", "הגדרות"],
 ];
 
@@ -39,7 +41,7 @@ function Nav() {
   return (
     <nav className="nav">
       {TABS.map(([view, ico, label]) => {
-        const current = state.view === view || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "month" && state.view === "business");
+        const current = state.view === view || (view === "bags" && state.view === "bag") || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "month" && state.view === "business");
         return (
           <button key={view} aria-current={current ? "page" : undefined} onClick={() => openTab(view)}>
             <span className="ico">{ico}</span>
@@ -94,6 +96,8 @@ const screens: Record<View, () => ReactElement> = {
   businesses: () => businessesView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
+  bags: bagsView,
+  bag: bagView,
 };
 
 function App() {
@@ -110,7 +114,8 @@ function App() {
           <Fragment key={screenKey()}>{screens[state.view]()}</Fragment>
         </main>
       </div>
-      <button className="fab" title="הוספת תנועה" onClick={() => openTransactionDialog()}>+</button>
+      {/* While lines are being chosen, the bar at the bottom takes the place of the + button. */}
+      {state.selecting === null && <button className="fab" title="הוספת תנועה" onClick={() => openTransactionDialog()}>+</button>}
       {/* A floating label, not part of the page: nothing moves when it appears or goes. */}
       {state.loadingOlder && <div className="loading-toast" role="status">טוען חודשים קודמים…</div>}
     </>
@@ -133,6 +138,8 @@ export function showStatus(text: string, error = false) {
 }
 
 export function render() {
+  // Choosing lines only makes sense on the list.
+  if (state.view !== "list") state.selecting = null;
   ensureHistory();
   flushSync(() => app.render(<App />));
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.

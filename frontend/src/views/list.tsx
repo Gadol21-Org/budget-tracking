@@ -1,6 +1,8 @@
 import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
+import { bagPath, bagsOf } from "../bags";
 import { bizName, businessOf } from "../business";
+import { openBagPicker } from "../dialogs/BagPicker";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
@@ -40,12 +42,25 @@ function FxLine({ t }: { t: Transaction }) {
   );
 }
 
+/** Choosing mode: only stored lines (not queued or upcoming ones) can be put in bags. */
+const pickable = (t: Transaction) => t.id > 0 && !t.upcoming;
+
+function toggleSelected(t: Transaction) {
+  const sel = state.selecting;
+  if (!sel || !pickable(t)) return;
+  if (!sel.delete(t.id)) sel.add(t.id);
+  render();
+}
+
 function TransactionRow({ t }: { t: Transaction }) {
+  const choosing = state.selecting !== null;
+  const bagIds = bagsOf(state.bags, t).filter((b) => state.bags.bags.some((x) => x.id === b));
   const biz = businessOf(state.biz, state.cats, t);
   const own = t.id > 0 && state.biz.tx.has(t.id);
   const fx = fxOf(t);
   return (
-    <div className={t.upcoming ? "row upcoming" : "row"}>
+    <div className={t.upcoming ? "row upcoming" : "row"} onClick={choosing ? () => toggleSelected(t) : undefined}>
+      {choosing && <input type="checkbox" className="selbox" aria-label="בחירה" disabled={!pickable(t)} checked={state.selecting!.has(t.id)} onChange={() => undefined /* the row's own click toggles */} />}
       <div className="grow">
         <div className="name">
           {t.upcoming ? <span className="upcoming-mark" title="טרם בוצע: ניתן לשנות מכאן והלאה">{"⏳ "}</span> : t.recurring_series_id != null ? <span title="הוצאה חוזרת">{"🔁 "}</span> : null}
@@ -56,6 +71,13 @@ function TransactionRow({ t }: { t: Transaction }) {
             {bizName(state.biz, biz)}
           </span>
         )}
+        {bagIds.length > 0 && (
+          <div className="bagchips">
+            {bagIds.map((b) => (
+              <span key={b} className="bagchip">{`🎒 ${bagPath(state.bags, b)}`}</span>
+            ))}
+          </div>
+        )}
         <FxLine t={t} />
         {t.note ? <div className="muted">{t.note}</div> : null}
       </div>
@@ -65,13 +87,13 @@ function TransactionRow({ t }: { t: Transaction }) {
       ) : (
         <Money agorot={t.amount_agorot} cls={t.amount_agorot < 0 ? "expense" : "income"} />
       )}
-      {t.sync_state === "queued" ? null : (
+      {choosing || t.sync_state === "queued" ? null : (
         <button className="del" title="עריכה" onClick={() => openTransactionDialog(t)}>
           ✎
         </button>
       )}
       {/* An upcoming line has no row of its own to delete; stopping it is in its edit dialog. */}
-      {t.upcoming ? null : (
+      {t.upcoming || choosing ? null : (
         <button
           className="del"
           title="מחיקה"
@@ -99,6 +121,63 @@ export function listView(): ReactElement {
   return <ListScreen />;
 }
 
+/** The bar under the list while choosing lines: put them in bags, take them out, or stop. */
+function SelectionBar() {
+  const ids = [...state.selecting!];
+  const inBags = [...new Set(ids.flatMap((id) => state.bags.tx.get(id) ?? []))];
+  const done = async () => {
+    state.selecting = null;
+    await load();
+  };
+  return (
+    <div className="selbar" role="toolbar" aria-label="פעולות על התנועות שנבחרו">
+      <b className="grow">{ids.length ? `${ids.length} נבחרו` : "בחרו תנועות"}</b>
+      <button
+        className="btn primary"
+        disabled={!ids.length}
+        onClick={() =>
+          openBagPicker({
+            title: `הוספת ${ids.length} תנועות לטיוג`,
+            selected: [],
+            canCreate: true,
+            confirmLabel: "הוספה",
+            onDone: async (add) => {
+              if (add.length) await api.assignBags(ids, add, []);
+              await done();
+            },
+          })
+        }
+      >
+        🎒 טיוג
+      </button>
+      {inBags.length > 0 && (
+        <button
+          className="btn"
+          disabled={!ids.length}
+          onClick={() =>
+            openBagPicker({
+              title: "הסרה מטיוגים",
+              selected: [],
+              only: inBags,
+              canCreate: false,
+              confirmLabel: "הסרה",
+              onDone: async (remove) => {
+                if (remove.length) await api.assignBags(ids, [], remove);
+                await done();
+              },
+            })
+          }
+        >
+          הסרה
+        </button>
+      )}
+      <button className="btn" onClick={() => ((state.selecting = null), render())}>
+        ביטול
+      </button>
+    </div>
+  );
+}
+
 function ListScreen() {
   const txs = inPeriod()
     .filter(inFilter)
@@ -122,6 +201,13 @@ function ListScreen() {
         </div>
       )}
       <ConnectedMonthBar />
+      {state.selecting === null && txs.some(pickable) && (
+        <div className="listtools">
+          <button className="linkbtn" onClick={() => ((state.selecting = new Set()), render())}>
+            ☑ בחירת תנועות לטיוג
+          </button>
+        </div>
+      )}
       {state.biz.businesses.length > 0 && (
         <div className="seg3b">
           {BIZ_FILTERS.map(([k, label]) => (
@@ -148,6 +234,7 @@ function ListScreen() {
       ) : (
         <div className="empty">אין תנועות בתקופה זו</div>
       )}
+      {state.selecting !== null && <SelectionBar />}
     </div>
   );
 }

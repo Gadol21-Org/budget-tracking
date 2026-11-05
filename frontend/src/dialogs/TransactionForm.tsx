@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, currencyInfo, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction } from "../api";
 import { bizName, businessRequired, categoryBusiness } from "../business";
+import { bagsOf } from "../bags";
+import { BagField } from "../components/BagField";
 import { BusinessChips } from "../components/BusinessChips";
 import { type CategoryChoice, CategoryPicker } from "../components/CategoryPicker";
 import { Combo } from "../components/Combo";
@@ -81,6 +83,8 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
   const [duration, setDuration] = useState(segment?.end_month ? "months" : "forever");
   const [months, setMonths] = useState(segment?.end_month ? String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1) : "12");
   /** undefined = nothing chosen yet (only while a choice is required). */
+  /** The bags the line is in. */
+  const [bagIds, setBagIds] = useState<number[]>(existing ? bagsOf(state.bags, existing) : []);
   const [bizValue, setBizValue] = useState<number | null | undefined>(ownTag);
   // Foreign currency: the shekel amount follows the rate for the transaction's day.
   const [quote, setQuote] = useState<Quote | null>(startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null);
@@ -259,15 +263,20 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
       } else if (existing) {
         await api.updateTransaction(existing.id, body);
         if ((bizValue ?? null) !== ownTag) await api.tagTransactions([existing.id], bizValue ?? null);
+        const before = bagsOf(state.bags, existing);
+        const add = bagIds.filter((b) => !before.includes(b));
+        const remove = before.filter((b) => !bagIds.includes(b));
+        if (add.length || remove.length) await api.assignBags([existing.id], add, remove);
       } else {
         const chosen = bizValue ?? null;
         try {
           const id = await api.addTransaction(body);
           if (chosen != null) await api.tagTransactions([id], chosen);
+          if (bagIds.length) await api.assignBags([id], bagIds, []);
         } catch (e3) {
           // No connection: keep the line on this device and send it when the connection is back.
           if (!isNetworkError(e3)) throw e3;
-          await enqueue(body, chosen);
+          await enqueue(body, chosen, bagIds);
           requestPersistence();
         }
       }
@@ -372,6 +381,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
       <div style={{ display: bizHidden ? "none" : "" }}>
         <BusinessChips biz={state.biz} value={bizValue} onChange={setBizValue} required={bizRequired} givenName={givenName} collapsed />
       </div>
+      {!repeat && <BagField value={bagIds} onChange={setBagIds} />}
       {/* Only the checkbox (inside a finger-sized hit box) toggles; the row and its text are inert. */}
       {!existing && (
         <div className="repeat-row">

@@ -1,9 +1,10 @@
 import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
+import { emptyBags, type BagState } from "./bags";
 import { type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people" | "bags" | "bag";
 
 export const root = document.getElementById("app")!;
 
@@ -41,6 +42,10 @@ export const state = {
   justSynced: new Map<number, number>(),
   /** The businesses, and which transactions and categories count in them. */
   biz: emptyBiz() as BizData,
+  /** The bags (טיוגים) and which transactions are in which. */
+  bags: emptyBags() as BagState,
+  /** Choosing several transaction lines to put them in bags; the chosen ones by id (null: not choosing). */
+  selecting: null as Set<number> | null,
   /** The business dashboards: open tab and which business they show. */
   bizView: { tab: "overview", scope: "all" } as BizView,
   /** The transaction list: all, only business lines or only the rest. */

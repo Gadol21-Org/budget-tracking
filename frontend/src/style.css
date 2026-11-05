@@ -422,3 +422,36 @@ dialog { overscroll-behavior: contain; }
 /* While one slice is picked, the other legend lines fade with their slices. */
 .donutlegend .lrow.dim { opacity: .45; }
 .filterbar .crumbs { margin-bottom: 0; }
+
+/* Bags (טיוגים) */
+:root { --bag: #0f766e; --bag-soft: rgba(15, 118, 110, .12); }
+@media (prefers-color-scheme: dark) { :root { --bag: #5eead4; --bag-soft: rgba(94, 234, 212, .14); } }
+.bagchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.bagchip { display: inline-flex; align-items: center; gap: 4px; background: var(--bag-soft); color: var(--bag); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; }
+.bagchip.big { font-size: .88rem; padding: 4px 6px 4px 12px; }
+.bagchip .x { border: 0; background: none; color: inherit; cursor: pointer; opacity: .7; padding: 4px 6px; font-size: .8rem; }
+.bagfield { display: flex; flex-direction: column; gap: 6px; }
+.bagtabs { grid-template-columns: repeat(2, 1fr); max-width: 320px; }
+.bagrow { cursor: pointer; }
+.bagrow .chev { font-size: 1.2rem; }
+.bar.over > span { background: var(--expense); }
+.listtools { margin: 0 4px 6px; }
+
+.bagtree { max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.bagnode { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.bagnode:last-child { border-bottom: 0; }
+.bagnode .selbox { accent-color: var(--bag); }
+.btn.danger { color: var(--expense); border-color: var(--expense); }
+.row .selbox { accent-color: var(--bag); }
+.selbar { border-color: var(--bag); flex-wrap: wrap; }
+.selbar .grow { flex: 1; min-width: 80px; }
+.bagchoice { display: flex; flex-direction: column; gap: 8px; }
+.bagchoice input[type="search"] { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.bagpanel { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--bg); }
+form.add label.bagnode { flex-direction: row; align-items: center; gap: 10px; font-size: 1rem; color: var(--text); }
+form.add .bagnode .selbox { width: 22px; height: 22px; padding: 0; margin: 0; flex: none; }
+form.add label.archiverow { flex-direction: row; align-items: center; gap: 10px; font-size: 1rem; color: var(--text); }
+form.add .archiverow input { width: 22px; height: 22px; padding: 0; margin: 0; }
+.listtools .linkbtn { color: var(--brand); }
+.bagtoggle { flex: none; width: 32px; height: 32px; border: 0; background: none; color: var(--muted); font-size: 1rem; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+form.add .bagtoggle { padding: 0; border: 0; background: none; }
