@@ -3,7 +3,7 @@
 # Built natively on the target architecture (an arm64 runner for an arm64 Oracle VM),
 # so there is no cross-compiling.
 
-FROM node:22-bookworm-slim AS frontend
+FROM node:26-bookworm-slim AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
