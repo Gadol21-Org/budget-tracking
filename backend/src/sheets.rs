@@ -138,6 +138,27 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         .into_iter()
         .map(|(id, line, date)| (id, (line, date)))
         .collect();
+    // Bags: a line in several bags lists them all in one cell, each as its full path.
+    let bag_list = storage.list_bags().await?;
+    let bag_path = |id: i64| -> String {
+        let mut names = Vec::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur.filter(|_| names.len() < 10) {
+            match bag_list.iter().find(|b| b.id == c) {
+                Some(b) => {
+                    names.push(b.name.clone());
+                    cur = b.parent_id;
+                }
+                None => break,
+            }
+        }
+        names.reverse();
+        names.join(" › ")
+    };
+    let mut tx_bags: HashMap<i64, Vec<String>> = HashMap::new();
+    for (t, b) in storage.bag_links().await? {
+        tx_bags.entry(t).or_default().push(bag_path(b));
+    }
     let mut tx = header(&[
         "Id",
         "Date",
@@ -152,6 +173,7 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
         "Recurring series id",
         "Paamonim line id",
         "Paamonim line date",
+        "Bags",
     ]);
     for t in storage.list_transactions().await? {
         let (line, mdate) = links.get(&t.id).cloned().unwrap_or_default();
@@ -169,6 +191,30 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
             opt(t.recurring_series_id),
             opt(line),
             opt(mdate),
+            tx_bags.remove(&t.id).unwrap_or_default().join(", ").into(),
+        ]);
+    }
+
+    let mut bags = header(&[
+        "Id",
+        "Name",
+        "Parent id",
+        "Path",
+        "Archived",
+        "Budget (agorot)",
+        "Start date",
+        "End date",
+    ]);
+    for b in &bag_list {
+        bags.push(vec![
+            json!(b.id),
+            b.name.clone().into(),
+            opt(b.parent_id),
+            bag_path(b.id).into(),
+            (if b.archived { "yes" } else { "" }).into(),
+            opt(b.budget_agorot),
+            opt(b.start_date.clone()),
+            opt(b.end_date.clone()),
         ]);
     }
 
@@ -312,6 +358,7 @@ pub async fn build_tabs(storage: &dyn Storage) -> Result<Vec<(&'static str, Rows
     Ok(vec![
         ("Transactions", tx),
         ("Categories", cats),
+        ("Bags", bags),
         ("Payment methods", pms),
         ("Recurring", rec),
         ("Recurring settled", settled),

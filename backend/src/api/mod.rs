@@ -1,3 +1,4 @@
+mod bags;
 mod businesses;
 mod categories;
 mod error;
@@ -134,6 +135,12 @@ pub(crate) fn router(db: Db) -> Router {
             "/api/recurring/:series_id",
             axum::routing::put(repeating::change_recurring).delete(repeating::cancel_recurring),
         )
+        .route("/api/bags", get(bags::get_bags).post(bags::create_bag))
+        .route(
+            "/api/bags/:id",
+            delete(bags::delete_bag).put(bags::change_bag),
+        )
+        .route("/api/bags/assign", axum::routing::put(bags::assign_bags))
         .route(
             "/api/businesses",
             get(businesses::get_businesses).post(businesses::create_business),

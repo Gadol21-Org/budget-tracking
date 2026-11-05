@@ -257,6 +257,25 @@ impl Storage for Logged {
     async fn remove_business(&self, id: i64) -> anyhow::Result<()> {
         self.0.remove_business(id).await
     }
+    // Bags are a local view over the data, not logged.
+    async fn list_bags(&self) -> anyhow::Result<Vec<crate::storage::Bag>> {
+        self.0.list_bags().await
+    }
+    async fn insert_bag(&self, bag: &crate::storage::BagInput) -> anyhow::Result<i64> {
+        self.0.insert_bag(bag).await
+    }
+    async fn update_bag(&self, id: i64, bag: &crate::storage::BagInput) -> anyhow::Result<()> {
+        self.0.update_bag(id, bag).await
+    }
+    async fn remove_bag(&self, id: i64) -> anyhow::Result<()> {
+        self.0.remove_bag(id).await
+    }
+    async fn bag_links(&self) -> anyhow::Result<Vec<(i64, i64)>> {
+        self.0.bag_links().await
+    }
+    async fn assign_bags(&self, ids: &[i64], add: &[i64], remove: &[i64]) -> anyhow::Result<()> {
+        self.0.assign_bags(ids, add, remove).await
+    }
     async fn set_tx_fx(&self, id: i64, fx: Option<&crate::storage::TxFx>) -> anyhow::Result<()> {
         self.0.set_tx_fx(id, fx).await
     }
