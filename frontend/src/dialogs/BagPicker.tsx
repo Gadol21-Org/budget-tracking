@@ -18,13 +18,20 @@ interface Props {
   close: () => void;
 }
 
-/** Bags in tree order (a bag, then its sub-bags), with how deep each one is. */
-function ordered(s: BagState, parent: number | null, depth: number, keep: (id: number) => boolean): { id: number; depth: number }[] {
+/** Bags in tree order (a bag, then its sub-bags), with how deep each one is. A bag's sub-bags show only while it is open (or while searching). */
+function ordered(s: BagState, parent: number | null, depth: number, keep: (id: number) => boolean, open: (id: number) => boolean): { id: number; depth: number }[] {
   return childBags(s, parent)
     .filter((b) => keep(b.id) || hasKept(s, b.id, keep))
-    .flatMap((b) => [{ id: b.id, depth }, ...ordered(s, b.id, depth + 1, keep)]);
+    .flatMap((b) => [{ id: b.id, depth }, ...(open(b.id) ? ordered(s, b.id, depth + 1, keep, open) : [])]);
 }
 const hasKept = (s: BagState, id: number, keep: (id: number) => boolean): boolean => childBags(s, id).some((b) => keep(b.id) || hasKept(s, b.id, keep));
+
+/** The ids of every bag above the given ones, so a ticked sub-bag is visible when the list opens. */
+function ancestorsOf(s: BagState, ids: Iterable<number>): Set<number> {
+  const out = new Set<number>();
+  for (const id of ids) for (let cur = s.bags.find((b) => b.id === id)?.parent_id; cur != null && !out.has(cur); cur = s.bags.find((b) => b.id === cur)?.parent_id) out.add(cur);
+  return out;
+}
 
 interface ChoiceProps {
   picked: Set<number>;
@@ -38,12 +45,20 @@ interface ChoiceProps {
 /** The searchable tree of bags with a checkbox each, and "create" for a typed name that matches none. Used in a dialog and inside the transaction form. */
 export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
   const [query, setQuery] = useState("");
+  /** Top-level bags start closed, so the list stays short; the ones holding a ticked bag start open. */
+  const [opened, setOpened] = useState(() => ancestorsOf(state.bags, picked));
   const [, setTick] = useState(0);
   const [err, setErr] = useState("");
   const s = state.bags;
   const offered = (id: number) => (only ? only.includes(id) : !isArchived(s, id) || picked.has(id));
   const q = query.trim().toLowerCase();
-  const rows = ordered(s, null, 0, (id) => offered(id) && (!q || bagPath(s, id).toLowerCase().includes(q)));
+  const rows = ordered(s, null, 0, (id) => offered(id) && (!q || bagPath(s, id).toLowerCase().includes(q)), (id) => !!q || opened.has(id));
+  const toggleOpen = (id: number) =>
+    setOpened((o) => {
+      const n = new Set(o);
+      if (!n.delete(id)) n.add(id);
+      return n;
+    });
   const exact = s.bags.some((b) => b.parent_id == null && b.name === query.trim());
   const create = async () => {
     try {
@@ -63,8 +78,17 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
       <div className="bagtree">
         {rows.map(({ id, depth }) => {
           const b = s.bags.find((x) => x.id === id)!;
+          const hasKids = childBags(s, id).some((k) => offered(k.id) || hasKept(s, k.id, offered));
+          const isOpen = !!q || opened.has(id);
           return (
-            <label key={id} className="bagnode" style={{ paddingInlineStart: 12 + depth * 22 }}>
+            <label key={id} className="bagnode" style={{ paddingInlineStart: 4 + depth * 22 }}>
+              {hasKids && !q ? (
+                <button type="button" className="bagtoggle" aria-expanded={isOpen} aria-label={isOpen ? `סגירת ${b.name}` : `פתיחת ${b.name}`} onClick={(e) => (e.preventDefault(), toggleOpen(id))}>
+                  {isOpen ? "▾" : "◂"}
+                </button>
+              ) : (
+                <span className="bagtoggle" aria-hidden="true" />
+              )}
               <input type="checkbox" className="selbox" checked={picked.has(id)} onChange={() => onToggle(id)} />
               <span className="grow">
                 <span className="name">{b.name}</span>
