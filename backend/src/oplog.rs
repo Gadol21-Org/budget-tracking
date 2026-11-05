@@ -248,8 +248,8 @@ impl Storage for Logged {
     async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {
         self.0.list_businesses().await
     }
-    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64> {
-        self.0.insert_business(name, is_general).await
+    async fn insert_business(&self, name: &str) -> anyhow::Result<i64> {
+        self.0.insert_business(name).await
     }
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()> {
         self.0.rename_business(id, name).await

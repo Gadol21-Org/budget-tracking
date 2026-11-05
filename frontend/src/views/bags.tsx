@@ -1,6 +1,6 @@
 import { type ReactElement, useState } from "react";
 import { api, parseAgorot, type Bag } from "../api";
-import { bagById, bagFamily, businessRoot, isArchived, isBusinessBag, bagPath, bagTransactions, childBags, dailyAverage, dateRange, netSpent, parentChoices } from "../bags";
+import { bagById, bagFamily, isArchived, isBusinessBag, bagPath, bagTransactions, childBags, dailyAverage, dateRange, netSpent, parentChoices } from "../bags";
 import { BackButton } from "../components/BackButton";
 import { DateField } from "../components/DateField";
 import { DialogForm } from "../components/DialogForm";
@@ -148,7 +148,7 @@ function BagScreen() {
   const max = rows[0]?.[1] ?? 1;
   const budget = bag.budget_agorot;
   // A business is a bag under the business root; it also has profit and loss figures of its own.
-  const isBusiness = bag.parent_id != null && bag.parent_id === businessRoot(state.bags)?.id;
+  const isBusiness = isBusinessBag(state.bags, bag.id);
   const days = [...new Set(txs.map((t) => t.date))];
   return (
     <div className="dash">
@@ -344,11 +344,9 @@ function BagForm({ bag, parentId, close }: { bag?: Bag; parentId: number | null;
   );
 }
 
-/** A new business is a bag directly under the fixed עסקים bag; one of them may hold the shared costs. */
+/** A new business is a bag directly under the fixed עסקים bag (which itself stands for the shared costs). */
 function BusinessForm({ close }: { close: () => void }) {
   const [name, setName] = useState("");
-  const [general, setGeneral] = useState(false);
-  const hasGeneral = state.biz.businesses.some((b) => b.is_general);
   return (
     <DialogForm
       title="עסק חדש"
@@ -356,7 +354,7 @@ function BusinessForm({ close }: { close: () => void }) {
       submitDisabled={!name.trim()}
       close={close}
       onSubmit={async () => {
-        await api.addBusiness(name.trim(), general);
+        await api.addBusiness(name.trim());
         close();
         await load();
       }}
@@ -364,10 +362,6 @@ function BusinessForm({ close }: { close: () => void }) {
       <Field label="שם">
         <input type="text" required maxLength={60} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
-      <label className="archiverow">
-        <input type="checkbox" disabled={hasGeneral} checked={general} onChange={(e) => setGeneral(e.target.checked)} />
-        <span>{hasGeneral ? "כבר יש עסק משותף" : "הוצאות משותפות (לא שייכות לעסק מסוים)"}</span>
-      </label>
     </DialogForm>
   );
 }

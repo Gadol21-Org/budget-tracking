@@ -70,7 +70,7 @@ export function BagChoice({ picked, onToggle, only, canCreate, biz }: ChoiceProp
   const createBusiness = async () => {
     try {
       setErr("");
-      const id = await api.addBusiness(query.trim(), false);
+      const id = await api.addBusiness(query.trim());
       await load();
       biz?.onPick(id);
       setQuery("");
@@ -100,9 +100,9 @@ export function BagChoice({ picked, onToggle, only, canCreate, biz }: ChoiceProp
           const hasKids = childBags(s, id).some((k) => offered(k.id) || hasKept(s, k.id, offered));
           const isOpen = !!q || opened.has(id);
           const isRoot = !!root && id === root.id;
-          const isBiz = !!biz && !isRoot && isBusinessBag(s, id);
+          const isBiz = !!biz && isBusinessBag(s, id);
           return (
-            <label key={id} className="bagnode" style={{ paddingInlineStart: 4 + depth * 22 }}>
+            <label key={id} className="bagnode" style={{ paddingInlineStart: 4 + depth * 14 }}>
               {hasKids && !q ? (
                 <button type="button" className="bagtoggle" aria-expanded={isOpen} aria-label={isOpen ? `סגירת ${b.name}` : `פתיחת ${b.name}`} onClick={(e) => (e.preventDefault(), toggleOpen(id))}>
                   {isOpen ? "▾" : "◂"}
@@ -110,13 +110,9 @@ export function BagChoice({ picked, onToggle, only, canCreate, biz }: ChoiceProp
               ) : (
                 <span className="bagtoggle" aria-hidden="true" />
               )}
-              {isRoot ? (
-                <span className="selbox" aria-hidden="true" />
-              ) : (
-                <input type="checkbox" className="selbox" checked={isBiz ? biz.value === id : picked.has(id)} onChange={() => (isBiz ? biz.onPick(biz.value === id ? null : id) : onToggle(id))} />
-              )}
+              <input type="checkbox" className="selbox" checked={isBiz ? biz.value === id : picked.has(id)} onChange={() => (isBiz ? biz.onPick(biz.value === id ? null : id) : onToggle(id))} />
               <span className="grow">
-                <span className="name">{isRoot || isBiz ? `💼 ${b.name}` : b.name}</span>
+                <span className="name">{isBiz ? `💼 ${b.name}` : b.name}{isRoot && biz && <span className="muted small"> · הוצאות משותפות</span>}</span>
                 {q && b.parent_id != null && <span className="muted small">{` · ${bagPath(s, id)}`}</span>}
                 {isArchived(s, id) && <span className="muted small"> · בארכיון</span>}
               </span>

@@ -23,8 +23,6 @@ pub(crate) async fn get_businesses(State(db): State<Db>) -> Result<Json<Business
 #[derive(Deserialize)]
 pub(crate) struct NewBusiness {
     name: String,
-    #[serde(default)]
-    is_general: bool,
 }
 
 pub(crate) async fn create_business(
@@ -45,16 +43,7 @@ pub(crate) async fn create_business(
             "a business with this name exists".into(),
         ));
     }
-    if b.is_general && existing.iter().any(|x| x.is_general) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "there is already a general business".into(),
-        ));
-    }
-    db.insert_business(name, b.is_general)
-        .await
-        .map(Json)
-        .map_err(internal)
+    db.insert_business(name).await.map(Json).map_err(internal)
 }
 
 #[derive(Deserialize)]
@@ -74,6 +63,7 @@ pub(crate) async fn rename_business(
             "name must not be empty".into(),
         ));
     }
+    not_shared(&db, id).await?;
     db.rename_business(id, name).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -82,6 +72,7 @@ pub(crate) async fn delete_business(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    not_shared(&db, id).await?;
     db.remove_business(id).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -148,6 +139,18 @@ pub(crate) async fn check_business(db: &Db, id: Option<i64>) -> Result<(), ApiEr
                 "unknown business".into(),
             ));
         }
+    }
+    Ok(())
+}
+
+/// The shared-costs business is the fixed root bag: it cannot be renamed or deleted.
+async fn not_shared(db: &Db, id: i64) -> Result<(), ApiError> {
+    let all = db.list_businesses().await.map_err(internal)?;
+    if all.iter().any(|b| b.id == id && b.is_general) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "the shared business cannot be changed".into(),
+        ));
     }
     Ok(())
 }

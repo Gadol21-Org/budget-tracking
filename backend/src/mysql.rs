@@ -227,6 +227,7 @@ impl MySqlStorage {
             .execute(&pool)
             .await;
         migrate_businesses(&pool).await?;
+        general_into_root(&pool).await?;
         Ok(Self { pool })
     }
 }
@@ -236,6 +237,7 @@ pub const BUSINESS_ROOT_NAME: &str = "עסקים";
 const ROLE_ROOT: &str = "business_root";
 const ROLE_GENERAL: &str = "business_general";
 const MIGRATED_KEY: &str = "businesses_as_bags";
+const GENERAL_KEY: &str = "general_business_is_root";
 
 async fn has_table(pool: &MySqlPool, name: &str) -> Result<bool> {
     let n: i64 = sqlx::query_scalar(
@@ -267,15 +269,18 @@ async fn migrate_businesses(pool: &MySqlPool) -> Result<()> {
                 let root = ensure_root(&mut tx).await?;
                 let mut map: HashMap<i64, i64> = HashMap::new();
                 for r in &old {
+                    // The shared-costs business is the root itself.
                     let general: bool = r.try_get("is_general")?;
-                    let id =
-                        sqlx::query("INSERT INTO bags (name, parent_id, role) VALUES (?, ?, ?)")
+                    let id = if general {
+                        root
+                    } else {
+                        sqlx::query("INSERT INTO bags (name, parent_id) VALUES (?, ?)")
                             .bind(r.try_get::<String, _>("name")?)
                             .bind(root)
-                            .bind(general.then_some(ROLE_GENERAL))
                             .execute(&mut *tx)
                             .await?
-                            .last_insert_id() as i64;
+                            .last_insert_id() as i64
+                    };
                     map.insert(r.try_get("id")?, id);
                 }
                 if has_table(pool, "transaction_business").await? {
@@ -354,6 +359,57 @@ async fn ensure_root(conn: &mut sqlx::MySqlConnection) -> Result<i64> {
     )
 }
 
+/// The shared-costs business used to be a bag of its own under the root (`role = business_general`). The root
+/// itself stands for it now: what was tagged with it or linked to it moves to the root, and the bag goes.
+/// Also makes sure the root exists, so it can always be picked. Runs once.
+async fn general_into_root(pool: &MySqlPool) -> Result<()> {
+    let done: Option<String> = sqlx::query_scalar("SELECT v FROM app_settings WHERE k = ?")
+        .bind(GENERAL_KEY)
+        .fetch_optional(pool)
+        .await?;
+    if done.is_some() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let root = ensure_root(&mut tx).await?;
+    let old: Vec<i64> = sqlx::query_scalar("SELECT id FROM bags WHERE role = ?")
+        .bind(ROLE_GENERAL)
+        .fetch_all(&mut *tx)
+        .await?;
+    for g in old {
+        sqlx::query("UPDATE IGNORE transaction_bags SET bag_id = ? WHERE bag_id = ?")
+            .bind(root)
+            .bind(g)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM transaction_bags WHERE bag_id = ?")
+            .bind(g)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE category_business SET business_id = ? WHERE business_id = ?")
+            .bind(root)
+            .bind(g)
+            .execute(&mut *tx)
+            .await?;
+        // Anything under it moves up to the root's level of businesses.
+        sqlx::query("UPDATE bags SET parent_id = ? WHERE parent_id = ?")
+            .bind(root)
+            .bind(g)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM bags WHERE id = ?")
+            .bind(g)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO app_settings (k, v) VALUES (?, '1')")
+        .bind(GENERAL_KEY)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Keep the foreign-currency details with a transaction that was just inserted.
 async fn insert_tx_fx(
     conn: &mut sqlx::Transaction<'_, sqlx::MySql>,
@@ -427,12 +483,15 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
-    // Businesses are the bags directly under the business root.
+    // The businesses are the bags directly under the business root, and the root itself stands for the shared costs.
     async fn list_businesses(&self) -> Result<Vec<Business>> {
         let rows = sqlx::query(
-            "SELECT b.id, b.name, b.role FROM bags b
-             JOIN bags r ON r.id = b.parent_id AND r.role = ? ORDER BY b.id",
+            "SELECT b.id, b.name, (b.role <=> ?) AS is_root FROM bags b
+             WHERE b.role = ? OR b.parent_id IN (SELECT id FROM bags WHERE role = ?)
+             ORDER BY is_root DESC, b.id",
         )
+        .bind(ROLE_ROOT)
+        .bind(ROLE_ROOT)
         .bind(ROLE_ROOT)
         .fetch_all(&self.pool)
         .await?;
@@ -441,20 +500,18 @@ impl Storage for MySqlStorage {
                 Ok(Business {
                     id: r.try_get("id")?,
                     name: r.try_get("name")?,
-                    is_general: r.try_get::<Option<String>, _>("role")?.as_deref()
-                        == Some(ROLE_GENERAL),
+                    is_general: r.try_get::<i64, _>("is_root")? != 0,
                 })
             })
             .collect()
     }
 
-    async fn insert_business(&self, name: &str, is_general: bool) -> Result<i64> {
+    async fn insert_business(&self, name: &str) -> Result<i64> {
         let mut conn = self.pool.acquire().await?;
         let root = ensure_root(&mut conn).await?;
-        let r = sqlx::query("INSERT INTO bags (name, parent_id, role) VALUES (?, ?, ?)")
+        let r = sqlx::query("INSERT INTO bags (name, parent_id) VALUES (?, ?)")
             .bind(name)
             .bind(root)
-            .bind(is_general.then_some(ROLE_GENERAL))
             .execute(&mut *conn)
             .await?;
         Ok(r.last_insert_id() as i64)
@@ -479,9 +536,10 @@ impl Storage for MySqlStorage {
             "SELECT tb.transaction_id, MIN(tb.bag_id) AS bag_id FROM transaction_bags tb
              JOIN transactions t ON t.id = tb.transaction_id
              JOIN bags b ON b.id = tb.bag_id
-             JOIN bags r ON r.id = b.parent_id AND r.role = ?
+             WHERE b.role = ? OR b.parent_id IN (SELECT id FROM bags WHERE role = ?)
              GROUP BY tb.transaction_id ORDER BY tb.transaction_id",
         )
+        .bind(ROLE_ROOT)
         .bind(ROLE_ROOT)
         .fetch_all(&self.pool)
         .await?;
@@ -648,9 +706,11 @@ impl Storage for MySqlStorage {
             // A line is tagged with one business: take it out of the others first.
             sqlx::query(
                 "DELETE FROM transaction_bags WHERE transaction_id = ? AND bag_id IN
-                   (SELECT b.id FROM bags b JOIN bags r ON r.id = b.parent_id AND r.role = ?)",
+                   (SELECT b.id FROM bags b
+                    WHERE b.role = ? OR b.parent_id IN (SELECT id FROM bags WHERE role = ?))",
             )
             .bind(id)
+            .bind(ROLE_ROOT)
             .bind(ROLE_ROOT)
             .execute(&mut *tx)
             .await?;
@@ -1805,9 +1865,10 @@ mod tests {
         migrate_businesses(&s.pool).await.unwrap();
         let biz = s.list_businesses().await.unwrap();
         assert_eq!(biz.len(), 2);
-        let (shop, shared) = (&biz[0], &biz[1]);
+        // The old shared-costs business is the root itself now.
+        let (shared, shop) = (&biz[0], &biz[1]);
         assert!(shop.name == "Shop" && !shop.is_general);
-        assert!(shared.name == "Shared" && shared.is_general);
+        assert!(shared.name == BUSINESS_ROOT_NAME && shared.is_general);
         // Ids are the bags' ids now, and what pointed at the old ones follows.
         let links = s.business_links().await.unwrap();
         assert_eq!(links.transactions, vec![(t, shop.id)]);
@@ -1818,14 +1879,57 @@ mod tests {
             .find(|b| b.role.as_deref() == Some("business_root"))
             .unwrap();
         assert_eq!(root.name, BUSINESS_ROOT_NAME);
-        assert!(bags.iter().filter(|b| b.parent_id == Some(root.id)).count() == 2);
+        assert_eq!(root.id, shared.id);
+        assert!(bags.iter().filter(|b| b.parent_id == Some(root.id)).count() == 1);
         // The old tables are kept under another name.
         assert!(!has_table(&s.pool, "businesses").await.unwrap());
         assert!(has_table(&s.pool, "businesses_migrated").await.unwrap());
         // A second run changes nothing.
         migrate_businesses(&s.pool).await.unwrap();
         assert_eq!(s.list_businesses().await.unwrap().len(), 2);
-        assert_eq!(s.list_bags().await.unwrap().len(), 3);
+        assert_eq!(s.list_bags().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_shared_costs_bag_from_before_is_folded_into_the_root() {
+        let s = crate::testdb::fresh().await;
+        let t = s
+            .create_transaction(&NewTransaction {
+                date: "2026-10-03".into(),
+                amount_agorot: -100,
+                category_id: None,
+                payment_method_id: None,
+                note: String::new(),
+            })
+            .await
+            .unwrap();
+        let root = s.list_businesses().await.unwrap()[0].id;
+        let g = sqlx::query(
+            "INSERT INTO bags (name, parent_id, role) VALUES ('Shared', ?, 'business_general')",
+        )
+        .bind(root)
+        .execute(&s.pool)
+        .await
+        .unwrap()
+        .last_insert_id() as i64;
+        sqlx::query("INSERT INTO transaction_bags (transaction_id, bag_id) VALUES (?, ?)")
+            .bind(t)
+            .bind(g)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        s.set_category_business(5, Some(g)).await.unwrap();
+        sqlx::query("DELETE FROM app_settings WHERE k = ?")
+            .bind(GENERAL_KEY)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        general_into_root(&s.pool).await.unwrap();
+        let links = s.business_links().await.unwrap();
+        assert_eq!(links.transactions, vec![(t, root)]);
+        assert_eq!(links.categories, vec![(5, root)]);
+        assert_eq!(s.list_businesses().await.unwrap().len(), 1);
+        assert_eq!(s.list_bags().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1841,8 +1945,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let a = s.insert_business("A", false).await.unwrap();
-        let b = s.insert_business("B", false).await.unwrap();
+        let a = s.insert_business("A").await.unwrap();
+        let b = s.insert_business("B").await.unwrap();
         let plain = s
             .insert_bag(&crate::storage::BagInput {
                 name: "Trip".into(),
@@ -1874,6 +1978,6 @@ mod tests {
         s.set_category_business(3, Some(a)).await.unwrap();
         s.remove_business(a).await.unwrap();
         assert!(s.business_links().await.unwrap().categories.is_empty());
-        assert_eq!(s.list_businesses().await.unwrap().len(), 1);
+        assert_eq!(s.list_businesses().await.unwrap().len(), 2);
     }
 }

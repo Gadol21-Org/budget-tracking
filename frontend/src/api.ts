@@ -250,8 +250,7 @@ export const api = {
   deleteCategory: (id: number, moveTo?: number) =>
     request<number>(`/api/categories/${id}${moveTo != null ? `?move_to=${moveTo}` : ""}`, { method: "DELETE" }),
   businesses: () => request<BusinessData>("/api/businesses"),
-  addBusiness: (name: string, isGeneral: boolean) =>
-    request<number>("/api/businesses", { method: "POST", body: JSON.stringify({ name, is_general: isGeneral }) }),
+  addBusiness: (name: string) => request<number>("/api/businesses", { method: "POST", body: JSON.stringify({ name }) }),
   renameBusiness: (id: number, name: string) =>
     request<void>(`/api/businesses/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
   deleteBusiness: (id: number) => request<void>(`/api/businesses/${id}`, { method: "DELETE" }),

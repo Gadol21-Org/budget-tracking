@@ -94,7 +94,7 @@ pub struct TxFx {
     pub estimated: bool,
 }
 
-/// One business of the whole business. The `is_general` one holds shared costs.
+/// One business of the whole business. The `is_general` one (the fixed root, עסקים) holds shared costs.
 #[derive(Serialize, Clone)]
 pub struct Business {
     pub id: i64,
@@ -363,7 +363,7 @@ pub trait Storage: Send + Sync {
     async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
-    async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
+    async fn insert_business(&self, name: &str) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
     /// Also drops every tag and category link that pointed at it.
     async fn remove_business(&self, id: i64) -> anyhow::Result<()>;
@@ -872,12 +872,12 @@ mod tests {
         changed.budget_agorot = Some(1_200_000);
         s.update_bag(japan, &changed).await.unwrap();
         let all = s.list_bags().await.unwrap();
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 4);
         assert!(all
             .iter()
             .any(|b| b.name == "Japan trip" && b.archived && b.budget_agorot == Some(1_200_000)));
         s.remove_bag(trips).await.unwrap();
-        assert_eq!(s.list_bags().await.unwrap().len(), 1);
+        assert_eq!(s.list_bags().await.unwrap().len(), 2);
         assert!(s.bag_links().await.unwrap().is_empty());
         // The line still exists.
         assert!(s
@@ -891,8 +891,9 @@ mod tests {
     #[tokio::test]
     async fn business_tags_and_links_follow_their_rows() {
         let s = crate::testdb::fresh().await;
-        let a = s.insert_business("A", false).await.unwrap();
-        let g = s.insert_business("General", true).await.unwrap();
+        let a = s.insert_business("A").await.unwrap();
+        // The root stands for the shared costs.
+        let g = s.list_businesses().await.unwrap()[0].id;
         let t1 = s
             .create_transaction(&tx("2026-10-03", -100, None))
             .await
@@ -919,10 +920,10 @@ mod tests {
         // Removing a business drops what pointed at it.
         s.set_transactions_business(&[t2], Some(a)).await.unwrap();
         s.remove_business(a).await.unwrap();
-        s.remove_business(g).await.unwrap();
         let l = s.business_links().await.unwrap();
-        assert!(l.transactions.is_empty() && l.categories.is_empty());
-        assert!(s.list_businesses().await.unwrap().is_empty());
+        assert!(l.transactions.is_empty());
+        assert_eq!(l.categories, vec![(7, g)]);
+        assert_eq!(s.list_businesses().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
