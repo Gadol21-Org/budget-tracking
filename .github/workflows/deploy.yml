@@ -40,8 +40,6 @@ jobs:
           context: .
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           push: ${{ github.event_name != 'pull_request' }}
-          # Production image only: staging (staging.yml) does not set this, so it has no Clarity.
-          build-args: VITE_ENABLE_CLARITY=true
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
