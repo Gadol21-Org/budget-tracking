@@ -71,7 +71,18 @@ export function bagFamily(s: BagState, id: number): Set<number> {
 export function parentChoices(s: BagState, id: number | null): Bag[] {
   const own = id != null ? bagFamily(s, id) : new Set<number>();
   const height = id != null ? bagHeight(s, id) : 1;
-  return s.bags.filter((b) => !own.has(b.id) && bagDepth(s, b.id) + height <= MAX_DEPTH);
+  // Anything put under the business root would become a business, so the root and the businesses are not offered.
+  return s.bags.filter((b) => !own.has(b.id) && !isBusinessBag(s, b.id) && bagDepth(s, b.id) + height <= MAX_DEPTH);
+}
+
+/** The bag all businesses sit under (named עסקים, fixed). */
+export const businessRoot = (s: BagState) => s.bags.find((b) => b.role === "business_root");
+
+/** The root itself, or a business (a bag directly under it). Businesses are managed with their own screens and chips, so the bag pickers and chips leave them out. */
+export function isBusinessBag(s: BagState, id: number): boolean {
+  const b = bagById(s, id);
+  const root = businessRoot(s);
+  return !!b && !!root && (b.id === root.id || b.parent_id === root.id);
 }
 
 /** The lines in the bag or in any bag under it, each once. */
@@ -81,9 +92,10 @@ export function bagTransactions(s: BagState, txs: Transaction[], id: number): Tr
 }
 
 /** What the lines cost net: expenses minus income (a refund inside a bag lowers it). */
-export const netSpent = (ts: Transaction[]) => -ts.reduce((sum, t) => sum + t.amount_agorot, 0);
+export const netSpent = (ts: Transaction[]) => 0 - ts.reduce((sum, t) => sum + t.amount_agorot, 0);
 
-export const bagsOf = (s: BagState, t: Transaction): number[] => (t.id > 0 ? (s.tx.get(t.id) ?? []) : []);
+/** The bags a line is in, as bags (a business shows by its own chip, so it is left out). */
+export const bagsOf = (s: BagState, t: Transaction): number[] => (t.id > 0 ? (s.tx.get(t.id) ?? []) : []).filter((b) => !isBusinessBag(s, b));
 
 const dayMs = 86_400_000;
 const parse = (d: string) => Date.parse(`${d}T00:00:00Z`);

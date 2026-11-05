@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import { bagPath, childBags, isArchived, type BagState } from "../bags";
+import { bagPath, businessRoot, childBags, isArchived, isBusinessBag, type BagState } from "../bags";
 import { openReactDialog } from "../components/openReactDialog";
 import { state } from "../state";
 import { load } from "../sync";
@@ -40,17 +40,24 @@ interface ChoiceProps {
   only?: number[];
   /** Whether a bag can be made on the spot. */
   canCreate: boolean;
+  /** Offer the businesses too, under the fixed עסקים node: a line is in at most one of them, so ticking one unticks the other. */
+  biz?: { value: number | null | undefined; onPick: (id: number | null) => void };
 }
 
 /** The searchable tree of bags with a checkbox each, and "create" for a typed name that matches none. Used in a dialog and inside the transaction form. */
-export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
+export function BagChoice({ picked, onToggle, only, canCreate, biz }: ChoiceProps) {
   const [query, setQuery] = useState("");
   /** Top-level bags start closed, so the list stays short; the ones holding a ticked bag start open. */
-  const [opened, setOpened] = useState(() => ancestorsOf(state.bags, picked));
+  const root = businessRoot(state.bags);
+  const [opened, setOpened] = useState(() => {
+    const o = ancestorsOf(state.bags, picked);
+    if (biz?.value != null && root) o.add(root.id);
+    return o;
+  });
   const [, setTick] = useState(0);
   const [err, setErr] = useState("");
   const s = state.bags;
-  const offered = (id: number) => (only ? only.includes(id) : !isArchived(s, id) || picked.has(id));
+  const offered = (id: number) => (biz ? true : !isBusinessBag(s, id)) && (only ? only.includes(id) : !isArchived(s, id) || picked.has(id));
   const q = query.trim().toLowerCase();
   const rows = ordered(s, null, 0, (id) => offered(id) && (!q || bagPath(s, id).toLowerCase().includes(q)), (id) => !!q || opened.has(id));
   const toggleOpen = (id: number) =>
@@ -60,6 +67,18 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
       return n;
     });
   const exact = s.bags.some((b) => b.parent_id == null && b.name === query.trim());
+  const createBusiness = async () => {
+    try {
+      setErr("");
+      const id = await api.addBusiness(query.trim(), false);
+      await load();
+      biz?.onPick(id);
+      setQuery("");
+      setTick((n) => n + 1);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
   const create = async () => {
     try {
       setErr("");
@@ -80,6 +99,8 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
           const b = s.bags.find((x) => x.id === id)!;
           const hasKids = childBags(s, id).some((k) => offered(k.id) || hasKept(s, k.id, offered));
           const isOpen = !!q || opened.has(id);
+          const isRoot = !!root && id === root.id;
+          const isBiz = !!biz && !isRoot && isBusinessBag(s, id);
           return (
             <label key={id} className="bagnode" style={{ paddingInlineStart: 4 + depth * 22 }}>
               {hasKids && !q ? (
@@ -89,9 +110,13 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
               ) : (
                 <span className="bagtoggle" aria-hidden="true" />
               )}
-              <input type="checkbox" className="selbox" checked={picked.has(id)} onChange={() => onToggle(id)} />
+              {isRoot ? (
+                <span className="selbox" aria-hidden="true" />
+              ) : (
+                <input type="checkbox" className="selbox" checked={isBiz ? biz.value === id : picked.has(id)} onChange={() => (isBiz ? biz.onPick(biz.value === id ? null : id) : onToggle(id))} />
+              )}
               <span className="grow">
-                <span className="name">{b.name}</span>
+                <span className="name">{isRoot || isBiz ? `💼 ${b.name}` : b.name}</span>
                 {q && b.parent_id != null && <span className="muted small">{` · ${bagPath(s, id)}`}</span>}
                 {isArchived(s, id) && <span className="muted small"> · בארכיון</span>}
               </span>
@@ -103,6 +128,11 @@ export function BagChoice({ picked, onToggle, only, canCreate }: ChoiceProps) {
       {canCreate && query.trim() && !exact && (
         <button type="button" className="btn" onClick={() => void create()}>
           {`＋ יצירת טיוג "${query.trim()}"`}
+        </button>
+      )}
+      {biz && query.trim() && !s.bags.some((b) => isBusinessBag(s, b.id) && b.name === query.trim()) && (
+        <button type="button" className="btn" onClick={() => void createBusiness()}>
+          {`＋ יצירת עסק "${query.trim()}"`}
         </button>
       )}
       <div className="error">{err}</div>

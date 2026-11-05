@@ -127,6 +127,9 @@ pub struct Bag {
     /// Optional dates (YYYY-MM-DD), shown with the bag.
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    /// `business_root` for the bag every business sits under, `business_general` for the business
+    /// that holds shared costs; none for any other bag.
+    pub role: Option<String>,
 }
 
 /// What a bag is created or changed to.

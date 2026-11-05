@@ -1,6 +1,6 @@
 import { type ReactElement, useState } from "react";
 import { api, parseAgorot, type Bag } from "../api";
-import { bagById, bagFamily, isArchived, bagPath, bagTransactions, childBags, dailyAverage, dateRange, netSpent, parentChoices } from "../bags";
+import { bagById, bagFamily, businessRoot, isArchived, isBusinessBag, bagPath, bagTransactions, childBags, dailyAverage, dateRange, netSpent, parentChoices } from "../bags";
 import { BackButton } from "../components/BackButton";
 import { DateField } from "../components/DateField";
 import { DialogForm } from "../components/DialogForm";
@@ -110,9 +110,14 @@ function BagsScreen() {
       )}
       {archive && !archived.length && <div className="empty">אין טיוגים בארכיון</div>}
       {(archive ? archived.length > 0 : active.length > 0) && <div className="card rows">{archive ? <ArchivedList /> : <Tree parent={null} depth={0} archived={false} />}</div>}
-      <button className="btn" onClick={() => openBagForm()}>
-        ＋ טיוג חדש
-      </button>
+      <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <button className="btn" onClick={() => openBagForm()}>
+          ＋ טיוג חדש
+        </button>
+        <button className="btn" onClick={() => openBusinessForm()}>
+          ＋ עסק חדש
+        </button>
+      </div>
       {state.bags.bags.length > 0 && <NoteOverlap />}
     </div>
   );
@@ -142,6 +147,8 @@ function BagScreen() {
   const rows = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
   const max = rows[0]?.[1] ?? 1;
   const budget = bag.budget_agorot;
+  // A business is a bag under the business root; it also has profit and loss figures of its own.
+  const isBusiness = bag.parent_id != null && bag.parent_id === businessRoot(state.bags)?.id;
   const days = [...new Set(txs.map((t) => t.date))];
   return (
     <div className="dash">
@@ -152,10 +159,17 @@ function BagScreen() {
           <div className="name">{bag.name}</div>
           {dateRange(bag) && <div className="muted small">{dateRange(bag)}</div>}
         </div>
-        <button className="del" title="עריכה" onClick={() => openBagForm(bag)}>
-          ✎
-        </button>
+        {bag.role !== "business_root" && (
+          <button className="del" title="עריכה" onClick={() => openBagForm(bag)}>
+            ✎
+          </button>
+        )}
       </div>
+      {isBusiness && (
+        <button className="btn bizlink" onClick={() => ((state.bizView = { tab: "overview", scope: bag.id }), go("business"))}>
+          לדוח רווח והפסד של העסק ›
+        </button>
+      )}
       <div className="kpis">
         <div className="kpi">
           <div className="l">סה״כ</div>
@@ -253,6 +267,7 @@ function BagForm({ bag, parentId, close }: { bag?: Bag; parentId: number | null;
   const [end, setEnd] = useState(bag?.end_date ?? "");
   const [budget, setBudget] = useState(bag?.budget_agorot != null ? String(bag.budget_agorot / 100) : "");
   const [archived, setArchived] = useState(bag?.archived ?? false);
+  const businessBag = !!bag && isBusinessBag(state.bags, bag.id);
   const choices = parentChoices(state.bags, bag?.id ?? null);
   const input = () => ({
     name: name.trim(),
@@ -282,8 +297,9 @@ function BagForm({ bag, parentId, close }: { bag?: Bag; parentId: number | null;
         <input type="text" required maxLength={100} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <Field label="טיוג אב">
-        <select value={parent} onChange={(e) => setParent(e.target.value)}>
+        <select value={parent} disabled={businessBag} onChange={(e) => setParent(e.target.value)}>
           <option value="">ללא (טיוג ראשי)</option>
+          {businessBag && <option value={parent}>{bagPath(state.bags, Number(parent))}</option>}
           {choices.map((b) => (
             <option key={b.id} value={String(b.id)}>
               {bagPath(state.bags, b.id)}
@@ -327,6 +343,36 @@ function BagForm({ bag, parentId, close }: { bag?: Bag; parentId: number | null;
     </DialogForm>
   );
 }
+
+/** A new business is a bag directly under the fixed עסקים bag; one of them may hold the shared costs. */
+function BusinessForm({ close }: { close: () => void }) {
+  const [name, setName] = useState("");
+  const [general, setGeneral] = useState(false);
+  const hasGeneral = state.biz.businesses.some((b) => b.is_general);
+  return (
+    <DialogForm
+      title="עסק חדש"
+      submitLabel="יצירה"
+      submitDisabled={!name.trim()}
+      close={close}
+      onSubmit={async () => {
+        await api.addBusiness(name.trim(), general);
+        close();
+        await load();
+      }}
+    >
+      <Field label="שם">
+        <input type="text" required maxLength={60} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <label className="archiverow">
+        <input type="checkbox" disabled={hasGeneral} checked={general} onChange={(e) => setGeneral(e.target.checked)} />
+        <span>{hasGeneral ? "כבר יש עסק משותף" : "הוצאות משותפות (לא שייכות לעסק מסוים)"}</span>
+      </label>
+    </DialogForm>
+  );
+}
+
+const openBusinessForm = () => openReactDialog((close) => <BusinessForm close={close} />);
 
 export function openBagForm(bag?: Bag, parentId: number | null = null) {
   openReactDialog((close) => <BagForm bag={bag} parentId={parentId} close={close} />);

@@ -4,7 +4,7 @@ import { emptyBiz, type BizData, type BizView } from "./business";
 import { emptyBags, type BagState } from "./bags";
 import { type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people" | "bags" | "bag";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "currencies" | "people" | "bags" | "bag";
 
 export const root = document.getElementById("app")!;
 

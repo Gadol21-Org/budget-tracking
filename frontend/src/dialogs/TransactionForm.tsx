@@ -3,7 +3,6 @@ import { api, currencyInfo, currencySymbol, decimals, formatRate, parseMinor, ty
 import { bizName, businessRequired, categoryBusiness } from "../business";
 import { bagsOf } from "../bags";
 import { BagField } from "../components/BagField";
-import { BusinessChips } from "../components/BusinessChips";
 import { type CategoryChoice, CategoryPicker } from "../components/CategoryPicker";
 import { Combo } from "../components/Combo";
 import { DateField } from "../components/DateField";
@@ -135,7 +134,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
   /** A new line in a category that needs a business must pick one (None is a choice); nothing is chosen for it. */
   const needsBiz = (c: number | null, repeating: boolean) => !existing && c != null && !repeating && businessRequired(state.biz, state.cats, c);
   const bizRequired = needsBiz(cat, repeat);
-  const bizHidden = state.biz.businesses.length === 0 || repeat;
+  const bizHidden = repeat;
 
   const changeChoice = (next: CategoryChoice) => {
     setChoice(next);
@@ -378,10 +377,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
       <Field label="הערה">
         <input type="text" placeholder="אופציונלי" maxLength={35} value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
-      <div style={{ display: bizHidden ? "none" : "" }}>
-        <BusinessChips biz={state.biz} value={bizValue} onChange={setBizValue} required={bizRequired} givenName={givenName} collapsed />
-      </div>
-      {!repeat && <BagField value={bagIds} onChange={setBagIds} />}
+      {!repeat && <BagField value={bagIds} onChange={setBagIds} biz={bizHidden ? undefined : { value: bizValue, onChange: setBizValue, required: bizRequired, givenName }} />}
       {/* Only the checkbox (inside a finger-sized hit box) toggles; the row and its text are inert. */}
       {!existing && (
         <div className="repeat-row">

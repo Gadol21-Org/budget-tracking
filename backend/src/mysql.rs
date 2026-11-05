@@ -21,7 +21,7 @@ use crate::storage::{
     RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
 };
 
-const SCHEMA: [&str; 17] = [
+const SCHEMA: [&str; 15] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -96,15 +96,6 @@ const SCHEMA: [&str; 17] = [
          user_email VARCHAR(254) NULL,
          INDEX idx_change_log_at (at)
      )",
-    "CREATE TABLE IF NOT EXISTS businesses (
-         id BIGINT AUTO_INCREMENT PRIMARY KEY,
-         name VARCHAR(400) NOT NULL,
-         is_general BOOLEAN NOT NULL DEFAULT FALSE
-     )",
-    "CREATE TABLE IF NOT EXISTS transaction_business (
-         transaction_id BIGINT PRIMARY KEY,
-         business_id BIGINT NOT NULL
-     )",
     "CREATE TABLE IF NOT EXISTS category_business (
          category_id BIGINT PRIMARY KEY,
          business_id BIGINT NOT NULL
@@ -137,7 +128,8 @@ const SCHEMA: [&str; 17] = [
          archived BOOLEAN NOT NULL DEFAULT FALSE,
          budget_agorot BIGINT NULL,
          start_date VARCHAR(10) NULL,
-         end_date VARCHAR(10) NULL
+         end_date VARCHAR(10) NULL,
+         role VARCHAR(20) NULL
      )",
     "CREATE TABLE IF NOT EXISTS transaction_bags (
          transaction_id BIGINT NOT NULL,
@@ -230,8 +222,136 @@ impl MySqlStorage {
         let _ = sqlx::query("ALTER TABLE change_log ADD COLUMN user_email VARCHAR(254) NULL")
             .execute(&pool)
             .await;
+        // Bags created before businesses became bags; fails harmlessly if present.
+        let _ = sqlx::query("ALTER TABLE bags ADD COLUMN role VARCHAR(20) NULL")
+            .execute(&pool)
+            .await;
+        migrate_businesses(&pool).await?;
         Ok(Self { pool })
     }
+}
+
+/// The bag every business sits under. Its name is fixed; the `role` column is what marks it.
+pub const BUSINESS_ROOT_NAME: &str = "עסקים";
+const ROLE_ROOT: &str = "business_root";
+const ROLE_GENERAL: &str = "business_general";
+const MIGRATED_KEY: &str = "businesses_as_bags";
+
+async fn has_table(pool: &MySqlPool, name: &str) -> Result<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_name = ?",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await?;
+    Ok(n > 0)
+}
+
+/// Businesses used to have tables of their own. Each one becomes a bag under the business root, its
+/// tags become bag assignments and the category links point at the new bag ids. Runs once (the
+/// data moves in one transaction together with a marker); the old tables are renamed, not dropped,
+/// so nothing is lost if something looks wrong afterwards.
+async fn migrate_businesses(pool: &MySqlPool) -> Result<()> {
+    let done: Option<String> = sqlx::query_scalar("SELECT v FROM app_settings WHERE k = ?")
+        .bind(MIGRATED_KEY)
+        .fetch_optional(pool)
+        .await?;
+    if done.is_none() {
+        let mut tx = pool.begin().await?;
+        if has_table(pool, "businesses").await? {
+            let old = sqlx::query("SELECT id, name, is_general FROM businesses ORDER BY id")
+                .fetch_all(&mut *tx)
+                .await?;
+            if !old.is_empty() {
+                let root = ensure_root(&mut tx).await?;
+                let mut map: HashMap<i64, i64> = HashMap::new();
+                for r in &old {
+                    let general: bool = r.try_get("is_general")?;
+                    let id =
+                        sqlx::query("INSERT INTO bags (name, parent_id, role) VALUES (?, ?, ?)")
+                            .bind(r.try_get::<String, _>("name")?)
+                            .bind(root)
+                            .bind(general.then_some(ROLE_GENERAL))
+                            .execute(&mut *tx)
+                            .await?
+                            .last_insert_id() as i64;
+                    map.insert(r.try_get("id")?, id);
+                }
+                if has_table(pool, "transaction_business").await? {
+                    let tags =
+                        sqlx::query("SELECT transaction_id, business_id FROM transaction_business")
+                            .fetch_all(&mut *tx)
+                            .await?;
+                    for t in tags {
+                        if let Some(bag) = map.get(&t.try_get::<i64, _>("business_id")?) {
+                            sqlx::query("INSERT IGNORE INTO transaction_bags (transaction_id, bag_id) VALUES (?, ?)")
+                                .bind(t.try_get::<i64, _>("transaction_id")?)
+                                .bind(bag)
+                                .execute(&mut *tx)
+                                .await?;
+                        }
+                    }
+                }
+                let links = sqlx::query("SELECT category_id, business_id FROM category_business")
+                    .fetch_all(&mut *tx)
+                    .await?;
+                for l in links {
+                    let cat: i64 = l.try_get("category_id")?;
+                    match map.get(&l.try_get::<i64, _>("business_id")?) {
+                        Some(bag) => sqlx::query(
+                            "UPDATE category_business SET business_id = ? WHERE category_id = ?",
+                        )
+                        .bind(bag)
+                        .bind(cat)
+                        .execute(&mut *tx)
+                        .await?,
+                        None => {
+                            sqlx::query("DELETE FROM category_business WHERE category_id = ?")
+                                .bind(cat)
+                                .execute(&mut *tx)
+                                .await?
+                        }
+                    };
+                }
+            }
+        }
+        sqlx::query("INSERT INTO app_settings (k, v) VALUES (?, '1')")
+            .bind(MIGRATED_KEY)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+    for (old, new) in [
+        ("businesses", "businesses_migrated"),
+        ("transaction_business", "transaction_business_migrated"),
+    ] {
+        if has_table(pool, old).await? && !has_table(pool, new).await? {
+            sqlx::query(sqlx::AssertSqlSafe(format!("RENAME TABLE {old} TO {new}")))
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// The id of the business root bag, made if there is none yet.
+async fn ensure_root(conn: &mut sqlx::MySqlConnection) -> Result<i64> {
+    let id: Option<i64> = sqlx::query_scalar("SELECT id FROM bags WHERE role = ? LIMIT 1")
+        .bind(ROLE_ROOT)
+        .fetch_optional(&mut *conn)
+        .await?;
+    if let Some(id) = id {
+        return Ok(id);
+    }
+    Ok(
+        sqlx::query("INSERT INTO bags (name, parent_id, role) VALUES (?, NULL, ?)")
+            .bind(BUSINESS_ROOT_NAME)
+            .bind(ROLE_ROOT)
+            .execute(&mut *conn)
+            .await?
+            .last_insert_id() as i64,
+    )
 }
 
 /// Keep the foreign-currency details with a transaction that was just inserted.
@@ -307,32 +427,41 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
+    // Businesses are the bags directly under the business root.
     async fn list_businesses(&self) -> Result<Vec<Business>> {
-        let rows = sqlx::query("SELECT id, name, is_general FROM businesses ORDER BY id")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT b.id, b.name, b.role FROM bags b
+             JOIN bags r ON r.id = b.parent_id AND r.role = ? ORDER BY b.id",
+        )
+        .bind(ROLE_ROOT)
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
             .map(|r| {
                 Ok(Business {
                     id: r.try_get("id")?,
                     name: r.try_get("name")?,
-                    is_general: r.try_get("is_general")?,
+                    is_general: r.try_get::<Option<String>, _>("role")?.as_deref()
+                        == Some(ROLE_GENERAL),
                 })
             })
             .collect()
     }
 
     async fn insert_business(&self, name: &str, is_general: bool) -> Result<i64> {
-        let r = sqlx::query("INSERT INTO businesses (name, is_general) VALUES (?, ?)")
+        let mut conn = self.pool.acquire().await?;
+        let root = ensure_root(&mut conn).await?;
+        let r = sqlx::query("INSERT INTO bags (name, parent_id, role) VALUES (?, ?, ?)")
             .bind(name)
-            .bind(is_general)
-            .execute(&self.pool)
+            .bind(root)
+            .bind(is_general.then_some(ROLE_GENERAL))
+            .execute(&mut *conn)
             .await?;
         Ok(r.last_insert_id() as i64)
     }
 
     async fn rename_business(&self, id: i64, name: &str) -> Result<()> {
-        sqlx::query("UPDATE businesses SET name = ? WHERE id = ?")
+        sqlx::query("UPDATE bags SET name = ? WHERE id = ?")
             .bind(name)
             .bind(id)
             .execute(&self.pool)
@@ -341,23 +470,19 @@ impl Storage for MySqlStorage {
     }
 
     async fn remove_business(&self, id: i64) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        for q in [
-            "DELETE FROM transaction_business WHERE business_id = ?",
-            "DELETE FROM category_business WHERE business_id = ?",
-            "DELETE FROM businesses WHERE id = ?",
-        ] {
-            sqlx::query(q).bind(id).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(())
+        self.remove_bag(id).await
     }
 
     async fn business_links(&self) -> Result<BusinessLinks> {
+        // A line in several businesses counts in the first of them: the figures know one business per line.
         let t = sqlx::query(
-            "SELECT b.transaction_id, b.business_id FROM transaction_business b
-             JOIN transactions t ON t.id = b.transaction_id",
+            "SELECT tb.transaction_id, MIN(tb.bag_id) AS bag_id FROM transaction_bags tb
+             JOIN transactions t ON t.id = tb.transaction_id
+             JOIN bags b ON b.id = tb.bag_id
+             JOIN bags r ON r.id = b.parent_id AND r.role = ?
+             GROUP BY tb.transaction_id ORDER BY tb.transaction_id",
         )
+        .bind(ROLE_ROOT)
         .fetch_all(&self.pool)
         .await?;
         let c = sqlx::query("SELECT category_id, business_id FROM category_business")
@@ -520,25 +645,24 @@ impl Storage for MySqlStorage {
     async fn set_transactions_business(&self, ids: &[i64], business: Option<i64>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         for id in ids {
-            match business {
-                Some(b) => {
-                    sqlx::query(
-                        "INSERT INTO transaction_business (transaction_id, business_id)
-                         VALUES (?, ?)
-                         ON DUPLICATE KEY UPDATE business_id = VALUES(business_id)",
-                    )
-                    .bind(id)
-                    .bind(b)
-                    .execute(&mut *tx)
-                    .await?
-                }
-                None => {
-                    sqlx::query("DELETE FROM transaction_business WHERE transaction_id = ?")
-                        .bind(id)
-                        .execute(&mut *tx)
-                        .await?
-                }
-            };
+            // A line is tagged with one business: take it out of the others first.
+            sqlx::query(
+                "DELETE FROM transaction_bags WHERE transaction_id = ? AND bag_id IN
+                   (SELECT b.id FROM bags b JOIN bags r ON r.id = b.parent_id AND r.role = ?)",
+            )
+            .bind(id)
+            .bind(ROLE_ROOT)
+            .execute(&mut *tx)
+            .await?;
+            if let Some(b) = business {
+                sqlx::query(
+                    "INSERT IGNORE INTO transaction_bags (transaction_id, bag_id) VALUES (?, ?)",
+                )
+                .bind(id)
+                .bind(b)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
         Ok(())
@@ -547,7 +671,7 @@ impl Storage for MySqlStorage {
     async fn list_bags(&self) -> Result<Vec<Bag>> {
         let rows = sqlx::query(
             "SELECT id, name, parent_id, CAST(archived AS SIGNED) AS archived, budget_agorot,
-                    start_date, end_date FROM bags ORDER BY id",
+                    start_date, end_date, role FROM bags ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -561,6 +685,7 @@ impl Storage for MySqlStorage {
                     budget_agorot: r.try_get("budget_agorot")?,
                     start_date: r.try_get("start_date")?,
                     end_date: r.try_get("end_date")?,
+                    role: r.try_get("role")?,
                 })
             })
             .collect()
@@ -617,6 +742,7 @@ impl Storage for MySqlStorage {
         for g in gone {
             for q in [
                 "DELETE FROM transaction_bags WHERE bag_id = ?",
+                "DELETE FROM category_business WHERE business_id = ?",
                 "DELETE FROM bags WHERE id = ?",
             ] {
                 sqlx::query(q).bind(g).execute(&mut *tx).await?;
@@ -1645,5 +1771,109 @@ mod tests {
         let child = cats.iter().find(|c| c.name == "Rent").unwrap();
         assert_eq!(child.parent_id, Some(parent.id));
         assert_eq!(s.list_transactions().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn existing_businesses_become_bags_once() {
+        let s = crate::testdb::fresh().await;
+        let t = s
+            .create_transaction(&NewTransaction {
+                date: "2026-10-03".into(),
+                amount_agorot: -100,
+                category_id: None,
+                payment_method_id: None,
+                note: String::new(),
+            })
+            .await
+            .unwrap();
+        // The tables an older version made, with data in them.
+        for q in [
+            "CREATE TABLE businesses (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(400) NOT NULL, is_general BOOLEAN NOT NULL DEFAULT FALSE)",
+            "CREATE TABLE transaction_business (transaction_id BIGINT PRIMARY KEY, business_id BIGINT NOT NULL)",
+            "INSERT INTO businesses (id, name, is_general) VALUES (7, 'Shop', 0), (9, 'Shared', 1)",
+            "INSERT INTO category_business (category_id, business_id) VALUES (5, 9)",
+            "DELETE FROM app_settings WHERE k = 'businesses_as_bags'",
+        ] {
+            sqlx::query(q).execute(&s.pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO transaction_business (transaction_id, business_id) VALUES (?, 7)")
+            .bind(t)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+
+        migrate_businesses(&s.pool).await.unwrap();
+        let biz = s.list_businesses().await.unwrap();
+        assert_eq!(biz.len(), 2);
+        let (shop, shared) = (&biz[0], &biz[1]);
+        assert!(shop.name == "Shop" && !shop.is_general);
+        assert!(shared.name == "Shared" && shared.is_general);
+        // Ids are the bags' ids now, and what pointed at the old ones follows.
+        let links = s.business_links().await.unwrap();
+        assert_eq!(links.transactions, vec![(t, shop.id)]);
+        assert_eq!(links.categories, vec![(5, shared.id)]);
+        let bags = s.list_bags().await.unwrap();
+        let root = bags
+            .iter()
+            .find(|b| b.role.as_deref() == Some("business_root"))
+            .unwrap();
+        assert_eq!(root.name, BUSINESS_ROOT_NAME);
+        assert!(bags.iter().filter(|b| b.parent_id == Some(root.id)).count() == 2);
+        // The old tables are kept under another name.
+        assert!(!has_table(&s.pool, "businesses").await.unwrap());
+        assert!(has_table(&s.pool, "businesses_migrated").await.unwrap());
+        // A second run changes nothing.
+        migrate_businesses(&s.pool).await.unwrap();
+        assert_eq!(s.list_businesses().await.unwrap().len(), 2);
+        assert_eq!(s.list_bags().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn tagging_a_business_is_a_bag_assignment_and_keeps_one_business_per_line() {
+        let s = crate::testdb::fresh().await;
+        let t = s
+            .create_transaction(&NewTransaction {
+                date: "2026-10-03".into(),
+                amount_agorot: -100,
+                category_id: None,
+                payment_method_id: None,
+                note: String::new(),
+            })
+            .await
+            .unwrap();
+        let a = s.insert_business("A", false).await.unwrap();
+        let b = s.insert_business("B", false).await.unwrap();
+        let plain = s
+            .insert_bag(&crate::storage::BagInput {
+                name: "Trip".into(),
+                parent_id: None,
+                archived: false,
+                budget_agorot: None,
+                start_date: None,
+                end_date: None,
+            })
+            .await
+            .unwrap();
+        s.assign_bags(&[t], &[plain, a], &[]).await.unwrap();
+        s.set_transactions_business(&[t], Some(b)).await.unwrap();
+        // Moved from A to B; the ordinary bag is untouched.
+        let in_bags: Vec<i64> = s
+            .bag_links()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|l| l.1)
+            .collect();
+        let mut expected = vec![plain, b];
+        expected.sort();
+        assert_eq!(in_bags, expected);
+        assert_eq!(s.business_links().await.unwrap().transactions, vec![(t, b)]);
+        s.set_transactions_business(&[t], None).await.unwrap();
+        assert_eq!(s.bag_links().await.unwrap(), vec![(t, plain)]);
+        // Removing a business removes its category links too.
+        s.set_category_business(3, Some(a)).await.unwrap();
+        s.remove_business(a).await.unwrap();
+        assert!(s.business_links().await.unwrap().categories.is_empty());
+        assert_eq!(s.list_businesses().await.unwrap().len(), 1);
     }
 }

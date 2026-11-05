@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { type Bag, type Transaction } from "../api";
-import { bagDepth, bagFamily, bagPath, bagTransactions, dailyAverage, isArchived, netSpent, parentChoices, toBagState } from "../bags";
+import { bagsOf, bagDepth, isBusinessBag, bagFamily, bagPath, bagTransactions, dailyAverage, isArchived, netSpent, parentChoices, toBagState } from "../bags";
 
-const bag = (id: number, name: string, parent: number | null = null, extra: Partial<Bag> = {}): Bag => ({ id, name, parent_id: parent, archived: false, budget_agorot: null, start_date: null, end_date: null, ...extra });
+const bag = (id: number, name: string, parent: number | null = null, extra: Partial<Bag> = {}): Bag => ({ id, name, parent_id: parent, archived: false, budget_agorot: null, start_date: null, end_date: null, role: null, ...extra });
 const tx = (id: number, amount: number): Transaction => ({ id, date: "2026-09-03", amount_agorot: amount, category_id: null, payment_method_id: null, note: "", sync_state: "synced" });
 
 // Vacations (1) › Japan 2026 (2) › Kyoto (3); Dinners (4)
@@ -65,5 +65,24 @@ describe("bags", () => {
     expect(dailyAverage(trip, 1_300_000, "2026-12-01")).toBe(100_000); // 13 days
     expect(dailyAverage(trip, 300_000, "2026-09-04")).toBe(100_000); // 3 days so far
     expect(dailyAverage(bag(2, "u"), 100, "2026-09-04")).toBeNull();
+  });
+
+  it("treats the business root and the bags directly under it as businesses, and keeps them out of ordinary bag choices", () => {
+    const s = toBagState({
+      bags: [bag(1, "עסקים", null, { role: "business_root" }), bag(2, "חנות", 1), bag(3, "חופשות"), bag(4, "מלאי", 2)],
+      links: [
+        [10, 2],
+        [10, 3],
+      ],
+    });
+    expect(isBusinessBag(s, 1)).toBe(true);
+    expect(isBusinessBag(s, 2)).toBe(true);
+    expect(isBusinessBag(s, 3)).toBe(false);
+    // A bag inside a business is an ordinary bag.
+    expect(isBusinessBag(s, 4)).toBe(false);
+    // A new bag cannot be put under the root or a business (it would become one).
+    expect(parentChoices(s, null).map((b) => b.id)).toEqual([3]);
+    // The line's business shows by its own chip: only the ordinary bag is listed here.
+    expect(bagsOf(s, tx(10, -100))).toEqual([3]);
   });
 });

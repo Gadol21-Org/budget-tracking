@@ -5,9 +5,9 @@ import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
 import { bagView, bagsView } from "./views/bags";
-import { businessDashboard, businessesView } from "./views/business";
+import { businessDashboard } from "./views/business";
 import { type View, root, state } from "./state";
-import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
+import { go, goBack, navigateInsights, showCategory } from "./nav";
 import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
@@ -25,7 +25,7 @@ const TABS: [View, string, string][] = [
   ["settings", "⚙️", "הגדרות"],
 ];
 
-const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people"];
 
 function openTab(view: View) {
   // Tapping the open tab goes back up from a category; opening another one starts at its top level.
@@ -93,7 +93,6 @@ const screens: Record<View, () => ReactElement> = {
   categories: categoriesView,
   settings: settingsView,
   business: businessScreen,
-  businesses: () => businessesView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
   bags: bagsView,
