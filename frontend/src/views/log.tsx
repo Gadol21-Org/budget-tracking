@@ -128,6 +128,8 @@ function LogScreen() {
       state.logMore = older.length === LOG_PAGE;
       render();
     } catch {
+      /* the list stays as it was; the button can be pressed again */
+    } finally {
       setLoadingMore(false);
     }
   };

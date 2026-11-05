@@ -107,8 +107,7 @@ function App() {
         <main data-view={state.view}>
           {banner && <div className="banner" role="status">{banner}</div>}
           {gap && <div className="banner" role="status">{gap}</div>}
-          {/* Keyed by the render count: every render starts the screen afresh, as the whole page used to be rebuilt. */}
-          <Fragment key={renders}>{screens[state.view]()}</Fragment>
+          <Fragment key={screenKey()}>{screens[state.view]()}</Fragment>
         </main>
       </div>
       <button className="fab" title="הוספת תנועה" onClick={() => openTransactionDialog()}>+</button>
@@ -118,8 +117,14 @@ function App() {
   );
 }
 
+/**
+ * What the screen shows, apart from its data. A screen starts afresh when this changes (another screen, period,
+ * category or tab); a data refresh keeps what was typed or picked on it (a search, a half-typed name, a message).
+ */
+const screenKey = () =>
+  JSON.stringify([state.view, state.filter?.id, state.period, state.kind, state.catKind, state.bizFilter, state.bizView, state.insights.dash, state.insights.cat, state.insights.sub, state.insights.side, state.insights.cmp]);
+
 const app = createRoot(root);
-let renders = 0;
 let renderedView: View | undefined;
 
 /** Show a plain message instead of the app (while loading, or when loading failed). */
@@ -129,7 +134,6 @@ export function showStatus(text: string, error = false) {
 
 export function render() {
   ensureHistory();
-  renders++;
   flushSync(() => app.render(<App />));
   // A different screen opens at its top, not wherever the previous one was scrolled; re-rendering the same one keeps the position.
   const entering = renderedView !== state.view;
