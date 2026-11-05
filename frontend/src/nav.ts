@@ -1,5 +1,4 @@
-import { el } from "./ui";
-import { type InsightsNav } from "./insights";
+import { type InsightsNav } from "./insights/model";
 import { type Screen, type View, state } from "./state";
 import { render } from "./render";
 import { load } from "./sync";
@@ -74,16 +73,19 @@ export function showCategory(id: number | null) {
   go("list", { id });
 }
 
-export function manageCtx() {
-  return { biz: state.biz, cats: state.cats, txs: state.txs, openDialog, reload: load, back: () => goBack("settings") };
+/** The summary's income / expense card: which side its category breakdown shows. */
+export function showSide(kind: "expense" | "income") {
+  state.kind = kind;
+  render();
 }
 
-/** Open a modal built by `build`, which gets a way to close it. */
-export function openDialog(build: (close: () => void) => HTMLElement) {
-  const dlg = el("dialog");
-  dlg.append(build(() => dlg.close()));
-  dlg.addEventListener("close", () => dlg.remove());
-  document.body.append(dlg);
-  trackDialog(dlg);
-  dlg.showModal();
+/** The business dashboards, always opening on the whole business (a single one is picked from there). */
+export function openBusinessDashboard() {
+  state.bizView = { tab: "overview", scope: "all" };
+  go("business");
 }
+
+export function manageCtx() {
+  return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("settings") };
+}
+

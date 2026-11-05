@@ -1,6 +1,4 @@
 import { categoryById, categoryName, categoryPath } from "./categories";
-import { formatShekels } from "./format";
-import { el } from "./ui";
 import { contains, monthOf } from "./period";
 import { decimals, type Fx, type Transaction } from "./api";
 import { state } from "./state";
@@ -14,8 +12,6 @@ export const fxOf = (t: Transaction): Fx | undefined => {
   const units = Math.abs(u.orig_minor) / 10 ** decimals(u.currency);
   return { transaction_id: 0, currency: u.currency, orig_minor: u.orig_minor, rate: Math.abs(t.amount_agorot) / 100 / units, rate_date: t.date, estimated: true };
 };
-
-export const money = (agorot: number, cls = "") => el("span", { className: `num ${cls}`.trim(), textContent: formatShekels(agorot) });
 
 export const catById = (id: number | null) => categoryById(state.cats, id);
 

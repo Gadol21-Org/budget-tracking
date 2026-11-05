@@ -1,0 +1,14 @@
+{
+  "name": "budget-frontend-lint",
+  "private": true,
+  "description": "The linter's own toolchain. typescript-eslint does not support TypeScript 7 yet (it needs <6.1), so it brings its own TypeScript here, apart from the one that type-checks and builds the app. Fold this into ../package.json once typescript-eslint supports TypeScript 7.",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}

@@ -1,4 +1,4 @@
-import { type InsightsNav, type InsightsState } from "./insights";
+import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
 import { type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
