@@ -8,7 +8,6 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG VITE_ENABLE_CLARITY
 RUN npm run build
 
 # cargo-chef splits the Rust build in two: `cook` compiles only the dependencies, from a
