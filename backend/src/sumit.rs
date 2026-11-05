@@ -652,7 +652,7 @@ pub async fn import_receipt(
             .map(|i| i.name.as_str())
             .collect();
         if !what.is_empty() {
-            note.push_str(&format!(": {}", what.join(", ")));
+            note.push_str(&format!(": {}", what.join(" | ")));
         }
         note.push(' ');
         note.push_str(&mark);
