@@ -34,6 +34,9 @@ body {
 button, input, select { font: inherit; color: inherit; }
 /* Native-app feel: controls and chrome are not selectable and don't flash on tap; typed text and notes stay selectable. */
 body { -webkit-tap-highlight-color: transparent; }
+/* A tap or click selects; it must not leave a focused/pressed look behind. Keyboard focus (:focus-visible) keeps its ring, and hover only applies where a real pointer can hover (touch browsers keep :hover stuck after a tap). */
+button:focus:not(:focus-visible), [role="button"]:focus:not(:focus-visible), select:focus { outline: none; }
+button:active, select:active { filter: none; }
 button, [role="button"], .nav, .fab, .daylabel, .stats .label { -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }
 .shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
@@ -66,7 +69,7 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .bar > span { display: block; height: 100%; background: var(--brand); }
 .daylabel { margin: 16px 4px 6px; font-size: .85rem; color: var(--muted); font-weight: 600; }
 .del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; padding: 8px; border-radius: 8px; }
-.del:hover { color: var(--expense); }
+@media (hover: hover) { .del:hover { color: var(--expense); } }
 .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 
 .nav {
@@ -164,7 +167,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 }
 
 .clickable { cursor: pointer; }
-.clickable:hover { background: var(--bg); }
+@media (hover: hover) { .clickable:hover { background: var(--bg); } }
 .clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .filterbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .filterbar .grow { flex: 1; min-width: 0; }
@@ -172,7 +175,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .filterbar .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filterbar .name { overflow-wrap: anywhere; }
 .periodbtn { border: 0; background: none; cursor: pointer; padding: 8px 12px; border-radius: 10px; }
-.periodbtn:hover { background: var(--surface); }
+@media (hover: hover) { .periodbtn:hover { background: var(--surface); } }
 .seg3 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg3 button { padding: 10px; border: 0; background: var(--bg); cursor: pointer; }
 .seg3 button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
@@ -198,7 +201,8 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
   box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
 .menu[hidden] { display: none; }
 .menu button { border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
-.menu button:hover, .menu button:focus-visible { background: var(--bg); }
+.menu button:focus-visible { background: var(--bg); }
+@media (hover: hover) { .menu button:hover { background: var(--bg); } }
 
 body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 :root { --pull: 0px; --pull-p: 0; }
@@ -248,7 +252,8 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .combo-list::-webkit-scrollbar { width: 6px; }
 .combo-list::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
 .combo-list button { display: block; width: 100%; border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
-.combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
+.combo-list button[aria-selected="true"] { background: var(--bg); }
+@media (hover: hover) { .combo-list button:hover { background: var(--bg); } }
 .combo-list button[aria-selected="true"] { font-weight: 700; }
 .combo-empty { padding: 10px 12px; color: var(--muted); }
 
