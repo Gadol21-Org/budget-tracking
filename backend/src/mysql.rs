@@ -130,15 +130,15 @@ const SCHEMA: [&str; 16] = [
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
      )",
-    "CREATE TABLE IF NOT EXISTS email_suggestions (
+    "CREATE TABLE IF NOT EXISTS email_items (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
-         gmail_id VARCHAR(64) NOT NULL,
+         message_id VARCHAR(128) NOT NULL,
          idx INT NOT NULL,
          status VARCHAR(12) NOT NULL,
          received VARCHAR(10) NOT NULL,
          sender VARCHAR(255) NOT NULL,
          subject VARCHAR(255) NOT NULL,
-         excerpt TEXT NOT NULL,
+         excerpt MEDIUMTEXT NOT NULL,
          date VARCHAR(10) NOT NULL,
          amount_minor BIGINT NOT NULL,
          currency VARCHAR(8) NOT NULL,
@@ -147,7 +147,7 @@ const SCHEMA: [&str; 16] = [
          confidence VARCHAR(8) NOT NULL,
          transaction_id BIGINT NULL,
          error TEXT NOT NULL,
-         UNIQUE KEY email_message (gmail_id, idx)
+         UNIQUE KEY email_message (message_id, idx)
      ) DEFAULT CHARSET=utf8mb4",
 ];
 
@@ -502,12 +502,12 @@ impl Storage for MySqlStorage {
         let mut added = 0;
         for r in rows {
             let res = sqlx::query(
-                "INSERT IGNORE INTO email_suggestions
-                   (gmail_id, idx, status, received, sender, subject, excerpt, date,
+                "INSERT IGNORE INTO email_items
+                   (message_id, idx, status, received, sender, subject, excerpt, date,
                     amount_minor, currency, category_id, note, confidence, error)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
-            .bind(&r.gmail_id)
+            .bind(&r.message_id)
             .bind(r.idx)
             .bind(&r.status)
             .bind(&r.received)
@@ -528,9 +528,9 @@ impl Storage for MySqlStorage {
         Ok(added)
     }
 
-    async fn email_message_seen(&self, gmail_id: &str) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM email_suggestions WHERE gmail_id = ? LIMIT 1")
-            .bind(gmail_id)
+    async fn email_message_seen(&self, message_id: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM email_items WHERE message_id = ? LIMIT 1")
+            .bind(message_id)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.is_some())
@@ -538,9 +538,9 @@ impl Storage for MySqlStorage {
 
     async fn list_email_suggestions(&self, status: Option<&str>) -> Result<Vec<EmailSuggestion>> {
         let rows = sqlx::query(
-            "SELECT id, gmail_id, idx, status, received, sender, subject, excerpt, date,
+            "SELECT id, message_id, idx, status, received, sender, subject, excerpt, date,
                     amount_minor, currency, category_id, note, confidence, transaction_id, error
-             FROM email_suggestions WHERE (? IS NULL OR status = ?)
+             FROM email_items WHERE (? IS NULL OR status = ?)
              ORDER BY received DESC, id DESC LIMIT 500",
         )
         .bind(status)
@@ -551,7 +551,7 @@ impl Storage for MySqlStorage {
             .map(|r| {
                 Ok(EmailSuggestion {
                     id: r.try_get("id")?,
-                    gmail_id: r.try_get("gmail_id")?,
+                    message_id: r.try_get("message_id")?,
                     idx: r.try_get::<i32, _>("idx")? as i64,
                     status: r.try_get("status")?,
                     received: r.try_get("received")?,
@@ -571,6 +571,15 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
+    async fn delete_email_suggestion(&self, id: i64) -> Result<bool> {
+        let res =
+            sqlx::query("DELETE FROM email_items WHERE id = ? AND status IN ('queued', 'error')")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     async fn resolve_email_suggestion(
         &self,
         id: i64,
@@ -578,7 +587,7 @@ impl Storage for MySqlStorage {
         transaction_id: Option<i64>,
     ) -> Result<bool> {
         let res = sqlx::query(
-            "UPDATE email_suggestions SET status = ?, transaction_id = ?, excerpt = ''
+            "UPDATE email_items SET status = ?, transaction_id = ?, excerpt = ''
              WHERE id = ? AND status = 'pending'",
         )
         .bind(status)

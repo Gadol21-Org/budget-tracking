@@ -1,0 +1,37 @@
+// Cloudflare Email Worker: hands every message sent to the routed address to the budget app.
+// Paste it into a Worker (Workers & Pages > Create > Hello World > Edit code), see deploy/EMAIL.md.
+//
+// Variables (Settings > Variables and Secrets):
+//   INBOUND_URL      https://<your-host>/api/email/inbound
+//   INBOUND_SECRET   (secret) the same value as EMAIL_INBOUND_SECRET on the server
+//   FALLBACK_ADDRESS (optional) a verified destination address; mail is forwarded there when the app is unreachable
+const MAX_BYTES = 1_500_000;
+
+export default {
+  async email(message, env) {
+    if (message.rawSize > MAX_BYTES) {
+      message.setReject("Message too large");
+      return;
+    }
+    const raw = await new Response(message.raw).arrayBuffer();
+    let status = 0;
+    try {
+      const res = await fetch(env.INBOUND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.INBOUND_SECRET}`, "content-type": "message/rfc822" },
+        body: raw,
+      });
+      status = res.status;
+    } catch (e) {
+      status = 599;
+    }
+    // 200: handled. 422: the app refused it (not an email, not from the expected forwarder): drop it quietly.
+    if (status === 200 || status === 422) return;
+    // The app is down or misconfigured: keep the mail instead of losing it.
+    if (env.FALLBACK_ADDRESS) {
+      await message.forward(env.FALLBACK_ADDRESS);
+      return;
+    }
+    throw new Error(`budget app answered ${status}`);
+  },
+};

@@ -163,8 +163,8 @@ export interface LogUser {
 /** One transaction an email seems to describe, waiting for a decision. */
 export interface EmailSuggestion {
   id: number;
-  gmail_id: string;
-  status: "pending" | "accepted" | "rejected" | "ignored" | "error";
+  message_id: string;
+  status: "pending" | "accepted" | "rejected" | "ignored" | "queued" | "error";
   received: string;
   sender: string;
   subject: string;
@@ -182,16 +182,16 @@ export interface EmailSuggestion {
 }
 
 export interface EmailStatus {
+  /** The server has EMAIL_INBOUND_SECRET. */
   configured: boolean;
   ai_configured: boolean;
-  connected: boolean;
-  email: string;
-  label: string;
-  push_enabled: boolean;
-  watch_expiration: string | null;
-  last_sync: string | null;
+  /** When a message last arrived (UTC, ISO 8601). */
+  last_received: string | null;
   last_error: string | null;
+  /** Suggestions waiting for a decision. */
   pending: number;
+  /** Messages the AI has not read yet. */
+  queued: number;
 }
 
 /** The proxy in front of the app answered instead of the app (bad gateway, tunnel down, ...): same as offline. */
@@ -285,10 +285,10 @@ export const api = {
     request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
   emailStatus: () => request<EmailStatus>("/api/email/status"),
   emailSuggestions: (status: string) => request<EmailSuggestion[]>(`/api/email/suggestions?status=${status}`),
-  /** Read the label now; with `days` also look back that far. */
-  emailSync: (days?: number) =>
-    request<{ messages: number; suggestions: number; ignored: number; failed: number }>("/api/email/sync", { method: "POST", body: JSON.stringify({ days }) }),
-  emailDisconnect: () => request<void>("/api/email/gmail/disconnect", { method: "POST" }),
+  /** Read the messages the AI could not read earlier (all, or one). */
+  emailRetry: (id?: number) => request<{ read: number }>(`/api/email/retry${id != null ? `?id=${id}` : ""}`, { method: "POST" }),
+  /** Drop a message that is waiting or could not be read. */
+  discardSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}`, { method: "DELETE" }),
   acceptSuggestion: (id: number, transactionId: number) =>
     request<void>(`/api/email/suggestions/${id}/accept`, { method: "POST", body: JSON.stringify({ transaction_id: transactionId }) }),
   rejectSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/reject`, { method: "POST" }),

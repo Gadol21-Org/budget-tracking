@@ -251,8 +251,8 @@ impl Storage for Logged {
     ) -> anyhow::Result<usize> {
         self.0.add_email_suggestions(rows).await
     }
-    async fn email_message_seen(&self, gmail_id: &str) -> anyhow::Result<bool> {
-        self.0.email_message_seen(gmail_id).await
+    async fn email_message_seen(&self, message_id: &str) -> anyhow::Result<bool> {
+        self.0.email_message_seen(message_id).await
     }
     async fn list_email_suggestions(
         &self,
@@ -269,6 +269,9 @@ impl Storage for Logged {
         self.0
             .resolve_email_suggestion(id, status, transaction_id)
             .await
+    }
+    async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool> {
+        self.0.delete_email_suggestion(id).await
     }
     // Businesses are a local view over the data, not logged.
     async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {

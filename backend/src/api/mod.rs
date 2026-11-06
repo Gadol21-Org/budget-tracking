@@ -162,13 +162,6 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             axum::routing::put(businesses::require_category_business),
         )
         .route("/api/email/status", get(email::status))
-        .route("/api/email/gmail/connect", get(email::connect))
-        .route("/api/email/gmail/callback", get(email::callback))
-        .route(
-            "/api/email/gmail/disconnect",
-            axum::routing::post(email::disconnect),
-        )
-        .route("/api/email/sync", axum::routing::post(email::sync))
         .route("/api/email/suggestions", get(email::list))
         .route(
             "/api/email/suggestions/:id/accept",
@@ -178,8 +171,17 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             "/api/email/suggestions/:id/reject",
             axum::routing::post(email::reject),
         )
-        // The one route Google calls itself: open to the internet, checks its caller.
-        .route("/api/email/push", axum::routing::post(email::push))
+        .route(
+            "/api/email/suggestions/:id",
+            axum::routing::delete(email::discard),
+        )
+        .route("/api/email/retry", axum::routing::post(email::retry))
+        // The one route the Cloudflare Worker calls: open to the internet, checks a shared secret.
+        .route(
+            "/api/email/inbound",
+            axum::routing::post(email::inbound)
+                .layer(axum::extract::DefaultBodyLimit::max(email::MAX_MAIL_BYTES)),
+        )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(

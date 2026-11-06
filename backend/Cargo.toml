@@ -22,5 +22,5 @@ jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 base64 = "0.23"
 rust-embed = { version = "8", features = ["debug-embed"] }
 mime_guess = "2"
-getrandom = "0.4"
+mail-parser = "0.11"
 

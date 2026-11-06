@@ -1,88 +1,54 @@
-//! Email suggestions: connecting Gmail, the review queue, and the Pub/Sub push endpoint.
+//! Email suggestions: the inbound endpoint (called by the Cloudflare Worker) and the review queue.
 
 use super::error::{internal, ApiError};
 use super::Db;
-use crate::email::{Service, Status, SyncSummary};
+use crate::email::{IngestError, Ingested, Service, Status};
 use crate::storage::EmailSuggestion;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Redirect;
 use axum::{Extension, Json};
-use base64::Engine;
 use serde::Deserialize;
 use std::sync::Arc;
 
 type Svc = Extension<Arc<Service>>;
 
+/// Mail larger than this is refused (the Worker also drops it).
+pub(crate) const MAX_MAIL_BYTES: usize = 2 * 1024 * 1024;
+
 pub(crate) async fn status(Extension(svc): Svc) -> Result<Json<Status>, ApiError> {
     svc.status().await.map(Json).map_err(internal)
 }
 
-/// Sends the browser to Google's consent screen.
-pub(crate) async fn connect(Extension(svc): Svc) -> Result<Redirect, ApiError> {
-    svc.consent_url()
-        .await
-        .map(|u| Redirect::to(&u))
-        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, format!("{e:#}")))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct Callback {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-}
-
-/// Google sends the browser back here. The answer is a redirect into the app, which shows the result.
-pub(crate) async fn callback(Extension(svc): Svc, Query(q): Query<Callback>) -> Redirect {
-    let fail = |msg: &str| {
-        let mut u = reqwest::Url::parse("http://x/").unwrap();
-        u.query_pairs_mut()
-            .append_pair("gmail_error", &crate::email::truncate(msg, 300));
-        Redirect::to(&format!("/?{}", u.query().unwrap_or("")))
-    };
-    if let Some(e) = q.error {
-        return fail(&format!("Google: {e}"));
-    }
-    let (Some(code), Some(state)) = (q.code, q.state) else {
-        return fail("missing code");
-    };
-    match svc.finish_connect(&code, &state).await {
-        Ok(()) => {
-            // First look at the label right away.
-            svc.nudge();
-            Redirect::to("/?gmail=connected")
-        }
-        Err(e) => {
-            tracing::warn!("connecting Gmail failed: {e:#}");
-            fail(&format!("{e:#}"))
-        }
-    }
-}
-
-pub(crate) async fn disconnect(Extension(svc): Svc) -> Result<StatusCode, ApiError> {
-    svc.disconnect().await.map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize, Default)]
-pub(crate) struct ScanBody {
-    days: Option<u32>,
-}
-
-/// Read the label now. With `days` it also looks back that far (the default sync only looks
-/// at what changed since the last one).
-pub(crate) async fn sync(
+/// The Worker posts the raw message here. Open to the internet (Cloudflare Access is bypassed for
+/// this one path), so everything starts with the shared secret in `Authorization: Bearer`.
+pub(crate) async fn inbound(
     Extension(svc): Svc,
-    body: Option<Json<ScanBody>>,
-) -> Result<Json<SyncSummary>, ApiError> {
-    let days = body.and_then(|b| b.0.days);
-    let r = match days {
-        Some(d) => svc.scan(Some(d)).await,
-        None => svc.sync().await,
-    };
-    r.map(Json)
-        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("{e:#}")))
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Ingested>, StatusCode> {
+    // Off (no secret configured) looks like no such route.
+    if svc.cfg.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let secret = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if !svc.authorized(secret) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    match svc.ingest(&body).await {
+        Ok(r) => Ok(Json(r)),
+        // Accepted but not usable: answer 2xx-free errors only for what the sender can fix.
+        Err(IngestError::Refused(why)) => {
+            tracing::info!("inbound email refused: {why}");
+            Err(StatusCode::UNPROCESSABLE_ENTITY)
+        }
+        Err(IngestError::Internal(e)) => {
+            tracing::warn!("inbound email failed: {e:#}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -146,39 +112,30 @@ fn resolved(r: anyhow::Result<bool>) -> Result<StatusCode, ApiError> {
     }
 }
 
-#[derive(Deserialize)]
-pub(crate) struct PushQuery {
-    token: Option<String>,
+/// Drop a message the AI could not read (queued or failed) without adding anything.
+pub(crate) async fn discard(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    match db.delete_email_suggestion(id).await.map_err(internal)? {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "nothing to remove".into(),
+        )),
+    }
 }
 
-/// Pub/Sub push endpoint. Open to the internet (it has to be reachable by Google), so it
-/// checks the caller first and does nothing with the message but start a sync.
-pub(crate) async fn push(
+/// Read the waiting messages now (all of them, or just one).
+pub(crate) async fn retry(
     Extension(svc): Svc,
-    Query(q): Query<PushQuery>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
-) -> StatusCode {
-    let bearer = headers.get("authorization").and_then(|v| v.to_str().ok());
-    if let Err(code) = svc.authorize_push(q.token.as_deref(), bearer).await {
-        return code;
-    }
-    // {"message":{"data":"<base64 of {emailAddress, historyId}>"}, ...}
-    let email = serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v["message"]["data"].as_str().map(String::from))
-        .and_then(|d| {
-            base64::engine::general_purpose::STANDARD
-                .decode(d.trim())
-                .ok()
-        })
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["emailAddress"].as_str().map(String::from));
-    // Answer 2xx either way so Pub/Sub does not keep retrying a message we cannot use.
-    if let Some(email) = email {
-        if svc.is_our_mailbox(&email).await {
-            svc.nudge();
-        }
-    }
-    StatusCode::NO_CONTENT
+    Query(q): Query<RetryQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let done = svc.retry_queued(q.id).await.map_err(internal)?;
+    Ok(Json(serde_json::json!({ "read": done })))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RetryQuery {
+    id: Option<i64>,
 }

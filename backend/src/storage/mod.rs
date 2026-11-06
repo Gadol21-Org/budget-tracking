@@ -27,8 +27,8 @@ pub trait Storage: Send + Sync {
     /// parsing the same message again can never duplicate or undo a decision. Returns how
     /// many rows were new.
     async fn add_email_suggestions(&self, rows: &[NewEmailSuggestion]) -> anyhow::Result<usize>;
-    /// Has any row for this Gmail message been stored (whatever its status)?
-    async fn email_message_seen(&self, gmail_id: &str) -> anyhow::Result<bool>;
+    /// Has any row for this email message been stored (whatever its status)?
+    async fn email_message_seen(&self, message_id: &str) -> anyhow::Result<bool>;
     /// Suggestions with the given status (all of them when None), newest first.
     async fn list_email_suggestions(
         &self,
@@ -42,6 +42,8 @@ pub trait Storage: Send + Sync {
         status: &str,
         transaction_id: Option<i64>,
     ) -> anyhow::Result<bool>;
+    /// Remove a `queued` or `error` row (before its message is parsed again). False otherwise.
+    async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
     async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;

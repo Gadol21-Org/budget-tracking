@@ -159,8 +159,8 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Gmail: only when GMAIL_CLIENT_ID / _SECRET / _REDIRECT_URI are set. Polls as a fallback
-    // for missed pushes and keeps the push watch renewed.
+    // Email to transactions: only when EMAIL_INBOUND_SECRET is set. Retries once a day what the
+    // AI could not read.
     let email = email::Service::from_env(db.clone());
     if email.cfg.is_some() {
         tokio::spawn(email.clone().run_background());

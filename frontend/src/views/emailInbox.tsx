@@ -23,6 +23,7 @@ const CONFIDENCE: Record<string, string> = { high: "ביטחון גבוה", medi
 /** Transactions found in emails, waiting for a person to check and add them (or throw them away). */
 export function emailInboxView(): ReactElement {
   const pending = state.suggestions.filter((s) => s.status === "pending");
+  const queued = state.suggestions.filter((s) => s.status === "queued");
   const failed = state.suggestions.filter((s) => s.status === "error");
   return (
     <div>
@@ -30,13 +31,16 @@ export function emailInboxView(): ReactElement {
         <BackButton onClick={() => goBack("settings")} />
         <div className="grow">
           <div className="name">הצעות מדוא״ל</div>
-          <div className="muted">נמצאו בהודעות עם התווית</div>
+          <div className="muted">נמצאו בהודעות שהועברו מ-Gmail</div>
         </div>
       </div>
       <p className="muted small" style={{ margin: "10px 4px 0" }}>שום דבר לא נוסף לתנועות עד שתאשרו.</p>
-      {pending.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
+      {pending.length === 0 && queued.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
       {pending.map((s) => (
         <SuggestionCard key={s.id} s={s} />
+      ))}
+      {queued.map((s) => (
+        <QueuedCard key={s.id} s={s} />
       ))}
       {failed.map((s) => (
         <FailedCard key={s.id} s={s} />
@@ -56,7 +60,7 @@ function Source({ s }: { s: EmailSuggestion }) {
       <div className="small" dir="auto">
         <div>מאת: {s.sender}</div>
         <div>נושא: {s.subject}</div>
-        {s.excerpt && <p className="excerpt">{s.excerpt}</p>}
+        {s.excerpt && <p className="excerpt">{s.excerpt.slice(0, 600)}</p>}
       </div>
     </details>
   );
@@ -128,7 +132,7 @@ function FailedCard({ s }: { s: EmailSuggestion }) {
           disabled={busy}
           onClick={async () => {
             setBusy(true);
-            await api.rejectSuggestion(s.id).catch(() => {});
+            await api.discardSuggestion(s.id).catch(() => {});
             await refresh();
           }}
         >
@@ -136,6 +140,39 @@ function FailedCard({ s }: { s: EmailSuggestion }) {
         </button>
         <button className="btn" onClick={() => openTransactionDialog()}>
           הוספה ידנית
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A message the AI has not read yet (the service was busy, or the daily limit was reached). */
+function QueuedCard({ s }: { s: EmailSuggestion }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const act = (work: () => Promise<unknown>) => async () => {
+    setBusy(true);
+    try {
+      await work();
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card suggestion queued">
+      <div className="name">ההודעה עדיין לא נקראה</div>
+      <div className="muted small">{s.subject || s.sender}</div>
+      <div className="muted small">{s.error}</div>
+      <Source s={s} />
+      {err && <div className="error">{err}</div>}
+      <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <button className="btn" disabled={busy} onClick={act(() => api.discardSuggestion(s.id))}>
+          הסרה
+        </button>
+        <button className="btn primary" disabled={busy} onClick={act(() => api.emailRetry(s.id))}>
+          קריאה עכשיו
         </button>
       </div>
     </div>

@@ -20,6 +20,7 @@ vi.mock("../api", async (orig) => ({
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
     rejectSuggestion: vi.fn(async () => {}),
+    discardSuggestion: vi.fn(async () => {}),
   },
 }));
 
@@ -93,7 +94,7 @@ describe("the app shell", () => {
 describe("the email inbox", () => {
   const suggestion = {
     id: 7,
-    gmail_id: "g7",
+    message_id: "g7",
     status: "pending" as const,
     received: "2026-03-02",
     sender: "Shop <shop@example.com>",
@@ -125,6 +126,15 @@ describe("the email inbox", () => {
     app.render();
     fireEvent.click(await screen.findByRole("button", { name: "דחייה" }));
     await waitFor(() => expect(api.rejectSuggestion).toHaveBeenCalledWith(7));
+  });
+
+  it("lets a message the AI has not read yet be retried or removed", async () => {
+    state.suggestions = [{ ...suggestion, id: 9, status: "queued", error: "the AI service answered 503" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("ההודעה עדיין לא נקראה")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "קריאה עכשיו" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הסרה" })).toBeTruthy();
   });
 
   it("offers manual entry for a message that could not be read", async () => {

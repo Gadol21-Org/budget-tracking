@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context};
 use chrono::NaiveDate;
 use serde_json::{json, Value};
 
-use super::gmail::Mail;
+use super::inbound::Mail;
 use super::Config;
 use crate::storage::Category;
 
@@ -233,7 +233,6 @@ mod tests {
     fn mail() -> Mail {
         Mail {
             id: "m".into(),
-            label_ids: vec![],
             from: "a@b".into(),
             subject: "s".into(),
             received: "2026-03-02".into(),

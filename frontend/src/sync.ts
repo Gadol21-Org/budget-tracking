@@ -73,7 +73,7 @@ export async function load() {
   await apply(data);
 }
 
-/** Gmail status (and the open inbox) after a load. Optional: a failure, or a server without Gmail, leaves it out. */
+/** Email status (and the open inbox) after a load. Optional: a failure leaves it out. */
 export async function loadEmail() {
   if (state.offline) return;
   try {
@@ -84,10 +84,10 @@ export async function loadEmail() {
   }
 }
 
-/** Suggestions waiting for a decision, then the ones the AI could not read. */
+/** Suggestions waiting for a decision, then the messages the AI has not read yet or could not read. */
 export async function fetchInbox() {
-  const [pending, failed] = await Promise.all([api.emailSuggestions("pending"), api.emailSuggestions("error")]);
-  return [...pending, ...failed];
+  const [pending, queued, failed] = await Promise.all([api.emailSuggestions("pending"), api.emailSuggestions("queued"), api.emailSuggestions("error")]);
+  return [...pending, ...queued, ...failed];
 }
 
 /** First paint: show the offline copy at once, before anything is fetched. False if there is none yet. */
