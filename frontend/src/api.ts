@@ -218,7 +218,7 @@ export interface EmailStatus {
   /** Suggestions waiting for a decision. */
   pending: number;
   /** What the latest message brought (for the push text): added at once, or waiting for review. */
-  latest: { auto: boolean; note: string; amount_minor: number; currency: string }[];
+  latest: { auto: boolean; date: string; note: string; amount_minor: number; currency: string }[];
   /** Messages the AI has not read yet. */
   queued: number;
 }

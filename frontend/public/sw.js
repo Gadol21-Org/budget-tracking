@@ -67,19 +67,33 @@ self.addEventListener("push", (e) => {
       .then((o) => o.latest || [])
       .catch(() => [])
       .then((items) => {
-        const line = (l) => `${priceOf(l)} · ${l.note}`;
+        const line = (l) => `${priceOf(l)} · ${l.note} · ${l.date.split("-").reverse().join("/")}`;
         const added = items.filter((l) => l.auto);
         const review = items.filter((l) => !l.auto);
-        const parts = [];
-        if (added.length) parts.push(`נוספה מדוא״ל:\n${added.map(line).join("\n")}`);
-        if (review.length) parts.push(`ממתינה לבדיקה:\n${review.map(line).join("\n")}`);
-        const title = added.length && !review.length ? "תנועה נוספה מדוא״ל" : review.length && !added.length ? "הצעה חדשה מדוא״ל" : "תנועות חדשות מדוא״ל";
-        return self.registration.showNotification(title, { body: parts.join("\n") || "הצעה חדשה ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+        let title = "חיוב חדש מדוא״ל";
+        let body;
+        if (added.length && review.length) {
+          title = "חיובים חדשים מדוא״ל";
+          body = `נוספו:\n${added.map(line).join("\n")}\nממתינות לבדיקה:\n${review.map(line).join("\n")}`;
+        } else if (added.length) {
+          title = "תנועה נוספה מדוא״ל";
+          body = added.map(line).join("\n");
+        } else {
+          body = review.map(line).join("\n") || "חיוב חדש ממתין לבדיקה";
+        }
+        return self.registration.showNotification(title, { body, tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
       }),
   );
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: "window" }).then((cs) => (cs.length ? cs[0].focus() : self.clients.openWindow("/"))));
+  // Open the email list: tell a running app to go there, or start the app on it.
+  e.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((cs) => {
+      if (!cs.length) return self.clients.openWindow("/?action=email-inbox");
+      cs[0].postMessage({ type: "open-email-inbox" });
+      return cs[0].focus();
+    }),
+  );
 });

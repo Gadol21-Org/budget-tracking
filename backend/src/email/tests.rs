@@ -726,6 +726,7 @@ async fn a_sure_answer_with_a_category_is_added_at_once() {
         s.latest,
         vec![Latest {
             auto: true,
+            date: "2026-03-01".into(),
             note: "Corner shop".into(),
             amount_minor: -1250,
             currency: "ILS".into()

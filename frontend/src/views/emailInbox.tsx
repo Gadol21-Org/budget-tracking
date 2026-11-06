@@ -1,4 +1,4 @@
-import { type ReactElement, useState } from "react";
+import { type ReactElement, useEffect, useState } from "react";
 import { api, formatMinor, type EmailRule, type EmailSuggestion } from "../api";
 import { BackButton } from "../components/BackButton";
 import { openReactDialog } from "../components/openReactDialog";
@@ -43,11 +43,11 @@ export function emailInboxView(): ReactElement {
       <div className="card filterbar">
         <BackButton onClick={() => goBack("settings")} />
         <div className="grow">
-          <div className="name">הצעות מדוא״ל</div>
+          <div className="name">חיובים מדוא״ל</div>
           <div className="muted">נמצאו בהודעות שהועברו מ-Gmail</div>
         </div>
       </div>
-      <p className="muted small" style={{ margin: "10px 4px 0" }}>תנועות שה-AI בטוח בהן, או שיש להן כלל קבוע, נוספות מיד; כל השאר ממתין לאישורכם.</p>
+      <p className="muted small" style={{ margin: "10px 4px 0" }}>בטוח או עם כלל קבוע: נוסף מיד. השאר ממתין לאישורכם.</p>
       {auto.length === 0 && pending.length === 0 && queued.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
       {auto.map((s) => (
         <AutoCard key={s.id} s={s} />
@@ -70,25 +70,35 @@ function Amount({ s }: { s: EmailSuggestion }) {
   return s.currency === "ILS" ? <Money agorot={s.amount_minor} cls={s.amount_minor < 0 ? "expense" : "income"} /> : <b dir="ltr" className={s.amount_minor < 0 ? "expense" : "income"}>{formatMinor(s.amount_minor, s.currency)}</b>;
 }
 
-/** The email as it was sent, in a frame without scripts (images from the internet are shown). */
-function openEmailView(s: EmailSuggestion) {
-  openReactDialog(
-    (close) => (
-      <div className="email-view">
-        <div className="head">
-          <div className="grow small" dir="auto">
-            <b>{s.subject || s.sender}</b>
-            <div className="muted">{s.sender}</div>
-          </div>
-          <button className="btn" onClick={close}>
-            סגירה
-          </button>
+/** The app locks its zoom; while an email is open the viewport allows pinch-zoom, and the lock returns when it closes. */
+function EmailView({ s, close }: { s: EmailSuggestion; close: () => void }) {
+  useEffect(() => {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    const locked = meta?.content;
+    if (meta) meta.content = "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover";
+    return () => {
+      if (meta && locked) meta.content = locked;
+    };
+  }, []);
+  return (
+    <div className="email-view">
+      <div className="head">
+        <div className="grow small" dir="auto">
+          <b>{s.subject || s.sender}</b>
+          <div className="muted">{s.sender}</div>
         </div>
-        <iframe title="תצוגת המייל" sandbox="" src={`/api/email/suggestions/${s.id}/view`} />
+        <button className="btn" onClick={close}>
+          סגירה
+        </button>
       </div>
-    ),
-    "fullpage",
+      <iframe title="תצוגת המייל" sandbox="" src={`/api/email/suggestions/${s.id}/view`} />
+    </div>
   );
+}
+
+/** The email as it was sent, in a frame without scripts (images from the internet are shown). Zoomable. */
+function openEmailView(s: EmailSuggestion) {
+  openReactDialog((close) => <EmailView s={s} close={close} />, "fullpage");
 }
 
 function ViewButton({ s }: { s: EmailSuggestion }) {

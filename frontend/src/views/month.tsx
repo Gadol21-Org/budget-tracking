@@ -79,7 +79,7 @@ function EmailBanner() {
     <div className="card clickable email-banner" style={{ marginTop: 10 }} {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
       <div className="head">
         <div className="grow">
-          <div className="bizname">{n === 1 ? "הצעה אחת מדוא״ל ממתינה לבדיקה" : `${n} הצעות מדוא״ל ממתינות לבדיקה`}</div>
+          <div className="bizname">{n === 1 ? "חיוב אחד מדוא״ל ממתין לבדיקה" : `${n} חיובים מדוא״ל ממתינים לבדיקה`}</div>
         </div>
         <span className="muted">›</span>
       </div>

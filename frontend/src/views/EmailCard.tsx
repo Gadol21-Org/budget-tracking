@@ -65,13 +65,13 @@ export function EmailCard({ status }: { status: EmailStatus | null }) {
   };
   return (
     <div className="card">
-      <h2>הצעות תנועות מדוא״ל</h2>
+      <h2>חיובים מדוא״ל</h2>
       {!status.configured ? (
         <p className="muted">קבלת מיילים עוד לא הוגדרה בשרת (EMAIL_INBOUND_SECRET). ההוראות ב-deploy/EMAIL.md.</p>
       ) : (
         <>
           <p className="muted">
-            הודעות ש-Gmail מעביר לכתובת הייעודית נקראות על ידי AI והופכות להצעות שממתינות לאישורכם. תנועה נוספת רק אחרי שאישרתם אותה, חוץ ממה שה-AI בטוח בו וקבע לו קטגוריה, או שיש לנושא שלו כלל קבוע (תקבלו התראה). האפליקציה לא מחזיקה גישה לתיבת הדואר.
+            מיילים שמועברים מ-Gmail נקראים על ידי AI. מה שבטוח או עם כלל קבוע נוסף מיד, השאר ממתין לאישורכם.
           </p>
           <p className="muted small">הודעה אחרונה התקבלה: {when(status.last_received)}</p>
           {!status.ai_configured && <div className="note error">חסר GEMINI_API_KEY בשרת, ולכן הודעות ממתינות בלי להיקרא.</div>}

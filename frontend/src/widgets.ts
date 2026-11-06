@@ -39,3 +39,13 @@ export const isPick = (t: EventTarget | null): t is HTMLElement => t instanceof 
 document.addEventListener("focusin", (e) => isPick(e.target) && revealField(e.target));
 
 document.addEventListener("focusout", () => setTimeout(() => !isPick(document.activeElement) && restorePage(), 50));
+
+// iOS can leave the fixed bottom bar where the keyboard was after it closes. A one-pixel scroll makes the browser lay the page out again.
+document.addEventListener("focusout", () =>
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement) return;
+    window.scrollBy(0, 1);
+    window.scrollBy(0, -1);
+  }, 150),
+);

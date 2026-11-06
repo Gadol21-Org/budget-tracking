@@ -96,6 +96,8 @@ pub struct Status {
 #[derive(Serialize, serde::Deserialize, Debug, Default, Clone, PartialEq)]
 pub struct Latest {
     pub auto: bool,
+    /// The transaction's day (YYYY-MM-DD).
+    pub date: String,
     pub note: String,
     pub amount_minor: i64,
     pub currency: String,
@@ -107,6 +109,7 @@ fn latest_of(rows: &[NewEmailSuggestion]) -> Vec<Latest> {
         .filter(|r| r.status == "pending" || r.status == "auto")
         .map(|r| Latest {
             auto: r.status == "auto",
+            date: r.date.clone(),
             note: if r.note.is_empty() {
                 truncate(&r.subject, 35)
             } else {
