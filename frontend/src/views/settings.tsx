@@ -55,6 +55,7 @@ function Settings() {
         <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>
       </div>
       <LinkCard title="קטגוריות" text="הוספה ומחיקה של קטגוריות ותתי-קטגוריות." button="עריכת קטגוריות" onClick={() => go("categories")} />
+      <LinkCard title="עסקים" text="עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." button="ניהול עסקים" onClick={() => go("businesses")} />
       <LinkCard title="מטבעות" text="בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." button="ניהול מטבעות" onClick={() => go("currencies")} />
       <LinkCard
         title="היסטוריית שינויים"

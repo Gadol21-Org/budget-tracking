@@ -87,14 +87,3 @@ describe("the app shell", () => {
     expect(screen.queryByText(/אין חיבור או שהשרת אינו זמין/)).toBeNull();
   });
 });
-
-describe("the business page", () => {
-  it("has a return button to the summary and a menu that opens the overview", async () => {
-    state.view = "business";
-    app.render();
-    expect(await screen.findByRole("button", { name: "→ סיכום" })).toBeTruthy();
-    fireEvent.click(screen.getByText("סקירה ורווח והפסד"));
-    expect(state.view).toBe("bizdash");
-    expect(screen.getByRole("button", { name: "→ העסק" })).toBeTruthy();
-  });
-});

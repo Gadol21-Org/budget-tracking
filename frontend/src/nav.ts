@@ -82,10 +82,10 @@ export function showSide(kind: "expense" | "income") {
 /** The business dashboards, always opening on the whole business (a single one is picked from there). */
 export function openBusinessDashboard() {
   state.bizView = { tab: "overview", scope: "all" };
-  go("bizdash");
+  go("business");
 }
 
 export function manageCtx() {
-  return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("business"), backLabel: "→ העסק" };
+  return { biz: state.biz, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("settings") };
 }
 
