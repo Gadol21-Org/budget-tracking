@@ -6,7 +6,8 @@
 //   INBOUND_SECRET   (secret) the same value as EMAIL_INBOUND_SECRET on the server
 //   FALLBACK_ADDRESS (optional) a verified destination address; mail is forwarded there when the app is unreachable
 //   ALLOWED_FROM     (optional) comma-separated sender addresses that are accepted; anything else is dropped.
-//                    Matches the envelope sender or the From header. Empty or unset: no filtering.
+//                    Matches the envelope sender, the From header, or the address Gmail names in X-Forwarded-For
+//                    (the account whose filter forwarded the mail). Empty or unset: no filtering.
 const MAX_BYTES = 1_500_000;
 
 // The address inside "Name <address>" (or a bare address), lower case.
@@ -18,7 +19,9 @@ const addressOf = (v) => {
 const allowed = (message, env) => {
   const list = (env.ALLOWED_FROM || "").split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
   if (!list.length) return true;
-  return [message.from, message.headers.get("from")].some((v) => list.includes(addressOf(v)));
+  // Gmail filter forwarding keeps the shop as sender and adds "X-Forwarded-For: <your account> <routed address>".
+  const forwardedFor = (message.headers.get("x-forwarded-for") || "").split(/[\s,]+/).map(addressOf);
+  return [addressOf(message.from), addressOf(message.headers.get("from")), ...forwardedFor].some((a) => list.includes(a));
 };
 
 export default {
