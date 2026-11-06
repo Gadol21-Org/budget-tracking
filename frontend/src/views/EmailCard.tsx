@@ -71,14 +71,14 @@ export function EmailCard({ status }: { status: EmailStatus | null }) {
       ) : (
         <>
           <p className="muted">
-            הודעות ש-Gmail מעביר לכתובת הייעודית נקראות על ידי AI והופכות להצעות לבדיקה. תנועה נוספת רק אחרי שאישרתם אותה, והאפליקציה לא מחזיקה גישה לתיבת הדואר.
+            הודעות ש-Gmail מעביר לכתובת הייעודית נקראות על ידי AI והופכות להצעות שממתינות לאישורכם. תנועה נוספת רק אחרי שאישרתם אותה, והאפליקציה לא מחזיקה גישה לתיבת הדואר.
           </p>
           <p className="muted small">הודעה אחרונה התקבלה: {when(status.last_received)}</p>
           {!status.ai_configured && <div className="note error">חסר GEMINI_API_KEY בשרת, ולכן הודעות ממתינות בלי להיקרא.</div>}
           {status.last_error && <div className="note error">{status.last_error}</div>}
           <div className="actions" style={{ justifyContent: "flex-start" }}>
             <button className="btn primary" onClick={() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה"))}>
-              {status.pending ? `הצעות לבדיקה (${status.pending})` : "הצעות לבדיקה"}
+              {status.pending ? `תנועות מדוא״ל לאישור (${status.pending})` : "תנועות מדוא״ל לאישור"}
             </button>
             {offerPush && (
               <button className="btn" onClick={() => void notify()}>

@@ -24,6 +24,31 @@ pub struct Found {
     pub confidence: String,
 }
 
+/// Tokens one call used, as the service reports them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Usage {
+    pub input: i64,
+    /// Answer plus thinking tokens (both are billed as output).
+    pub output: i64,
+}
+
+impl Usage {
+    fn from(v: &Value) -> Option<Usage> {
+        let m = v.get("usageMetadata")?;
+        let n = |k: &str| m[k].as_i64().unwrap_or(0);
+        Some(Usage {
+            input: n("promptTokenCount"),
+            output: n("candidatesTokenCount") + n("thoughtsTokenCount"),
+        })
+    }
+
+    /// Millionths of a dollar, at the given USD prices per million tokens.
+    pub fn cost_micro_usd(&self, price_in_per_m: f64, price_out_per_m: f64) -> i64 {
+        // tokens x (USD per million tokens) is already in millionths of a dollar.
+        (self.input as f64 * price_in_per_m + self.output as f64 * price_out_per_m).round() as i64
+    }
+}
+
 #[derive(Debug)]
 pub enum Failure {
     /// The service was unreachable, busy or refused the key: try the same email again later.
@@ -85,6 +110,7 @@ pub async fn parse(
     key: &str,
     mail: &Mail,
     cats: &[Category],
+    usage: &mut Option<Usage>,
 ) -> Result<Vec<Found>, Failure> {
     let labels = category_labels(cats);
     let list: Vec<String> = labels
@@ -144,6 +170,7 @@ pub async fn parse(
     let v: Value = serde_json::from_str(&text)
         .context("the AI service sent something unreadable")
         .map_err(Failure::Unreadable)?;
+    *usage = Usage::from(&v);
     extract(&v, mail, &labels).map_err(Failure::Unreadable)
 }
 

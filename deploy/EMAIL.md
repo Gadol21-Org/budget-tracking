@@ -63,5 +63,8 @@ Forward (or send) a sample receipt to the address. Within seconds **Settings > S
 - A message the AI answers nonsense for shows up as "could not read" with a button to add the transaction by hand.
 - `EMAIL_FORWARDER` checks for the `X-Forwarded-For` header Gmail adds when it forwards. Anyone can write that header, so it only stops random mail, not someone who knows the address and the format.
 
+## AI cost
+Every AI call that reads an email is written to the change history ("קריאת מייל ב-AI") with its tokens and price, and Settings > עלות AI lists the calls and the total for a month, year or custom period. The price is the token counts Gemini reports times `EMAIL_AI_PRICE_IN_PER_M` and `EMAIL_AI_PRICE_OUT_PER_M` (USD per million input and output tokens; thinking tokens count as output). The defaults (0.10 and 0.40) are an estimate: set them to your model's real prices. Entries keep the price used when the call was made, so changing the prices only affects later calls. Like the rest of the history they are kept for a year.
+
 ## Handling some mail without the AI
 The AI is the default reader. A message that needs its own treatment (for example, one whose link must be followed to fetch a bill) gets a handler: implement `Handler` in `backend/src/email/handlers.rs` and add it to `registry()`. Handlers are asked first, in order, by sender, subject or content; the first that matches handles the message and the AI is not used for it. A handler gets the parsed mail (text, HTML and `links()`), and returns suggestions for the review inbox the same way the AI does. There are none yet.

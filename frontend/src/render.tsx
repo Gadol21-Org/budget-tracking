@@ -13,6 +13,7 @@ import { logView } from "./views/log";
 import { trackScreen } from "./analytics";
 import { peopleView } from "./views/people";
 import { emailInboxView } from "./views/emailInbox";
+import { aiCostView } from "./views/aiCost";
 import { categoriesView } from "./views/categories";
 import { settingsView } from "./views/settings";
 import { ensureHistory, neededFrom } from "./sync";
@@ -43,7 +44,7 @@ const TABS: [View, string][] = [
   ["settings", "הגדרות"],
 ];
 
-const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people", "emailInbox"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people", "emailInbox", "aiCost"];
 
 function openTab(view: View) {
   // Tapping the open tab goes back up from a category; opening another one starts at its top level.
@@ -115,6 +116,7 @@ const screens: Record<View, () => ReactElement> = {
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
   emailInbox: emailInboxView,
+  aiCost: aiCostView,
 };
 
 function App() {

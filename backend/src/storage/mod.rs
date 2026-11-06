@@ -441,6 +441,16 @@ pub trait Storage: Send + Sync {
     ) -> anyhow::Result<Vec<LogEntry>> {
         Ok(Vec::new())
     }
+    /// Entries of one kind stamped from `from` up to (not including) `before` (UTC timestamps),
+    /// newest first.
+    async fn list_log_kind(
+        &self,
+        _kind: &str,
+        _from: &str,
+        _before: &str,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        Ok(Vec::new())
+    }
     /// Distinct emails that appear on recorded changes, sorted.
     async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())

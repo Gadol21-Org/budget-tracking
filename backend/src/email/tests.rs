@@ -41,7 +41,7 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         (
             StatusCode::OK,
             Json(
-                json!({ "candidates": [{ "content": { "parts": [{ "text": text }] }, "finishReason": "STOP" }] }),
+                json!({ "candidates": [{ "content": { "parts": [{ "text": text }] }, "finishReason": "STOP" }], "usageMetadata": { "promptTokenCount": 1000, "candidatesTokenCount": 100, "thoughtsTokenCount": 50 } }),
             ),
         )
     };
@@ -74,6 +74,8 @@ fn config(base: &str) -> Config {
         model: "test-model".into(),
         max_per_day: 100,
         ai_base: base.into(),
+        price_in_per_m: 0.10,
+        price_out_per_m: 0.40,
     }
 }
 
@@ -586,4 +588,53 @@ async fn a_manual_handler_takes_its_messages_before_the_ai() {
         .await
         .unwrap();
     assert_eq!(r.w.lock().unwrap().ai_calls, 1);
+}
+
+#[tokio::test]
+async fn each_ai_call_is_logged_with_its_cost_and_summed_for_a_period() {
+    let r = rig().await;
+    r.svc
+        .ingest(&eml("c1", "Receipt", "Corner shop 12.50 receipt"))
+        .await
+        .unwrap();
+    r.svc
+        .ingest(&eml("c2", "Hello", "just chatting"))
+        .await
+        .unwrap();
+    // A duplicate and a message the AI never saw cost nothing.
+    r.svc
+        .ingest(&eml("c1", "Receipt", "Corner shop 12.50 receipt"))
+        .await
+        .unwrap();
+    let log = r.db.list_log(50, None).await.unwrap();
+    let calls: Vec<_> = log.iter().filter(|e| e.kind == "ai_email").collect();
+    assert_eq!(calls.len(), 2);
+    let new = calls.iter().find_map(|e| e.new.clone()).unwrap();
+    assert_eq!(new["input_tokens"], 1000);
+    assert_eq!(new["output_tokens"], 150);
+    // 1000 x $0.10 + 150 x $0.40 per million tokens = 160 millionths of a dollar.
+    assert_eq!(new["cost_micro_usd"], 160);
+
+    let app = serve(&r, r.svc.clone()).await;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let url = format!("{app}/api/email/cost?from={today}&to={today}");
+    let body: Value = reqwest::get(url).await.unwrap().json().await.unwrap();
+    assert_eq!(body["items"].as_array().unwrap().len(), 2);
+    assert_eq!(body["total_micro_usd"], 320);
+    let results: Vec<_> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["result"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        results.contains(&"1 suggestions".to_string()) && results.contains(&"ignored".to_string())
+    );
+    let url = format!("{app}/api/email/cost?from=2020-01-01&to=2020-01-31");
+    let none: Value = reqwest::get(url).await.unwrap().json().await.unwrap();
+    assert_eq!(none["total_micro_usd"], 0);
+    let bad = reqwest::get(format!("{app}/api/email/cost?from=x&to=y"))
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
 }

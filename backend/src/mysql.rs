@@ -1562,6 +1562,35 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
+    async fn list_log_kind(&self, kind: &str, from: &str, before: &str) -> Result<Vec<LogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log
+             WHERE kind = ? AND at >= ? AND at < ? ORDER BY id DESC",
+        )
+        .bind(kind)
+        .bind(from)
+        .bind(before)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let json = |col: &str| -> Result<Option<serde_json::Value>> {
+                    let s: Option<String> = r.try_get(col)?;
+                    Ok(s.and_then(|s| s.parse().ok()))
+                };
+                Ok(LogEntry {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    kind: r.try_get("kind")?,
+                    entity_id: r.try_get("entity_id")?,
+                    old: json("old_value")?,
+                    new: json("new_value")?,
+                    user_email: r.try_get("user_email")?,
+                })
+            })
+            .collect()
+    }
+
     async fn log_users(&self) -> Result<Vec<String>> {
         let rows: Vec<String> = sqlx::query_scalar(
             "SELECT DISTINCT user_email FROM change_log WHERE user_email IS NOT NULL ORDER BY user_email",

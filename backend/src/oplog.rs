@@ -42,6 +42,8 @@ pub mod kind {
     /// A due occurrence turned into a transaction.
     pub const RECURRING_SETTLE: &str = "recurring_settle";
     pub const IMPORT: &str = "import";
+    /// One paid AI call that read an email (tokens and cost recorded).
+    pub const AI_EMAIL: &str = "ai_email";
 }
 
 pub struct NewLogEntry {
@@ -649,6 +651,14 @@ impl Storage for Logged {
     }
     async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
         self.0.prune_log(before).await
+    }
+    async fn list_log_kind(
+        &self,
+        kind: &str,
+        from: &str,
+        before: &str,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        self.0.list_log_kind(kind, from, before).await
     }
     async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         self.0.log_users().await

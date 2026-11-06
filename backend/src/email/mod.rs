@@ -46,6 +46,11 @@ pub struct Config {
     /// AI calls per day at most (a guard against a flood of mail to the routed address).
     pub max_per_day: u32,
     pub ai_base: String,
+    /// USD per million input tokens (the cost shown in the app is these prices times the token
+    /// counts Gemini reports; set them to the model's real price).
+    pub price_in_per_m: f64,
+    /// USD per million output tokens (thinking tokens count as output).
+    pub price_out_per_m: f64,
 }
 
 impl Config {
@@ -61,6 +66,12 @@ impl Config {
                 .unwrap_or(100),
             ai_base: var("GEMINI_BASE_URL")
                 .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into()),
+            price_in_per_m: var("EMAIL_AI_PRICE_IN_PER_M")
+                .and_then(|m| m.parse().ok())
+                .unwrap_or(0.10),
+            price_out_per_m: var("EMAIL_AI_PRICE_OUT_PER_M")
+                .and_then(|m| m.parse().ok())
+                .unwrap_or(0.40),
         })
     }
 }
@@ -190,6 +201,37 @@ impl Service {
         let _ = self.db.set_setting(LAST_ERROR_KEY, e.unwrap_or("")).await;
     }
 
+    /// Record one paid AI call in the operation log (kind `ai_email`), with what it cost.
+    async fn log_cost(
+        &self,
+        cfg: &Config,
+        mail: &Mail,
+        u: &ai::Usage,
+        parsed: &Result<Vec<ai::Found>, ai::Failure>,
+    ) {
+        let result = match parsed {
+            Ok(f) if f.is_empty() => "ignored".to_string(),
+            Ok(f) => format!("{} suggestions", f.len()),
+            Err(_) => "unreadable".to_string(),
+        };
+        crate::oplog::record(
+            self.db.as_ref(),
+            crate::oplog::kind::AI_EMAIL,
+            None,
+            None,
+            Some(serde_json::json!({
+                "sender": truncate(&mail.from, 120),
+                "subject": truncate(&mail.subject, 120),
+                "model": cfg.model,
+                "input_tokens": u.input,
+                "output_tokens": u.output,
+                "cost_micro_usd": u.cost_micro_usd(cfg.price_in_per_m, cfg.price_out_per_m),
+                "result": result,
+            })),
+        )
+        .await;
+    }
+
     /// Take one more AI call from today's allowance. False when it is used up.
     async fn ai_allowed(&self) -> Result<bool> {
         let cfg = self
@@ -299,33 +341,36 @@ impl Service {
                 cfg.max_per_day
             )));
         }
-        Ok(
-            match ai::parse(&self.http, cfg, key, mail, categories).await {
-                Ok(found) => {
-                    self.note_error(None).await;
-                    Read {
-                        summary: Ingested {
-                            suggestions: found.len(),
-                            ignored: found.is_empty(),
-                            ..Default::default()
-                        },
-                        rows: rows_for(mail, &found, categories),
-                    }
-                }
-                Err(ai::Failure::Transient(e)) => {
-                    tracing::warn!("email AI call failed, kept for a retry: {e:#}");
-                    self.note_error(Some(&format!("{e:#}"))).await;
-                    wait(format!("{e:#}"))
-                }
-                Err(ai::Failure::Unreadable(e)) => Read {
-                    rows: vec![error_row(mail, &e)],
+        let mut usage = None;
+        let parsed = ai::parse(&self.http, cfg, key, mail, categories, &mut usage).await;
+        if let Some(u) = usage {
+            self.log_cost(cfg, mail, &u, &parsed).await;
+        }
+        Ok(match parsed {
+            Ok(found) => {
+                self.note_error(None).await;
+                Read {
                     summary: Ingested {
-                        failed: true,
+                        suggestions: found.len(),
+                        ignored: found.is_empty(),
                         ..Default::default()
                     },
+                    rows: rows_for(mail, &found, categories),
+                }
+            }
+            Err(ai::Failure::Transient(e)) => {
+                tracing::warn!("email AI call failed, kept for a retry: {e:#}");
+                self.note_error(Some(&format!("{e:#}"))).await;
+                wait(format!("{e:#}"))
+            }
+            Err(ai::Failure::Unreadable(e)) => Read {
+                rows: vec![error_row(mail, &e)],
+                summary: Ingested {
+                    failed: true,
+                    ..Default::default()
                 },
             },
-        )
+        })
     }
 
     /// Read the messages the AI could not read earlier. Stops at the first one that still

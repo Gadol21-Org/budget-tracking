@@ -145,4 +145,20 @@ describe("the email inbox", () => {
     expect(await screen.findByText("לא הצלחתי לקרוא את ההודעה")).toBeTruthy();
     expect(screen.getByRole("button", { name: "הוספה ידנית" })).toBeTruthy();
   });
+
+  it("shows each AI call with its price and the total", async () => {
+    state.aiCost = {
+      total_micro_usd: 2400,
+      items: [
+        { at: new Date().toISOString(), sender: "a@b", subject: "Your receipt", input_tokens: 1000, output_tokens: 150, cost_micro_usd: 160, result: "1 suggestions" },
+        { at: new Date().toISOString(), sender: "a@b", subject: "Newsletter", input_tokens: 5000, output_tokens: 20, cost_micro_usd: 2240, result: "ignored" },
+      ],
+    };
+    state.view = "aiCost";
+    app.render();
+    expect(await screen.findByText("$0.002400")).toBeTruthy();
+    expect(screen.getByText("Your receipt")).toBeTruthy();
+    expect(screen.getByText("$0.000160")).toBeTruthy();
+    expect(screen.getByText(/לא נמצאה תנועה/)).toBeTruthy();
+  });
 });

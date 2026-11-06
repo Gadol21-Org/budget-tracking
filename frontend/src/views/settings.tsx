@@ -6,6 +6,7 @@ import { load } from "../sync";
 import { state } from "../state";
 import { EmailCard } from "./EmailCard";
 import { openLog } from "./log";
+import { openAiCost } from "./aiCost";
 import { openPeople } from "./people";
 
 export function settingsView(): ReactElement {
@@ -65,6 +66,12 @@ function Settings() {
         text="כל הוספה, עריכה ומחיקה של תנועות, קטגוריות והוצאות חוזרות, עם הערכים לפני ואחרי. נשמרת שנה אחת."
         button="צפייה בהיסטוריית שינויים"
         onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))}
+      />
+      <LinkCard
+        title="עלות AI"
+        text="כמה עלתה קריאת המיילים ב-AI: כל קריאה והמחיר שלה, וסך הכול לתקופה שתבחרו."
+        button="צפייה בעלות AI"
+        onClick={() => void openAiCost().catch(() => alert("טעינת העלות נכשלה"))}
       />
       <LinkCard
         title="שמות משתמשים"

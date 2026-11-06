@@ -1,9 +1,9 @@
 import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyBiz, type BizData, type BizView } from "./business";
-import { type Category, type EmailStatus, type EmailSuggestion, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
+import { type AiCost, type Category, type EmailStatus, type EmailSuggestion, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people" | "emailInbox";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "business" | "businesses" | "currencies" | "people" | "emailInbox" | "aiCost";
 
 export const root = document.getElementById("app")!;
 
@@ -31,6 +31,9 @@ export const state = {
   logMore: false,
   /** The period the change history shows. */
   logPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  /** AI cost screen: the period shown and the calls in it. */
+  aiCostPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  aiCost: null as AiCost | null,
   /** Emails seen on recorded changes, with display names. */
   logUsers: [] as LogUser[],
   /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */

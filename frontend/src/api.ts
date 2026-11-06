@@ -183,6 +183,22 @@ export interface EmailSuggestion {
   has_html: boolean;
 }
 
+/** One AI call that read an email, with what it cost (millionths of a US dollar). */
+export interface AiCostItem {
+  at: string;
+  sender: string;
+  subject: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micro_usd: number;
+  result: string;
+}
+
+export interface AiCost {
+  items: AiCostItem[];
+  total_micro_usd: number;
+}
+
 export interface EmailStatus {
   /** VAPID public key for subscribing to web push; absent when push is not set up on the server. */
   push_public_key?: string | null;
@@ -292,6 +308,7 @@ export const api = {
   emailStatus: () => request<EmailStatus>("/api/email/status"),
   emailSuggestions: (status: string) => request<EmailSuggestion[]>(`/api/email/suggestions?status=${status}`),
   /** Read the messages the AI could not read earlier (all, or one). */
+  aiCost: (from: string, to: string) => request<AiCost>(`/api/email/cost?from=${from}&to=${to}`),
   emailRetry: (id?: number) => request<{ read: number }>(`/api/email/retry${id != null ? `?id=${id}` : ""}`, { method: "POST" }),
   /** Drop a message that is waiting or could not be read. */
   discardSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}`, { method: "DELETE" }),

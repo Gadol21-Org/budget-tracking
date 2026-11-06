@@ -198,3 +198,78 @@ pub(crate) async fn push_check(
         .map_err(internal)?;
     Ok(Json(Registered { registered }))
 }
+
+#[derive(Deserialize)]
+pub(crate) struct CostQuery {
+    /// First day, `YYYY-MM-DD` (UTC).
+    from: String,
+    /// Last day, `YYYY-MM-DD` (UTC), included.
+    to: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CostItem {
+    /// When the AI was asked (UTC, ISO 8601).
+    at: String,
+    sender: String,
+    subject: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    /// Millionths of a US dollar.
+    cost_micro_usd: i64,
+    /// `ignored`, `unreadable` or `N suggestions`.
+    result: String,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Cost {
+    items: Vec<CostItem>,
+    total_micro_usd: i64,
+}
+
+fn valid_day(d: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()
+}
+
+/// What the AI calls that read emails cost in a period: one item per call, and the total.
+pub(crate) async fn ai_cost(
+    State(db): State<Db>,
+    Query(q): Query<CostQuery>,
+) -> Result<Json<Cost>, ApiError> {
+    let bad = || {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "from and to must be YYYY-MM-DD".to_string(),
+        )
+    };
+    let from = valid_day(&q.from).ok_or_else(bad)?;
+    let to = valid_day(&q.to).ok_or_else(bad)?;
+    let before = to.succ_opt().ok_or_else(bad)?;
+    let stamp = |d: chrono::NaiveDate| format!("{d}T00:00:00Z");
+    let entries = db
+        .list_log_kind(crate::oplog::kind::AI_EMAIL, &stamp(from), &stamp(before))
+        .await
+        .map_err(internal)?;
+    let items: Vec<CostItem> = entries
+        .into_iter()
+        .map(|e| {
+            let n = e.new.unwrap_or_default();
+            let text = |k: &str| n[k].as_str().unwrap_or_default().to_string();
+            let num = |k: &str| n[k].as_i64().unwrap_or(0);
+            CostItem {
+                at: e.at,
+                sender: text("sender"),
+                subject: text("subject"),
+                input_tokens: num("input_tokens"),
+                output_tokens: num("output_tokens"),
+                cost_micro_usd: num("cost_micro_usd"),
+                result: text("result"),
+            }
+        })
+        .collect();
+    let total_micro_usd = items.iter().map(|i| i.cost_micro_usd).sum();
+    Ok(Json(Cost {
+        items,
+        total_micro_usd,
+    }))
+}
