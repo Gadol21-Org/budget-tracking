@@ -53,4 +53,4 @@ export const state = {
 };
 
 /** Browser history: every screen is a history entry, so the phone's back button/gesture goes to the previous screen (and closes a dialog first) instead of leaving the app. */
-export type Screen = { view: View; filter?: { id: number | null }; ins?: InsightsNav; dlg?: boolean; n: number };
+export type Screen = { view: View; filter?: { id: number | null }; ins?: InsightsNav; biz?: BusinessView; dlg?: boolean; n: number };

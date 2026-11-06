@@ -1,10 +1,11 @@
 import { type InsightsNav } from "./insights/model";
+import { type BusinessView } from "./business";
 import { type Screen, type View, state } from "./state";
 import { render } from "./render";
 import { load } from "./sync";
 
 export function screenState(extra: Partial<Screen> = {}): Screen {
-  return { view: state.view, filter: state.filter, ins: { dash: state.insights.dash, side: state.insights.side, cat: state.insights.cat, sub: state.insights.sub }, n: history.state?.n ?? 0, ...extra };
+  return { view: state.view, filter: state.filter, biz: { ...state.businessView }, ins: { dash: state.insights.dash, side: state.insights.side, cat: state.insights.cat, sub: state.insights.sub }, n: history.state?.n ?? 0, ...extra };
 }
 
 history.replaceState(screenState({ n: 0 }), "");
@@ -49,6 +50,7 @@ window.addEventListener("popstate", (e) => {
   state.view = st?.view ?? "month";
   state.filter = st?.filter;
   restoreInsights(st?.ins);
+  state.businessView = st?.biz ?? { tab: "overview", scope: "all" };
   render();
 });
 
@@ -66,6 +68,15 @@ export function navigateInsights(patch: Partial<InsightsNav>, mode: "push" | "re
   if (mode === "push") history.pushState(st, "");
   else history.replaceState(st, "");
   window.scrollTo(0, 0);
+  render();
+}
+
+/** Move inside the business section. Opening a product is a history entry (back returns to the whole business); switching tabs replaces it. */
+export function navigateBusiness(patch: Partial<BusinessView>, mode: "push" | "replace") {
+  state.businessView = { ...state.businessView, ...patch };
+  const st = screenState(mode === "push" ? { n: (history.state?.n ?? 0) + 1 } : {});
+  if (mode === "push") history.pushState(st, "");
+  else history.replaceState(st, "");
   render();
 }
 

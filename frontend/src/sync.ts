@@ -167,6 +167,8 @@ export function neededFrom(): string {
     from = `${addMonths(from.slice(0, 7), -(back + (state.insights.cat !== undefined ? 12 : 0)))}-01`;
     if (cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
   }
+  // A product's every line: from the very start (""; loaded once, then kept).
+  if (state.view === "businessOverview" && state.businessView.tab === "txs" && state.businessView.all) return "";
   return from;
 }
 
@@ -175,7 +177,7 @@ export function ensureHistory() {
   const needed = neededFrom();
   if (state.loadedFrom === undefined || needed >= state.loadedFrom || extending || historyFailed) return;
   // Fetch 3 months more than needed, so paging back a month or two does not fetch again.
-  const from = `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
+  const from = needed === "" ? "" : `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
   state.loadingOlder = true;
   void loadHistory(from);
 }

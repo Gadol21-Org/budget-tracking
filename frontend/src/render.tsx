@@ -7,7 +7,7 @@ import { currenciesView } from "./views/currencies";
 import { businessDashboard, productsView } from "./views/business";
 import { actionsPage } from "./views/actionsPage";
 import { type View, root, state } from "./state";
-import { go, goBack, manageCtx, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
+import { go, goBack, manageCtx, navigateBusiness, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
 import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
@@ -126,7 +126,7 @@ function businessScreen() {
     products: state.products,
     period: state.period,
     view: state.businessView,
-    setView: (patch) => ((state.businessView = { ...state.businessView, ...patch }), render()),
+    setView: (patch) => navigateBusiness({ ...(patch.scope !== undefined ? { all: false } : {}), ...patch }, patch.scope !== undefined && patch.scope !== state.businessView.scope ? "push" : "replace"),
   });
 }
 

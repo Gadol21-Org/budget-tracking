@@ -10,7 +10,6 @@ import {
   productOf,
   figures,
   lastMonths,
-  scopeName,
   scoped,
 } from "../business";
 import { ProductChips } from "../components/ProductChips";
@@ -18,7 +17,7 @@ import { DialogForm } from "../components/DialogForm";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
 import { openReactDialog } from "../components/openReactDialog";
-import { formatShekelsWhole, shortMonth } from "../format";
+import { formatShekelsWhole, longMonth, shortMonth } from "../format";
 import { contains, shift, title as periodTitle } from "../period";
 import { colorAt } from "../insights/model";
 import { ConnectedMonthBar } from "./month";
@@ -26,12 +25,12 @@ import { DonutCard, Delta } from "./insights";
 import { TransactionRow } from "./list";
 import { dayTitle } from "../selectors";
 
-/** The whole business compares its products; one product lists its own transactions instead. */
-const tabsFor = (scope: "all" | number): [BusinessTab, string][] => [
+/** The tabs always cover the whole business; choosing a product only changes the overview. */
+const tabsFor = (): [BusinessTab, string][] => [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
   ["cats", "קטגוריות"],
-  scope === "all" ? ["compare", "השוואה"] : ["txs", "תנועות"],
+  ["compare", "השוואה"],
 ];
 
 const signed = (a: number) => <Money agorot={a} whole cls={a < 0 ? "expense" : "income"} />;
@@ -68,6 +67,8 @@ const figureCells = (f: Fig) => (
 
 /** Income against expenses per month, with the profit above each pair. */
 function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
+  // The month tapped: its figures show under the bars.
+  const [sel, setSel] = useState<number | null>(null);
   const months = lastMonths(ctx.period);
   const ts = scoped(ctx, scope);
   const data = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m))));
@@ -76,7 +77,7 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
     <div className="card">
       <div className="bizchart">
         {data.map((d, i) => (
-          <div className="bizcol" key={months[i]}>
+          <div className={sel === i ? "bizcol sel" : "bizcol"} key={months[i]} {...clickableProps(() => setSel(sel === i ? null : i))}>
             <div className={`bizp num ${d.profit < 0 ? "expense" : "income"}`}>{`${d.profit < 0 ? "-" : ""}${(Math.abs(d.profit) / 100000).toFixed(1)}k`}</div>
             <div className="bizpair">
               <i className="in" style={{ height: `${(d.income / max) * 100}%` }} />
@@ -86,6 +87,25 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
           </div>
         ))}
       </div>
+      {sel != null && (
+        <div className="bizpicked rows">
+          <div className="row">
+            <div className="grow name">{longMonth(months[sel]!)}</div>
+          </div>
+          <div className="row">
+            <div className="grow">הכנסות</div>
+            {whole(data[sel]!.income, "income")}
+          </div>
+          <div className="row">
+            <div className="grow">הוצאות</div>
+            {whole(data[sel]!.expense, "expense")}
+          </div>
+          <div className="row">
+            <div className="grow name">רווח</div>
+            {signed(data[sel]!.profit)}
+          </div>
+        </div>
+      )}
       <div className="bizlegend muted">
         <span>
           <i className="in" />
@@ -95,7 +115,7 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
           <i className="out" />
           הוצאות
         </span>
-        <span>מעל העמודות: רווח באלפי ₪</span>
+        <span>מעל העמודות: רווח באלפי ₪. הקשה על חודש מציגה את הנתונים שלו</span>
       </div>
     </div>
   );
@@ -187,6 +207,8 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
         <>
           <h2>הכנסות מול הוצאות · 6 חודשים</h2>
           <Chart ctx={ctx} scope={scope} />
+          <h2>תנועות</h2>
+          <ProductTransactions ctx={ctx} />
         </>
       )}
       {!ts.length && <div className="empty">{`עוד אין תנועות ${scope === "all" ? "בעסק" : "במוצר"}.`} תייגו תנועה, או קשרו קטגוריה למוצר.</div>}
@@ -196,11 +218,20 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
 
 /** The product's lines in the period, by day, as in the transactions tab. */
 function ProductTransactions({ ctx }: { ctx: BusinessCtx }) {
-  const txs = scoped(ctx, ctx.view.scope).filter((t) => contains(ctx.period, t.date));
+  const all = ctx.view.all === true;
+  const txs = scoped(ctx, ctx.view.scope).filter((t) => all || contains(ctx.period, t.date));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
-  if (!days.length) return <div className="empty">אין תנועות בתקופה זו</div>;
   return (
     <>
+      <div className="seg3b" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <button type="button" aria-pressed={!all} onClick={() => ctx.setView({ all: false })}>
+          התקופה
+        </button>
+        <button type="button" aria-pressed={all} onClick={() => ctx.setView({ all: true })}>
+          כל התנועות
+        </button>
+      </div>
+      {!days.length && <div className="empty">{all ? "אין תנועות" : "אין תנועות בתקופה זו"}</div>}
       {days.map((d) => (
         <div key={d}>
           <div className="daylabel">{dayTitle(d)}</div>
@@ -341,45 +372,20 @@ export function businessDashboard(ctx: BusinessCtx): ReactElement {
 }
 
 function BusinessDashboard({ ctx }: { ctx: BusinessCtx }) {
-  const tabs = tabsFor(ctx.view.scope);
+  const tabs = tabsFor();
   // A tab the scope does not have (the comparison, or a product's lines) falls back to the overview.
   const tab = tabs.some(([k]) => k === ctx.view.tab) ? ctx.view.tab : "overview";
   const Body = BODIES[tab];
-  const openScopes = () =>
-    openReactDialog((close) => {
-      const item = (label: string, scope: "all" | number, cls = "") => (
-        <button
-          key={String(scope)}
-          type="button"
-          className={`scopeitem ${cls}`.trim()}
-          onClick={() => (close(), ctx.setView({ scope }))}
-        >{`${label}${scope === ctx.view.scope ? "  ✓" : ""}`}</button>
-      );
-      return (
-        <div className="add">
-          <h2>הצגת נתונים של</h2>
-          {item("🏢 כל העסק", "all")}
-          {ctx.products.products.filter((b) => !b.is_general).map((b) => item(b.name, b.id, "ind"))}
-          {ctx.products.products.filter((b) => b.is_general).map((b) => item(`${b.name} (משותף)`, b.id, "ind"))}
-        </div>
-      );
-    });
   return (
     <div className="bizdash">
-      <div className="card filterbar">
-        <div className="grow">
-          <div className="name">סקירה</div>
-        </div>
-        <button className="btn" title="בחירת מוצר" onClick={openScopes}>{`${scopeName(ctx, ctx.view.scope)} ▾`}</button>
-      </div>
       <div className="seg4">
         {tabs.map(([k, label]) => (
-          <button key={k} type="button" aria-pressed={tab === k} onClick={() => ctx.setView({ tab: k })}>
+          <button key={k} type="button" aria-pressed={tab === k} onClick={() => ctx.setView({ tab: k, scope: "all" })}>
             {label}
           </button>
         ))}
       </div>
-      <ConnectedMonthBar />
+      {!(tab === "overview" && ctx.view.scope !== "all" && ctx.view.all) && <ConnectedMonthBar />}
       <Body ctx={ctx} />
     </div>
   );

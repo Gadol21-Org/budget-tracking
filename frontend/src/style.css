@@ -439,3 +439,6 @@ dialog { overscroll-behavior: contain; }
 .titlerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .titlerow h1 { margin: 0; }
 .bizaction .grow { flex: 1; min-width: 0; }
+.bizcol { cursor: pointer; border-radius: 8px; }
+.bizcol.sel { background: var(--bg); outline: 2px solid var(--brand); }
+.bizpicked { margin-top: 10px; }
