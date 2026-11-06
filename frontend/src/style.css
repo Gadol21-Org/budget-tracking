@@ -10,6 +10,7 @@
   --income: #067647;
   --radius: 14px;
   --nav-h: 60px;
+  --nav-inset: max(0px, calc(env(safe-area-inset-bottom) - 20px)); /* extra bar height under the icons; less than the full inset so the bar sits close to the home indicator */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -42,7 +43,7 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 /* #app is itself a <main>: it spans the window; the inner <main> is the content column. */
 #app { display: block; max-width: none; padding: 0; margin: 0; }
-.shell > main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px calc(var(--nav-h) + 96px + env(safe-area-inset-bottom)); }
+.shell > main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px calc(var(--nav-h) + 96px + var(--nav-inset)); }
 h1 { font-size: 1.4rem; margin: 0 0 12px; }
 h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 600; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
@@ -73,15 +74,15 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 
 .nav {
-  position: fixed; inset-inline: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  position: fixed; inset-inline: 0; bottom: 0; height: calc(var(--nav-h) + var(--nav-inset));
   display: flex; background: var(--surface); border-top: 1px solid var(--line);
-  padding-bottom: env(safe-area-inset-bottom); z-index: 20;
+  padding-bottom: var(--nav-inset); z-index: 20;
 }
 .nav button { flex: 1; border: 0; background: none; cursor: pointer; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: .78rem; }
 .nav button .ico { font-size: 1.25rem; line-height: 1; }
 .nav button[aria-current="page"] { color: var(--brand); font-weight: 700; }
 .fab {
-  position: fixed; inset-inline-start: 16px; bottom: calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));
+  position: fixed; inset-inline-start: 16px; bottom: calc(var(--nav-h) + 16px + var(--nav-inset));
   width: 58px; height: 58px; border-radius: 50%; border: 0; cursor: pointer;
   background: var(--brand); color: var(--brand-contrast); font-size: 2rem; line-height: 1;
   box-shadow: 0 4px 14px rgba(0,0,0,.25); z-index: 20;
@@ -305,7 +306,7 @@ form.add label[hidden] { display: none; }
 
 /* "New version available": a bar above the nav that asks for a relaunch; never reloads by itself. */
 .update-banner {
-  position: fixed; bottom: calc(var(--nav-h) + 90px + env(safe-area-inset-bottom)); inset-inline: 12px; margin-inline: auto; max-width: 420px;
+  position: fixed; bottom: calc(var(--nav-h) + 90px + var(--nav-inset)); inset-inline: 12px; margin-inline: auto; max-width: 420px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--brand); border-radius: var(--radius);
   padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 45;
@@ -314,7 +315,7 @@ form.add label[hidden] { display: none; }
 
 /* "Loading earlier months": floats over the screen (above the nav bar, clear of the month title) so the content does not jump; fades in only if the fetch takes a moment. */
 .loading-toast {
-  position: fixed; bottom: calc(var(--nav-h) + 24px + env(safe-area-inset-bottom)); inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px);
+  position: fixed; bottom: calc(var(--nav-h) + 24px + var(--nav-inset)); inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px);
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
   color: var(--muted); font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 40; pointer-events: none;
   opacity: 0; animation: toast-in .15s ease-out .2s forwards;
@@ -390,7 +391,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .seg3b { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
 .seg3b button { padding: 8px; border: 0; background: var(--bg); cursor: pointer; font-size: .9rem; }
 .seg3b button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
-.selbar { position: sticky; bottom: calc(var(--nav-h) + 8px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--biz); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; z-index: 5; }
+.selbar { position: sticky; bottom: calc(var(--nav-h) + 8px + var(--nav-inset)); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--biz); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; z-index: 5; }
 .selbox { width: 22px; height: 22px; accent-color: var(--biz); flex: none; }
 .small { font-size: .82rem; }
 .linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
