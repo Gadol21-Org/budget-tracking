@@ -54,19 +54,6 @@ function Amount({ s }: { s: EmailSuggestion }) {
   return s.currency === "ILS" ? <Money agorot={s.amount_minor} cls={s.amount_minor < 0 ? "expense" : "income"} /> : <b dir="ltr" className={s.amount_minor < 0 ? "expense" : "income"}>{formatMinor(s.amount_minor, s.currency)}</b>;
 }
 
-function Source({ s }: { s: EmailSuggestion }) {
-  return (
-    <details className="email-src">
-      <summary className="muted small">מה כתוב במייל</summary>
-      <div className="small" dir="auto">
-        <div>מאת: {s.sender}</div>
-        <div>נושא: {s.subject}</div>
-        {s.excerpt && <p className="excerpt">{s.excerpt.slice(0, 600)}</p>}
-      </div>
-    </details>
-  );
-}
-
 /** The email as it was sent, in a frame without scripts (images from the internet are shown). */
 function openEmailView(s: EmailSuggestion) {
   openReactDialog(
@@ -132,7 +119,6 @@ function SuggestionCard({ s }: { s: EmailSuggestion }) {
         הודעה מ-{fmtDate(s.received)}
         {s.confidence ? ` · ${CONFIDENCE[s.confidence] ?? ""}` : ""}
       </div>
-      <Source s={s} />
       {err && <div className="error">{err}</div>}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <ViewButton s={s} />
@@ -157,7 +143,6 @@ function FailedCard({ s }: { s: EmailSuggestion }) {
     <div className="card suggestion failed">
       <div className="name">לא הצלחתי לקרוא את ההודעה</div>
       <div className="muted small">{s.subject || s.sender}</div>
-      <Source s={s} />
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <ViewButton s={s} />
         <button
@@ -198,7 +183,6 @@ function QueuedCard({ s }: { s: EmailSuggestion }) {
       <div className="name">ההודעה עדיין לא נקראה</div>
       <div className="muted small">{s.subject || s.sender}</div>
       <div className="muted small">{s.error}</div>
-      <Source s={s} />
       {err && <div className="error">{err}</div>}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <ViewButton s={s} />
