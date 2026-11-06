@@ -310,3 +310,50 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
     (local < 0) == (imported < 0)
         && crate::money::to_paamonim_shekels(local.abs()) * 100 == imported.abs()
 }
+
+/// One transaction an email seems to describe, waiting for a person to accept or reject it.
+/// A message that described nothing is kept as one row with status `ignored` (and no amount)
+/// so it is never fetched or sent to the AI twice.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EmailSuggestion {
+    pub id: i64,
+    pub gmail_id: String,
+    pub idx: i64,
+    /// `pending`, `accepted`, `rejected`, `ignored` or `error`.
+    pub status: String,
+    /// When the email was received (YYYY-MM-DD).
+    pub received: String,
+    pub sender: String,
+    pub subject: String,
+    /// A short piece of the email for the reviewer; dropped once the suggestion is resolved.
+    pub excerpt: String,
+    /// The day of the transaction (YYYY-MM-DD); empty when the status is `ignored`/`error`.
+    pub date: String,
+    /// Signed like a transaction: expenses are negative. In the currency's minor unit.
+    pub amount_minor: i64,
+    pub currency: String,
+    pub category_id: Option<i64>,
+    pub note: String,
+    pub confidence: String,
+    pub transaction_id: Option<i64>,
+    pub error: String,
+}
+
+/// What the parser found in a message; stored with [`Storage::add_email_suggestions`].
+#[derive(Clone, Debug, Default)]
+pub struct NewEmailSuggestion {
+    pub gmail_id: String,
+    pub idx: i64,
+    pub status: String,
+    pub received: String,
+    pub sender: String,
+    pub subject: String,
+    pub excerpt: String,
+    pub date: String,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub category_id: Option<i64>,
+    pub note: String,
+    pub confidence: String,
+    pub error: String,
+}

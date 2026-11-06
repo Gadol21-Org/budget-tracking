@@ -160,6 +160,40 @@ export interface LogUser {
   name: string;
 }
 
+/** One transaction an email seems to describe, waiting for a decision. */
+export interface EmailSuggestion {
+  id: number;
+  gmail_id: string;
+  status: "pending" | "accepted" | "rejected" | "ignored" | "error";
+  received: string;
+  sender: string;
+  subject: string;
+  /** A short piece of the email, dropped once the suggestion is decided. */
+  excerpt: string;
+  date: string;
+  /** Signed like a transaction (an expense is negative), in the currency's minor unit. */
+  amount_minor: number;
+  currency: Currency;
+  category_id: number | null;
+  note: string;
+  confidence: "high" | "medium" | "low" | "";
+  transaction_id: number | null;
+  error: string;
+}
+
+export interface EmailStatus {
+  configured: boolean;
+  ai_configured: boolean;
+  connected: boolean;
+  email: string;
+  label: string;
+  push_enabled: boolean;
+  watch_expiration: string | null;
+  last_sync: string | null;
+  last_error: string | null;
+  pending: number;
+}
+
 /** The proxy in front of the app answered instead of the app (bad gateway, tunnel down, ...): same as offline. */
 export class ServerUnavailableError extends TypeError {
   constructor(status: number) {
@@ -249,6 +283,15 @@ export const api = {
   currencySettings: () => request<{ enabled: Currency[]; supported: Currency[] }>("/api/settings/currencies"),
   saveCurrencySettings: (enabled: Currency[]) =>
     request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  emailStatus: () => request<EmailStatus>("/api/email/status"),
+  emailSuggestions: (status: string) => request<EmailSuggestion[]>(`/api/email/suggestions?status=${status}`),
+  /** Read the label now; with `days` also look back that far. */
+  emailSync: (days?: number) =>
+    request<{ messages: number; suggestions: number; ignored: number; failed: number }>("/api/email/sync", { method: "POST", body: JSON.stringify({ days }) }),
+  emailDisconnect: () => request<void>("/api/email/gmail/disconnect", { method: "POST" }),
+  acceptSuggestion: (id: number, transactionId: number) =>
+    request<void>(`/api/email/suggestions/${id}/accept`, { method: "POST", body: JSON.stringify({ transaction_id: transactionId }) }),
+  rejectSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/reject`, { method: "POST" }),
   /** Whether changes are being written to Paamonim. */
   mirrorStatus: () => request<{ enabled: boolean }>("/api/mirror/status"),
 };

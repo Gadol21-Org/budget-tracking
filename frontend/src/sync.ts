@@ -68,8 +68,26 @@ export async function load() {
     state.offline = true;
   }
   state.loadedFrom = loadedFrom;
+  await loadEmail();
   await loadEnabledCurrencies();
   await apply(data);
+}
+
+/** Gmail status (and the open inbox) after a load. Optional: a failure, or a server without Gmail, leaves it out. */
+export async function loadEmail() {
+  if (state.offline) return;
+  try {
+    state.email = await api.emailStatus();
+    if (state.view === "emailInbox") state.suggestions = await fetchInbox();
+  } catch {
+    state.email = null;
+  }
+}
+
+/** Suggestions waiting for a decision, then the ones the AI could not read. */
+export async function fetchInbox() {
+  const [pending, failed] = await Promise.all([api.emailSuggestions("pending"), api.emailSuggestions("error")]);
+  return [...pending, ...failed];
 }
 
 /** First paint: show the offline copy at once, before anything is fetched. False if there is none yet. */

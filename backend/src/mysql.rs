@@ -16,12 +16,12 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
-    MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
-    RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
+    rounds_to, Business, BusinessLinks, Category, EmailSuggestion, ImportBatch, ImportSummary,
+    LineDelete, MonthlyTotal, NewEmailSuggestion, NewTransaction, PaymentMethod, PendingMirror,
+    RawBackup, RawCategory, RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
 };
 
-const SCHEMA: [&str; 15] = [
+const SCHEMA: [&str; 16] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -130,6 +130,25 @@ const SCHEMA: [&str; 15] = [
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
      )",
+    "CREATE TABLE IF NOT EXISTS email_suggestions (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         gmail_id VARCHAR(64) NOT NULL,
+         idx INT NOT NULL,
+         status VARCHAR(12) NOT NULL,
+         received VARCHAR(10) NOT NULL,
+         sender VARCHAR(255) NOT NULL,
+         subject VARCHAR(255) NOT NULL,
+         excerpt TEXT NOT NULL,
+         date VARCHAR(10) NOT NULL,
+         amount_minor BIGINT NOT NULL,
+         currency VARCHAR(8) NOT NULL,
+         category_id BIGINT NULL,
+         note VARCHAR(255) NOT NULL,
+         confidence VARCHAR(8) NOT NULL,
+         transaction_id BIGINT NULL,
+         error TEXT NOT NULL,
+         UNIQUE KEY email_message (gmail_id, idx)
+     ) DEFAULT CHARSET=utf8mb4",
 ];
 
 /// See [`Storage::requeue_skipped_sub_categories`]. A category goes under a Paamonim category
@@ -477,6 +496,97 @@ impl Storage for MySqlStorage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn add_email_suggestions(&self, rows: &[NewEmailSuggestion]) -> Result<usize> {
+        let mut added = 0;
+        for r in rows {
+            let res = sqlx::query(
+                "INSERT IGNORE INTO email_suggestions
+                   (gmail_id, idx, status, received, sender, subject, excerpt, date,
+                    amount_minor, currency, category_id, note, confidence, error)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&r.gmail_id)
+            .bind(r.idx)
+            .bind(&r.status)
+            .bind(&r.received)
+            .bind(&r.sender)
+            .bind(&r.subject)
+            .bind(&r.excerpt)
+            .bind(&r.date)
+            .bind(r.amount_minor)
+            .bind(&r.currency)
+            .bind(r.category_id)
+            .bind(&r.note)
+            .bind(&r.confidence)
+            .bind(&r.error)
+            .execute(&self.pool)
+            .await?;
+            added += res.rows_affected() as usize;
+        }
+        Ok(added)
+    }
+
+    async fn email_message_seen(&self, gmail_id: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM email_suggestions WHERE gmail_id = ? LIMIT 1")
+            .bind(gmail_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    async fn list_email_suggestions(&self, status: Option<&str>) -> Result<Vec<EmailSuggestion>> {
+        let rows = sqlx::query(
+            "SELECT id, gmail_id, idx, status, received, sender, subject, excerpt, date,
+                    amount_minor, currency, category_id, note, confidence, transaction_id, error
+             FROM email_suggestions WHERE (? IS NULL OR status = ?)
+             ORDER BY received DESC, id DESC LIMIT 500",
+        )
+        .bind(status)
+        .bind(status)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(EmailSuggestion {
+                    id: r.try_get("id")?,
+                    gmail_id: r.try_get("gmail_id")?,
+                    idx: r.try_get::<i32, _>("idx")? as i64,
+                    status: r.try_get("status")?,
+                    received: r.try_get("received")?,
+                    sender: r.try_get("sender")?,
+                    subject: r.try_get("subject")?,
+                    excerpt: r.try_get("excerpt")?,
+                    date: r.try_get("date")?,
+                    amount_minor: r.try_get("amount_minor")?,
+                    currency: r.try_get("currency")?,
+                    category_id: r.try_get("category_id")?,
+                    note: r.try_get("note")?,
+                    confidence: r.try_get("confidence")?,
+                    transaction_id: r.try_get("transaction_id")?,
+                    error: r.try_get("error")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE email_suggestions SET status = ?, transaction_id = ?, excerpt = ''
+             WHERE id = ? AND status = 'pending'",
+        )
+        .bind(status)
+        .bind(transaction_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn get_setting(&self, key: &str) -> Result<Option<String>> {

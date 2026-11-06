@@ -3,6 +3,8 @@ import { api } from "../api";
 import { LinkCard } from "../components/LinkCard";
 import { go } from "../nav";
 import { load } from "../sync";
+import { state } from "../state";
+import { EmailCard } from "./EmailCard";
 import { openLog } from "./log";
 import { openPeople } from "./people";
 
@@ -54,6 +56,7 @@ function Settings() {
         </div>
         <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>
       </div>
+      <EmailCard status={state.email} />
       <LinkCard title="קטגוריות" text="הוספה ומחיקה של קטגוריות ותתי-קטגוריות." button="עריכת קטגוריות" onClick={() => go("categories")} />
       <LinkCard title="עסקים" text="עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." button="ניהול עסקים" onClick={() => go("businesses")} />
       <LinkCard title="מטבעות" text="בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." button="ניהול מטבעות" onClick={() => go("currencies")} />

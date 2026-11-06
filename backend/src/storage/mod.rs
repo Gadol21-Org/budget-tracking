@@ -23,6 +23,25 @@ pub trait Storage: Send + Sync {
     /// App-wide settings (key/value text), synced across devices.
     async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()>;
+    /// Store parsed suggestions. A (message, idx) pair that exists is left as it is, so
+    /// parsing the same message again can never duplicate or undo a decision. Returns how
+    /// many rows were new.
+    async fn add_email_suggestions(&self, rows: &[NewEmailSuggestion]) -> anyhow::Result<usize>;
+    /// Has any row for this Gmail message been stored (whatever its status)?
+    async fn email_message_seen(&self, gmail_id: &str) -> anyhow::Result<bool>;
+    /// Suggestions with the given status (all of them when None), newest first.
+    async fn list_email_suggestions(
+        &self,
+        status: Option<&str>,
+    ) -> anyhow::Result<Vec<EmailSuggestion>>;
+    /// Move a `pending` suggestion to `accepted` (with the transaction made from it) or
+    /// `rejected`, and drop its excerpt. False if it was not pending.
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> anyhow::Result<bool>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
     async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;

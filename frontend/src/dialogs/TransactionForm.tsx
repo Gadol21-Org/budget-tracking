@@ -38,11 +38,22 @@ function rememberedBiz(cat: number | null): number | null {
 /** The category a choice stands for, for the business rules: the sub-category, else the category. */
 const choiceCategory = (c: CategoryChoice) => (c.sub ? Number(c.sub) : c.top ? Number(c.top) : null);
 
+/** What an emailed suggestion starts a new transaction with. */
+export interface Prefill {
+  suggestionId: number;
+  date: string;
+  /** Signed, in the currency's minor unit. */
+  amount_minor: number;
+  currency: Currency;
+  category_id: number | null;
+  note: string;
+}
+
 /**
  * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
  * the series from that occurrence's month on; earlier months are left as they were.
  */
-export function TransactionForm({ existing, startAsIncome, close }: { existing?: Transaction; startAsIncome: boolean; close: () => void }) {
+export function TransactionForm({ existing, startAsIncome, prefill, close }: { existing?: Transaction; startAsIncome: boolean; prefill?: Prefill; close: () => void }) {
   const seriesId = existing?.upcoming ? existing.recurring_series_id! : undefined;
   const segment = state.recurring.find((s) => s.id === existing?.recurring_segment_id);
   /** The month of the occurrence being edited; the date field may move the charge out of it. */
@@ -66,14 +77,15 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
     const kids = kindCats(income).filter((k) => String(k.parent_id) === c.top);
     return { top: c.top, sub: kids.some((k) => String(k.id) === c.sub) ? c.sub : "" };
   }
-  const startIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
+  const startIncome = existing ? existing.amount_agorot > 0 : prefill ? prefill.amount_minor > 0 : startAsIncome;
   const [isIncome, setIsIncome] = useState(startIncome);
-  const [currency, setCurrency] = useState<Currency>(startFx?.currency ?? ruleFx?.currency ?? "ILS");
-  const [amount, setAmount] = useState(startAmountText(existing, startFx, ruleFx));
-  const [date, setDate] = useState(existing?.date ?? today());
-  const [note, setNote] = useState(existing?.note ?? "");
+  const [currency, setCurrency] = useState<Currency>(startFx?.currency ?? ruleFx?.currency ?? prefill?.currency ?? "ILS");
+  const [amount, setAmount] = useState(prefill ? String(Math.abs(prefill.amount_minor) / 10 ** decimals(prefill.currency)) : startAmountText(existing, startFx, ruleFx));
+  const [date, setDate] = useState(existing?.date ?? prefill?.date ?? today());
+  const [note, setNote] = useState(existing?.note ?? prefill?.note ?? "");
   const [choice, setChoice] = useState<CategoryChoice>(() => {
-    const own = existing?.category_id != null ? catById(existing.category_id) : undefined;
+    const seed = existing?.category_id ?? prefill?.category_id ?? null;
+    const own = seed != null ? catById(seed) : undefined;
     return reconcile(startIncome, own ? { top: String(own.parent_id ?? own.id), sub: own.parent_id != null ? String(own.id) : "" } : { top: "", sub: "" });
   });
   // Repeating monthly: for a new transaction it is opt-in; for an occurrence it is always on.
@@ -81,10 +93,13 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
   const [duration, setDuration] = useState(segment?.end_month ? "months" : "forever");
   const [months, setMonths] = useState(segment?.end_month ? String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1) : "12");
   /** undefined = nothing chosen yet (only while a choice is required). */
-  const [bizValue, setBizValue] = useState<number | null | undefined>(ownTag);
+  const [bizValue, setBizValue] = useState<number | null | undefined>(() => {
+    if (ownTag != null || existing || prefill?.category_id == null) return ownTag;
+    return businessRequired(state.biz, state.cats, prefill.category_id) ? undefined : rememberedBiz(prefill.category_id);
+  });
   // Foreign currency: the shekel amount follows the rate for the transaction's day.
   const [quote, setQuote] = useState<Quote | null>(startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null);
-  const [loadingQuote, setLoadingQuote] = useState(!startFx && ruleFx !== undefined);
+  const [loadingQuote, setLoadingQuote] = useState(!startFx && (ruleFx !== undefined || currency !== "ILS"));
   const [ilsText, setIlsText] = useState(startFx ? String(Math.abs(existing!.amount_agorot) / 100) : "");
   /** The shekel amount was typed in (what the card really charged): it is used as it is. */
   const [ilsTouched, setIlsTouched] = useState(false);
@@ -264,6 +279,8 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
         try {
           const id = await api.addTransaction(body);
           if (chosen != null) await api.tagTransactions([id], chosen);
+          // The transaction exists; a failure to record the decision must not look like a failed save.
+          if (prefill) await api.acceptSuggestion(prefill.suggestionId, id).catch(() => {});
         } catch (e3) {
           // No connection: keep the line on this device and send it when the connection is back.
           if (!isNetworkError(e3)) throw e3;

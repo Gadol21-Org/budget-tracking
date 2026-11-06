@@ -9,6 +9,7 @@ import { businessOf, summaryFigures } from "../business";
 import { goBack, openBusinessDashboard, showSide } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
+import { openEmailInbox } from "./emailInbox";
 import { DrillCrumbs, SummaryCategories } from "./insights";
 import { categoryName } from "../categories";
 import { inPeriod } from "../selectors";
@@ -70,6 +71,23 @@ function BusinessCard() {
   );
 }
 
+/** Transactions found in emails wait for a decision. */
+function EmailBanner() {
+  const n = state.email?.pending ?? 0;
+  if (!n) return null;
+  return (
+    <div className="card clickable email-banner" style={{ marginTop: 10 }} {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
+      <div className="head">
+        <div className="grow">
+          <div className="bizname">{n === 1 ? "הצעה אחת מדוא״ל ממתינה לבדיקה" : `${n} הצעות מדוא״ל ממתינות לבדיקה`}</div>
+          <div className="muted small">תנועות שנמצאו בהודעות עם התווית</div>
+        </div>
+        <span className="muted">›</span>
+      </div>
+    </div>
+  );
+}
+
 /** The top bar of a category drill-down: back to the level above (the summary, or the category when a sub-category is open). */
 function DrillBackBar() {
   const sub = state.insights.sub !== undefined;
@@ -127,6 +145,7 @@ function MonthScreen() {
         <Stat label="הוצאות" agorot={-expense} cls="expense" kind="expense" />
         <Stat label="יתרה" agorot={balance} cls={sign(balance)} />
       </div>
+      <EmailBanner />
       <BusinessCard />
       <SummaryCategories ctx={insightsCtx()} />
     </div>

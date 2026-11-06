@@ -10,6 +10,7 @@ vi.mock("../sync", () => ({
     render();
   }),
   loadHistory: async () => {},
+  fetchInbox: vi.fn(async () => []),
   IN_FLIGHT: new Set<string>(),
 }));
 vi.mock("../api", async (orig) => ({
@@ -18,6 +19,7 @@ vi.mock("../api", async (orig) => ({
     importPaamonim: vi.fn(async () => ({ transactions_added: 12, transactions_skipped: 30, categories_added: 1 })),
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
+    rejectSuggestion: vi.fn(async () => {}),
   },
 }));
 
@@ -85,5 +87,51 @@ describe("the app shell", () => {
     state.offline = false;
     app.render();
     expect(screen.queryByText(/אין חיבור או שהשרת אינו זמין/)).toBeNull();
+  });
+});
+
+describe("the email inbox", () => {
+  const suggestion = {
+    id: 7,
+    gmail_id: "g7",
+    status: "pending" as const,
+    received: "2026-03-02",
+    sender: "Shop <shop@example.com>",
+    subject: "Your receipt",
+    excerpt: "Total 12.50",
+    date: "2026-03-01",
+    amount_minor: -1250,
+    currency: "ILS",
+    category_id: null,
+    note: "Corner shop",
+    confidence: "high" as const,
+    transaction_id: null,
+    error: "",
+  };
+
+  it("shows what was found, and nothing is added until it is accepted", async () => {
+    state.suggestions = [suggestion];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("Corner shop")).toBeTruthy();
+    expect(screen.getByText(/בלי קטגוריה/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "בדיקה והוספה" })).toBeTruthy();
+  });
+
+  it("rejects a suggestion through the API", async () => {
+    const { api } = await import("../api");
+    state.suggestions = [suggestion];
+    state.view = "emailInbox";
+    app.render();
+    fireEvent.click(await screen.findByRole("button", { name: "דחייה" }));
+    await waitFor(() => expect(api.rejectSuggestion).toHaveBeenCalledWith(7));
+  });
+
+  it("offers manual entry for a message that could not be read", async () => {
+    state.suggestions = [{ ...suggestion, id: 8, status: "error", error: "no answer" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("לא הצלחתי לקרוא את ההודעה")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הוספה ידנית" })).toBeTruthy();
   });
 });

@@ -1,5 +1,6 @@
 mod businesses;
 mod categories;
+mod email;
 mod error;
 mod mirroring;
 mod repeating;
@@ -84,7 +85,13 @@ pub(crate) async fn export_sheets(
 /// All HTTP routes. A separate function so a test can build it: axum panics on
 /// overlapping routes when the router is constructed, which would otherwise only
 /// show up when the server starts.
+#[cfg(test)]
 pub(crate) fn router(db: Db) -> Router {
+    let svc = crate::email::Service::from_env(db.clone());
+    router_with(db, svc)
+}
+
+pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
     Router::new()
         .route(
             "/api/transactions",
@@ -154,6 +161,25 @@ pub(crate) fn router(db: Db) -> Router {
             "/api/categories/:id/business-required",
             axum::routing::put(businesses::require_category_business),
         )
+        .route("/api/email/status", get(email::status))
+        .route("/api/email/gmail/connect", get(email::connect))
+        .route("/api/email/gmail/callback", get(email::callback))
+        .route(
+            "/api/email/gmail/disconnect",
+            axum::routing::post(email::disconnect),
+        )
+        .route("/api/email/sync", axum::routing::post(email::sync))
+        .route("/api/email/suggestions", get(email::list))
+        .route(
+            "/api/email/suggestions/:id/accept",
+            axum::routing::post(email::accept),
+        )
+        .route(
+            "/api/email/suggestions/:id/reject",
+            axum::routing::post(email::reject),
+        )
+        // The one route Google calls itself: open to the internet, checks its caller.
+        .route("/api/email/push", axum::routing::post(email::push))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(
@@ -176,5 +202,6 @@ pub(crate) fn router(db: Db) -> Router {
         )
         .with_state(db)
         .fallback(assets::static_handler)
+        .layer(axum::Extension(email))
         .layer(axum::middleware::from_fn(users::with_actor))
 }

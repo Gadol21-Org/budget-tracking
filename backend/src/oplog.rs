@@ -244,6 +244,32 @@ impl Storage for Logged {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
         self.0.list_payment_methods().await
     }
+    // Email suggestions are a review queue, not data; the transaction made from one is logged.
+    async fn add_email_suggestions(
+        &self,
+        rows: &[crate::storage::NewEmailSuggestion],
+    ) -> anyhow::Result<usize> {
+        self.0.add_email_suggestions(rows).await
+    }
+    async fn email_message_seen(&self, gmail_id: &str) -> anyhow::Result<bool> {
+        self.0.email_message_seen(gmail_id).await
+    }
+    async fn list_email_suggestions(
+        &self,
+        status: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::storage::EmailSuggestion>> {
+        self.0.list_email_suggestions(status).await
+    }
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> anyhow::Result<bool> {
+        self.0
+            .resolve_email_suggestion(id, status, transaction_id)
+            .await
+    }
     // Businesses are a local view over the data, not logged.
     async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {
         self.0.list_businesses().await

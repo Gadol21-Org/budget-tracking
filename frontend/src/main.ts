@@ -8,6 +8,7 @@ import { showStatus } from "./render";
 import { load, showCached } from "./sync";
 import { screenState } from "./nav";
 import { openTransactionDialog } from "./dialogs/transaction";
+import { go } from "./nav";
 
 startAnalytics();
 
@@ -17,6 +18,7 @@ showStatus("טוען…");
 showCached()
   .catch(() => false)
   .then(() => load())
+  .then(openGmailReturn)
   .then(openShortcutAction)
   .catch((e) => {
     showStatus(`לא ניתן לטעון נתונים: ${e}`, true);
@@ -53,4 +55,14 @@ function openShortcutAction() {
   if (action !== "add-expense" && action !== "add-income") return;
   history.replaceState(screenState({ n: 0 }), "", location.pathname);
   openTransactionDialog(undefined, action === "add-income");
+}
+
+/** Google sends the browser back to /?gmail=connected (or ?gmail_error=...) after the consent screen. */
+function openGmailReturn() {
+  const q = new URLSearchParams(location.search);
+  const error = q.get("gmail_error");
+  if (!error && q.get("gmail") !== "connected") return;
+  history.replaceState(screenState({ n: 0 }), "", location.pathname);
+  go("settings");
+  if (error) alert(`החיבור ל-Gmail נכשל: ${error}`);
 }
