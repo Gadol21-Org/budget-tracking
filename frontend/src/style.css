@@ -438,3 +438,4 @@ dialog { overscroll-behavior: contain; }
 @media (min-width: 700px) { .bizmenu { grid-template-columns: 1fr 1fr; } }
 .titlerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .titlerow h1 { margin: 0; }
+.bizaction .grow { flex: 1; min-width: 0; }

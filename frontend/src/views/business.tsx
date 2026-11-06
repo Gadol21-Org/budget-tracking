@@ -13,7 +13,6 @@ import {
   scopeName,
   scoped,
 } from "../business";
-import { BackButton } from "../components/BackButton";
 import { BusinessChips } from "../components/BusinessChips";
 import { DialogForm } from "../components/DialogForm";
 import { Money } from "../components/Money";
@@ -335,7 +334,6 @@ function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
   return (
     <div className="bizdash">
       <div className="card filterbar">
-        <BackButton label="→ העסק" title="חזרה לעמוד העסק" onClick={ctx.back} />
         <div className="grow">
           <div className="name">סקירה</div>
         </div>
@@ -411,10 +409,7 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
   const tagged = (id: number) => ctx.txs.filter((t) => businessOf(ctx.biz, ctx.cats, t) === id && !t.upcoming).length;
   return (
     <div>
-      <div className="titlerow">
-        <BackButton label={ctx.backLabel} title="חזרה" onClick={ctx.back} />
-        <h1>עסקים</h1>
-      </div>
+      <h1>מוצרים</h1>
       <div className="card">
         <p className="muted">
           כל התנועות נשארות בסיכום משק הבית. עסק הוא רק מבט נוסף: אפשר לראות רווח והפסד לכל עסק ולכל העסקים יחד. הוצאה מסומנת בעסק בעת ההוספה, והכנסות נספרות לפי הקטגוריה שמקושרת לעסק (כפתור 💼 בהגדרות הקטגוריות).

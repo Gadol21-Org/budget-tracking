@@ -1,5 +1,4 @@
 import { type ReactElement } from "react";
-import { BackButton } from "../components/BackButton";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
 import { businessOf, summaryFigures } from "../business";
@@ -17,7 +16,7 @@ interface BusinessAction {
 
 const ACTIONS: BusinessAction[] = [
   { icon: "📊", title: "סקירה ורווח והפסד", text: "הכנסות, הוצאות, מגמות והשוואות, לכל העסק או לעסק אחד.", open: openBusinessDashboard },
-  { icon: "🏢", title: "ניהול עסקים", text: "הוספה ושינוי שם של עסקים והוצאות משותפות.", open: () => go("businesses") },
+  { icon: "🏢", title: "ניהול מוצרים", text: "הוספה ושינוי שם, והוצאות משותפות.", open: () => go("businesses") },
 ];
 
 const sign = (n: number) => (n < 0 ? "expense" : "income");
@@ -56,13 +55,10 @@ function Overview() {
   );
 }
 
-function BusinessHub({ back }: { back: () => void }) {
+function BusinessHub() {
   return (
     <div className="bizhub">
-      <div className="titlerow">
-        <BackButton label="→ סיכום" title="חזרה לסיכום" onClick={back} />
-        <h1>העסק</h1>
-      </div>
+      <h1>העסק</h1>
       <ConnectedMonthBar />
       <Overview />
       <h2 className="bizmenu-title">פעולות</h2>
@@ -82,6 +78,6 @@ function BusinessHub({ back }: { back: () => void }) {
   );
 }
 
-export function businessHub(props: { back: () => void }): ReactElement {
-  return <BusinessHub {...props} />;
+export function businessHub(): ReactElement {
+  return <BusinessHub />;
 }

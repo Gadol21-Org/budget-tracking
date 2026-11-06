@@ -89,12 +89,13 @@ describe("the app shell", () => {
 });
 
 describe("the business page", () => {
-  it("has a return button to the summary and a menu that opens the overview", async () => {
+  it("has a tray with an exit item and a menu that opens the overview", async () => {
     state.view = "business";
     app.render();
-    expect(await screen.findByRole("button", { name: "→ סיכום" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "→ סיכום" })).toBeNull();
     fireEvent.click(screen.getByText("סקירה ורווח והפסד"));
     expect(state.view).toBe("bizdash");
-    expect(screen.getByRole("button", { name: "→ העסק" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "העסק" })).toBeTruthy();
   });
 });

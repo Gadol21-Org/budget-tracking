@@ -26,6 +26,7 @@ const ICONS: Record<string, string[]> = {
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   bizdash: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   businesses: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
+  exit: ["M5 12h14", "m12 5 7 7-7 7"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
 
@@ -61,20 +62,20 @@ function openTab(view: View) {
 }
 
 /** Inside the business section the tray holds the business's own items; the first leaves it. Add an item here for each new action. */
-const BUSINESS_TABS: [View, string, () => void][] = [
-  ["month", "סיכום", () => openTab("month")],
-  ["business", "העסק", () => go("business")],
-  ["bizdash", "סקירה", openBusinessDashboard],
-  ["businesses", "עסקים", () => go("businesses")],
+const BUSINESS_TABS: [View, string, () => void, string][] = [
+  ["month", "יציאה מהעסק", () => openTab("month"), "exit"],
+  ["business", "העסק", () => go("business"), "business"],
+  ["bizdash", "סקירה", openBusinessDashboard, "bizdash"],
+  ["businesses", "מוצרים", () => go("businesses"), "businesses"],
 ];
 
 function Nav() {
   if (BUSINESS_SCREENS.includes(state.view)) {
     return (
       <nav className="nav">
-        {BUSINESS_TABS.map(([view, label, open]) => (
+        {BUSINESS_TABS.map(([view, label, open, icon]) => (
           <button key={view} aria-current={state.view === view ? "page" : undefined} onClick={open}>
-            <TabIcon view={view} />
+            <TabIcon view={icon} />
             <span>{label}</span>
           </button>
         ))}
@@ -135,7 +136,7 @@ const screens: Record<View, () => ReactElement> = {
   log: logView,
   categories: categoriesView,
   settings: settingsView,
-  business: () => businessHub({ back: () => goBack("month") }),
+  business: businessHub,
   bizdash: businessScreen,
   businesses: () => businessesView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
