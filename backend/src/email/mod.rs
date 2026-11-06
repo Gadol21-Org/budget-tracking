@@ -44,11 +44,6 @@ pub struct Config {
     /// AI calls per day at most (a guard against a flood of mail to the routed address).
     pub max_per_day: u32,
     pub ai_base: String,
-    /// USD per million input tokens (the cost shown in the app is these prices times the token
-    /// counts Gemini reports; set them to the model's real price).
-    pub price_in_per_m: f64,
-    /// USD per million output tokens (thinking tokens count as output).
-    pub price_out_per_m: f64,
 }
 
 impl Config {
@@ -63,12 +58,6 @@ impl Config {
                 .unwrap_or(100),
             ai_base: var("GEMINI_BASE_URL")
                 .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into()),
-            price_in_per_m: var("EMAIL_AI_PRICE_IN_PER_M")
-                .and_then(|m| m.parse().ok())
-                .unwrap_or(0.10),
-            price_out_per_m: var("EMAIL_AI_PRICE_OUT_PER_M")
-                .and_then(|m| m.parse().ok())
-                .unwrap_or(0.40),
         })
     }
 }
@@ -222,7 +211,7 @@ impl Service {
                 "model": cfg.model,
                 "input_tokens": u.input,
                 "output_tokens": u.output,
-                "cost_micro_usd": u.cost_micro_usd(cfg.price_in_per_m, cfg.price_out_per_m),
+                "cost_micro_usd": u.cost_micro_usd(),
                 "result": result,
             })),
         )

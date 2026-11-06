@@ -49,7 +49,7 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         return reply("not json at all".into());
     }
     let txs = if prompt.contains("receipt") {
-        json!([{ "direction": "expense", "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": "high" }])
+        json!([{ "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": "high" }])
     } else {
         json!([])
     };
@@ -73,8 +73,6 @@ fn config(base: &str) -> Config {
         model: "test-model".into(),
         max_per_day: 100,
         ai_base: base.into(),
-        price_in_per_m: 0.10,
-        price_out_per_m: 0.40,
     }
 }
 
@@ -594,15 +592,15 @@ async fn each_ai_call_is_logged_with_its_cost_and_summed_for_a_period() {
     let new = calls.iter().find_map(|e| e.new.clone()).unwrap();
     assert_eq!(new["input_tokens"], 1000);
     assert_eq!(new["output_tokens"], 150);
-    // 1000 x $0.10 + 150 x $0.40 per million tokens = 160 millionths of a dollar.
-    assert_eq!(new["cost_micro_usd"], 160);
+    // 1000 x $0.30 + 150 x $2.50 per million tokens = 675 millionths of a dollar.
+    assert_eq!(new["cost_micro_usd"], 675);
 
     let app = serve(&r, r.svc.clone()).await;
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let url = format!("{app}/api/email/cost?from={today}&to={today}");
     let body: Value = reqwest::get(url).await.unwrap().json().await.unwrap();
     assert_eq!(body["items"].as_array().unwrap().len(), 2);
-    assert_eq!(body["total_micro_usd"], 320);
+    assert_eq!(body["total_micro_usd"], 1350);
     let results: Vec<_> = body["items"]
         .as_array()
         .unwrap()

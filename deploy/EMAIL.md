@@ -44,13 +44,15 @@ The Worker cannot sign in to Access, so make exactly one path public, like `/ass
 2. **Filter:** Settings > Filters and Blocked Addresses > Create a new filter, for example `from:(your-card-issuer.example) OR subject:(receipt OR קבלה OR חשבונית)` > Create filter > tick **Forward it to** and choose the address. A filter forwards mail that arrives after it is created, not old mail.
 
 ### 6. Phone notifications (optional)
-A new suggestion can notify your phone, even when the app is closed. Make a key pair once:
+A new suggestion can notify your phone, even when the app is closed. Make a key pair once. These commands work the same on macOS and Linux (`base64 -w0` does not exist on macOS, so the output is joined with `tr`):
 ```
 openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out vapid.pem
-VAPID_PRIVATE_KEY_PEM_B64=$(base64 -w0 vapid.pem)
-VAPID_PUBLIC_KEY=$(openssl ec -in vapid.pem -pubout -outform DER | tail -c 65 | base64 -w0 | tr '+/' '-_' | tr -d '=')
+echo "VAPID_PRIVATE_KEY_PEM_B64=$(base64 < vapid.pem | tr -d '\n')"
+echo "VAPID_PUBLIC_KEY=$(openssl ec -in vapid.pem -pubout -outform DER 2>/dev/null | tail -c 65 | base64 | tr -d '\n=' | tr '+/' '-_')"
 ```
-Put both in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, then press "התראה על הצעות חדשות" in Settings on each device. On iPhone the app must be added to the home screen first. The push carries no text: the app asks the server how many suggestions wait. These are the same variables the Sumit receipts feature uses, so one key pair serves both.
+Put both lines in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, then press "התראה על הצעות חדשות" in Settings on each device. On iPhone the app must be added to the home screen first. The push carries no text: the app asks the server how many suggestions wait. These are the same variables the Sumit receipts feature uses, so one key pair serves both.
+
+**Staging uses its own key.** Run the commands again for a second pair (do not reuse the production one) and save them as GitHub repository secrets `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY` (the values printed after the `=`). The staging workflow passes them to the staging container only; without them push is off on staging. Production never reads these secrets.
 
 ### 7. Try it
 Forward (or send) a sample receipt to the address. Within seconds **Settings > Suggestions from email** shows it. The card shows when the last message arrived and any error from the AI.
@@ -61,7 +63,7 @@ Forward (or send) a sample receipt to the address. Within seconds **Settings > S
 - A message the AI answers nonsense for shows up as "could not read" with a button to add the transaction by hand.
 
 ## AI cost
-Every AI call that reads an email is written to the change history ("קריאת מייל ב-AI") with its tokens and price, and Settings > עלות AI lists the calls and the total for a month, year or custom period. The price is the token counts Gemini reports times `EMAIL_AI_PRICE_IN_PER_M` and `EMAIL_AI_PRICE_OUT_PER_M` (USD per million input and output tokens; thinking tokens count as output). The defaults (0.10 and 0.40) are an estimate: set them to your model's real prices. Entries keep the price used when the call was made, so changing the prices only affects later calls. Like the rest of the history they are kept for a year.
+Every AI call that reads an email is written to the change history ("קריאת מייל ב-AI") with its tokens and price, and Settings > עלות AI lists the calls and the total for a month, year or custom period. The price is the token counts Gemini reports times Gemini 3.5 Flash Lite's prices, fixed in `backend/src/email/ai.rs` ($0.30 per million input tokens, $2.50 per million output tokens; thinking tokens count as output). If you switch `EMAIL_AI_MODEL` to another model, update those two constants. Entries keep the price used when the call was made, so a price change only affects later calls. Like the rest of the history they are kept for a year.
 
 ## Handling some mail without the AI
 The AI is the default reader. A message that needs its own treatment (for example, one whose link must be followed to fetch a bill) gets a handler: implement `Handler` in `backend/src/email/handlers.rs` and add it to `registry()`. Handlers are asked first, in order, by sender, subject or content; the first that matches handles the message and the AI is not used for it. A handler gets the parsed mail (text, HTML and `links()`), and returns suggestions for the review inbox the same way the AI does. There are none yet.
