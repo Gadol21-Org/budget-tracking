@@ -2,11 +2,14 @@ import "./style.css";
 import "./themes/ios.css";
 import "./gestures";
 import "./widgets";
+import { startAnalytics } from "./analytics";
 import { el } from "./ui";
 import { showStatus } from "./render";
 import { load, showCached } from "./sync";
 import { screenState } from "./nav";
 import { openTransactionDialog } from "./dialogs/transaction";
+
+startAnalytics();
 
 showStatus("טוען…");
 
