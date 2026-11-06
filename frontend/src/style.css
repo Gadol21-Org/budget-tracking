@@ -360,7 +360,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .bizhero .sub { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: .85rem; }
 .bizdash .card { margin-bottom: 10px; }
 .bizdash .filterbar { display: flex; align-items: center; gap: 10px; }
-.seg4 { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; }
+.seg4 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; }
 .seg4 button { padding: 9px 4px; border: 0; background: var(--bg); cursor: pointer; font-size: .9rem; }
 .seg4 button[aria-pressed="true"] { background: var(--biz); color: #fff; font-weight: 700; }
 .biztable { width: 100%; border-collapse: collapse; font-size: .9rem; }
