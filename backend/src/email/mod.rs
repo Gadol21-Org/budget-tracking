@@ -78,6 +78,8 @@ pub struct Status {
     pub pending: usize,
     /// Messages the AI has not read yet.
     pub queued: usize,
+    /// VAPID public key for subscribing to web push; absent when push is not set up.
+    pub push_public_key: Option<String>,
 }
 
 /// What became of one message.
@@ -180,6 +182,7 @@ impl Service {
                 .filter(|s| !s.is_empty()),
             pending,
             queued,
+            push_public_key: crate::push::public_key(),
         })
     }
 
@@ -262,6 +265,9 @@ impl Service {
         let categories = self.db.list_categories().await?;
         let out = self.read(&mail, &categories).await?;
         self.db.add_email_suggestions(&out.rows).await?;
+        if out.summary.suggestions > 0 {
+            crate::push::notify_all(self.db.as_ref()).await;
+        }
         Ok(out.summary)
     }
 
@@ -328,6 +334,7 @@ impl Service {
         let _guard = self.running.lock().await;
         let categories = self.db.list_categories().await?;
         let mut done = 0;
+        let mut found = false;
         for row in self
             .db
             .list_email_suggestions(Some("queued"))
@@ -355,7 +362,11 @@ impl Service {
             if self.db.delete_email_suggestion(row.id).await? {
                 self.db.add_email_suggestions(&out.rows).await?;
                 done += 1;
+                found |= out.summary.suggestions > 0;
             }
+        }
+        if found {
+            crate::push::notify_all(self.db.as_ref()).await;
         }
         Ok(done)
     }

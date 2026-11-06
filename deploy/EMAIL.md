@@ -45,7 +45,16 @@ The Worker cannot sign in to Access, so make exactly one path public, like `/ass
 1. **Forwarding address:** Gmail > Settings > See all settings > Forwarding and POP/IMAP > Add a forwarding address > `budget-<random>@your-domain`. Gmail sends a confirmation code *to that address*, so first point the routing rule at your own inbox (Action: **Send to an email** > a verified destination address), read the code in your inbox, confirm it in Gmail, then switch the rule back to **Send to a Worker**.
 2. **Filter:** Settings > Filters and Blocked Addresses > Create a new filter, for example `from:(your-card-issuer.example) OR subject:(receipt OR קבלה OR חשבונית)` > Create filter > tick **Forward it to** and choose the address. A filter forwards mail that arrives after it is created, not old mail.
 
-### 6. Try it
+### 6. Phone notifications (optional)
+A new suggestion can notify your phone, even when the app is closed. Make a key pair once:
+```
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out vapid.pem
+VAPID_PRIVATE_KEY_PEM_B64=$(base64 -w0 vapid.pem)
+VAPID_PUBLIC_KEY=$(openssl ec -in vapid.pem -pubout -outform DER | tail -c 65 | base64 -w0 | tr '+/' '-_' | tr -d '=')
+```
+Put both in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, then press "התראה על הצעות חדשות" in Settings on each device. On iPhone the app must be added to the home screen first. The push carries no text: the app asks the server how many suggestions wait. These are the same variables the Sumit receipts feature uses, so one key pair serves both.
+
+### 7. Try it
 Forward (or send) a sample receipt to the address. Within seconds **Settings > Suggestions from email** shows it. The card shows when the last message arrived and any error from the AI.
 
 ## Behaviour worth knowing

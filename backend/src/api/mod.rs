@@ -161,6 +161,8 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             "/api/categories/:id/business-required",
             axum::routing::put(businesses::require_category_business),
         )
+        .route("/api/push", axum::routing::post(email::push_subscribe))
+        .route("/api/push/check", axum::routing::post(email::push_check))
         .route("/api/email/status", get(email::status))
         .route("/api/email/suggestions", get(email::list))
         .route(

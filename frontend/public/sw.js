@@ -53,3 +53,19 @@ self.addEventListener("fetch", (e) => {
     }),
   );
 });
+
+// A push carries no data: ask the server how many email suggestions wait and say so.
+self.addEventListener("push", (e) => {
+  e.waitUntil(
+    fetch("/api/email/status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((o) => o.pending || 0)
+      .catch(() => 0)
+      .then((n) => self.registration.showNotification("הצעה חדשה מדוא״ל", { body: n > 1 ? `${n} הצעות ממתינות לבדיקה` : "תנועה שנמצאה במייל ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" })),
+  );
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window" }).then((cs) => (cs.length ? cs[0].focus() : self.clients.openWindow("/"))));
+});

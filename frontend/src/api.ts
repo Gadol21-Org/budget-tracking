@@ -184,6 +184,8 @@ export interface EmailSuggestion {
 }
 
 export interface EmailStatus {
+  /** VAPID public key for subscribing to web push; absent when push is not set up on the server. */
+  push_public_key?: string | null;
   /** The server has EMAIL_INBOUND_SECRET. */
   configured: boolean;
   ai_configured: boolean;
@@ -285,6 +287,8 @@ export const api = {
   currencySettings: () => request<{ enabled: Currency[]; supported: Currency[] }>("/api/settings/currencies"),
   saveCurrencySettings: (enabled: Currency[]) =>
     request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
+  pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),
   emailStatus: () => request<EmailStatus>("/api/email/status"),
   emailSuggestions: (status: string) => request<EmailSuggestion[]>(`/api/email/suggestions?status=${status}`),
   /** Read the messages the AI could not read earlier (all, or one). */

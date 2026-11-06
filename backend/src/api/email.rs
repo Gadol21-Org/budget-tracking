@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 type Svc = Extension<Arc<Service>>;
@@ -165,4 +165,36 @@ pub(crate) async fn view(State(db): State<Db>, Path(id): Path<i64>) -> Result<Re
         html,
     )
         .into_response())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Subscription {
+    endpoint: String,
+}
+
+/// Remember this device's push endpoint, so new suggestions can notify it.
+pub(crate) async fn push_subscribe(
+    State(db): State<Db>,
+    Json(b): Json<Subscription>,
+) -> Result<StatusCode, ApiError> {
+    crate::push::subscribe(db.as_ref(), &b.endpoint)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+pub(crate) struct Registered {
+    registered: bool,
+}
+
+/// Does the server already hold this device's push endpoint? Asked before offering to enable notifications.
+pub(crate) async fn push_check(
+    State(db): State<Db>,
+    Json(b): Json<Subscription>,
+) -> Result<Json<Registered>, ApiError> {
+    let registered = crate::push::is_registered(db.as_ref(), &b.endpoint)
+        .await
+        .map_err(internal)?;
+    Ok(Json(Registered { registered }))
 }
