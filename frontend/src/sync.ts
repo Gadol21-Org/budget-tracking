@@ -155,7 +155,7 @@ export async function loadHistory(from: string): Promise<void> {
 export function neededFrom(): string {
   let from = bounds(state.period).from;
   const cmp = state.insights.cmp;
-  if (state.view === "insights" || state.view === "business") {
+  if (state.view === "insights" || state.view === "bizdash") {
     // Trends show 12 months; a year earlier is the "same period last year"; an average looks back n periods.
     const avgBack = state.view === "insights" && cmp.kind === "avg" ? cmp.n * (state.period.kind === "year" ? 12 : 1) : 0;
     from = `${addMonths(from.slice(0, 7), -12 - avgBack)}-01`;
