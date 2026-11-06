@@ -49,7 +49,7 @@ export const productName = (d: ProductsData, id: number | undefined | null) => d
 
 // ---- Figures -------------------------------------------------------------------------------------
 
-export type BusinessTab = "overview" | "trends" | "cats" | "compare";
+export type BusinessTab = "overview" | "trends" | "cats" | "compare" | "txs";
 export interface BusinessView {
   tab: BusinessTab;
   /** "all" = the whole business, or one product. */
@@ -63,7 +63,6 @@ export interface BusinessCtx {
   period: Period;
   view: BusinessView;
   setView: (patch: Partial<BusinessView>) => void;
-  back: () => void;
 }
 
 export interface Fig {

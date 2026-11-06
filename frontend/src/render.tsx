@@ -5,7 +5,7 @@ import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
 import { businessDashboard, productsView } from "./views/business";
-import { businessHub } from "./views/businessHub";
+import { actionsPage } from "./views/actionsPage";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
 import { monthView } from "./views/month";
@@ -26,6 +26,7 @@ const ICONS: Record<string, string[]> = {
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   businessOverview: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   products: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
+  actions: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"],
   exit: ["M5 12h14", "m12 5 7 7-7 7"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
@@ -40,7 +41,7 @@ function TabIcon({ view }: { view: string }) {
   );
 }
 
-const TABS: [View, string][] = [
+const TABS: [View | "business", string][] = [
   ["month", "סיכום"],
   ["list", "תנועות"],
   ["insights", "תובנות"],
@@ -48,10 +49,11 @@ const TABS: [View, string][] = [
   ["settings", "הגדרות"],
 ];
 
-const BUSINESS_SCREENS: View[] = ["business", "businessOverview", "products"];
+const BUSINESS_SCREENS: View[] = ["actions", "businessOverview", "products"];
 const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people"];
 
-function openTab(view: View) {
+function openTab(view: View | "business") {
+  if (view === "business") return openBusinessDashboard();
   // Tapping the open tab goes back up from a category; opening another one starts at its top level.
   if ((view === "insights" || view === "month") && state.view === view) {
     if (state.insights.cat !== undefined) navigateInsights({}, "push");
@@ -64,8 +66,8 @@ function openTab(view: View) {
 /** Inside the business section the tray holds the business's own items; the first leaves it. Add an item here for each new action. */
 const BUSINESS_TABS: [View, string, () => void, string][] = [
   ["month", "יציאה מהעסק", () => openTab("month"), "exit"],
-  ["business", "העסק", () => go("business"), "business"],
-  ["businessOverview", "סקירה", openBusinessDashboard, "businessOverview"],
+  ["businessOverview", "סקירה", openBusinessDashboard, "business"],
+  ["actions", "פעולות", () => go("actions"), "actions"],
   ["products", "מוצרים", () => go("products"), "products"],
 ];
 
@@ -125,7 +127,6 @@ function businessScreen() {
     period: state.period,
     view: state.businessView,
     setView: (patch) => ((state.businessView = { ...state.businessView, ...patch }), render()),
-    back: () => goBack("business"),
   });
 }
 
@@ -136,7 +137,7 @@ const screens: Record<View, () => ReactElement> = {
   log: logView,
   categories: categoriesView,
   settings: settingsView,
-  business: businessHub,
+  actions: actionsPage,
   businessOverview: businessScreen,
   products: () => productsView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),

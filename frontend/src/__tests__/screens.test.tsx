@@ -88,14 +88,13 @@ describe("the app shell", () => {
   });
 });
 
-describe("the business page", () => {
-  it("has a tray with an exit item and a menu that opens the overview", async () => {
-    state.view = "business";
+describe("the business section", () => {
+  it("opens on the overview, with a tray that has an exit item and the actions page", async () => {
+    state.view = "businessOverview";
     app.render();
     expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "→ סיכום" })).toBeNull();
-    fireEvent.click(screen.getByText("סקירה ורווח והפסד"));
-    expect(state.view).toBe("businessOverview");
-    expect(screen.getByRole("button", { name: "העסק" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "פעולות" }));
+    expect(state.view).toBe("actions");
+    expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
   });
 });

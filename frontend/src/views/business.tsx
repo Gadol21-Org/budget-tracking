@@ -23,12 +23,15 @@ import { contains, shift, title as periodTitle } from "../period";
 import { colorAt } from "../insights/model";
 import { ConnectedMonthBar } from "./month";
 import { DonutCard, Delta } from "./insights";
+import { TransactionRow } from "./list";
+import { dayTitle } from "../selectors";
 
-const TABS: [BusinessTab, string][] = [
+/** The whole business compares its products; one product lists its own transactions instead. */
+const tabsFor = (scope: "all" | number): [BusinessTab, string][] => [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
   ["cats", "קטגוריות"],
-  ["compare", "השוואה"],
+  scope === "all" ? ["compare", "השוואה"] : ["txs", "תנועות"],
 ];
 
 const signed = (a: number) => <Money agorot={a} whole cls={a < 0 ? "expense" : "income"} />;
@@ -180,7 +183,36 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
           </div>
         )
       )}
+      {scope !== "all" && ts.length > 0 && (
+        <>
+          <h2>הכנסות מול הוצאות · 6 חודשים</h2>
+          <Chart ctx={ctx} scope={scope} />
+        </>
+      )}
       {!ts.length && <div className="empty">{`עוד אין תנועות ${scope === "all" ? "בעסק" : "במוצר"}.`} תייגו תנועה, או קשרו קטגוריה למוצר.</div>}
+    </>
+  );
+}
+
+/** The product's lines in the period, by day, as in the transactions tab. */
+function ProductTransactions({ ctx }: { ctx: BusinessCtx }) {
+  const txs = scoped(ctx, ctx.view.scope).filter((t) => contains(ctx.period, t.date));
+  const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
+  if (!days.length) return <div className="empty">אין תנועות בתקופה זו</div>;
+  return (
+    <>
+      {days.map((d) => (
+        <div key={d}>
+          <div className="daylabel">{dayTitle(d)}</div>
+          <div className="card rows">
+            {txs
+              .filter((t) => t.date === d)
+              .map((t, i) => (
+                <TransactionRow key={i} t={t} />
+              ))}
+          </div>
+        </div>
+      ))}
     </>
   );
 }
@@ -301,7 +333,7 @@ function Compare({ ctx }: { ctx: BusinessCtx }) {
   );
 }
 
-const BODIES = { overview: Overview, trends: Trends, cats: Categories, compare: Compare };
+const BODIES = { overview: Overview, trends: Trends, cats: Categories, compare: Compare, txs: ProductTransactions };
 
 /** The business dashboards: scope (the whole business or one of its products) and four tabs. */
 export function businessDashboard(ctx: BusinessCtx): ReactElement {
@@ -309,7 +341,10 @@ export function businessDashboard(ctx: BusinessCtx): ReactElement {
 }
 
 function BusinessDashboard({ ctx }: { ctx: BusinessCtx }) {
-  const Body = BODIES[ctx.view.tab];
+  const tabs = tabsFor(ctx.view.scope);
+  // A tab the scope does not have (the comparison, or a product's lines) falls back to the overview.
+  const tab = tabs.some(([k]) => k === ctx.view.tab) ? ctx.view.tab : "overview";
+  const Body = BODIES[tab];
   const openScopes = () =>
     openReactDialog((close) => {
       const item = (label: string, scope: "all" | number, cls = "") => (
@@ -338,8 +373,8 @@ function BusinessDashboard({ ctx }: { ctx: BusinessCtx }) {
         <button className="btn" title="בחירת מוצר" onClick={openScopes}>{`${scopeName(ctx, ctx.view.scope)} ▾`}</button>
       </div>
       <div className="seg4">
-        {TABS.map(([k, label]) => (
-          <button key={k} type="button" aria-pressed={ctx.view.tab === k} onClick={() => ctx.setView({ tab: k })}>
+        {tabs.map(([k, label]) => (
+          <button key={k} type="button" aria-pressed={tab === k} onClick={() => ctx.setView({ tab: k })}>
             {label}
           </button>
         ))}

@@ -86,6 +86,6 @@ export function openBusinessDashboard() {
 }
 
 export function manageCtx() {
-  return { products: state.products, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("business") };
+  return { products: state.products, cats: state.cats, txs: state.txs, reload: load, back: () => goBack("businessOverview") };
 }
 

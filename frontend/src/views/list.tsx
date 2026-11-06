@@ -40,7 +40,7 @@ function FxLine({ t }: { t: Transaction }) {
   );
 }
 
-function TransactionRow({ t }: { t: Transaction }) {
+export function TransactionRow({ t }: { t: Transaction }) {
   const product = productOf(state.products, state.cats, t);
   const own = t.id > 0 && state.products.tx.has(t.id);
   const fx = fxOf(t);
