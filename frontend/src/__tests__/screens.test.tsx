@@ -95,7 +95,7 @@ describe("the business page", () => {
     expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "→ סיכום" })).toBeNull();
     fireEvent.click(screen.getByText("סקירה ורווח והפסד"));
-    expect(state.view).toBe("bizdash");
+    expect(state.view).toBe("businessOverview");
     expect(screen.getByRole("button", { name: "העסק" })).toBeTruthy();
   });
 });

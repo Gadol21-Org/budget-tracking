@@ -349,8 +349,8 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 /* Businesses */
 :root { --biz: #4f46e5; --biz-soft: rgba(79, 70, 229, .12); }
 @media (prefers-color-scheme: dark) { :root { --biz: #a5b4fc; --biz-soft: rgba(165, 180, 252, .16); } }
-.bizchip { display: inline-flex; align-items: center; background: var(--biz-soft); color: var(--biz); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
-.bizchip.auto { opacity: .8; font-weight: 600; }
+.productchip { display: inline-flex; align-items: center; background: var(--biz-soft); color: var(--biz); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
+.productchip.auto { opacity: .8; font-weight: 600; }
 .bizcard { border-color: var(--biz); }
 .bizcard .head { display: flex; align-items: center; gap: 8px; }
 .bizcard .bizname { color: var(--biz); font-weight: 700; }
@@ -387,7 +387,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .qchips { display: flex; flex-wrap: wrap; gap: 6px; }
 .qchip { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: .9rem; }
 .qchip[aria-pressed="true"] { background: var(--biz); border-color: var(--biz); color: #fff; font-weight: 700; }
-.bizpick { display: flex; flex-direction: column; gap: 6px; }
+.productpick { display: flex; flex-direction: column; gap: 6px; }
 .seg3b { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
 .seg3b button { padding: 8px; border: 0; background: var(--bg); cursor: pointer; font-size: .9rem; }
 .seg3b button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
@@ -395,8 +395,8 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .selbox { width: 22px; height: 22px; accent-color: var(--biz); flex: none; }
 .small { font-size: .82rem; }
 .linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
-.bizchip.big { font-size: .9rem; padding: 3px 12px; }
-.bizpick [hidden] { display: none !important; }
+.productchip.big { font-size: .9rem; padding: 3px 12px; }
+.productpick [hidden] { display: none !important; }
 
 /* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
 html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }

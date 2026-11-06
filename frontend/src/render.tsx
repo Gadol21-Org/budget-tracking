@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
-import { businessDashboard, businessesView } from "./views/business";
+import { businessDashboard, productsView } from "./views/business";
 import { businessHub } from "./views/businessHub";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
@@ -24,8 +24,8 @@ const ICONS: Record<string, string[]> = {
   list: ["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"],
   business: ["M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", "M20 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"],
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
-  bizdash: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
-  businesses: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
+  businessOverview: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  products: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
   exit: ["M5 12h14", "m12 5 7 7-7 7"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
@@ -48,7 +48,7 @@ const TABS: [View, string][] = [
   ["settings", "הגדרות"],
 ];
 
-const BUSINESS_SCREENS: View[] = ["business", "bizdash", "businesses"];
+const BUSINESS_SCREENS: View[] = ["business", "businessOverview", "products"];
 const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people"];
 
 function openTab(view: View) {
@@ -65,8 +65,8 @@ function openTab(view: View) {
 const BUSINESS_TABS: [View, string, () => void, string][] = [
   ["month", "יציאה מהעסק", () => openTab("month"), "exit"],
   ["business", "העסק", () => go("business"), "business"],
-  ["bizdash", "סקירה", openBusinessDashboard, "bizdash"],
-  ["businesses", "מוצרים", () => go("businesses"), "businesses"],
+  ["businessOverview", "סקירה", openBusinessDashboard, "businessOverview"],
+  ["products", "מוצרים", () => go("products"), "products"],
 ];
 
 function Nav() {
@@ -121,10 +121,10 @@ function businessScreen() {
   return businessDashboard({
     txs: state.txs,
     cats: state.cats,
-    biz: state.biz,
+    products: state.products,
     period: state.period,
-    view: state.bizView,
-    setView: (patch) => ((state.bizView = { ...state.bizView, ...patch }), render()),
+    view: state.businessView,
+    setView: (patch) => ((state.businessView = { ...state.businessView, ...patch }), render()),
     back: () => goBack("business"),
   });
 }
@@ -137,8 +137,8 @@ const screens: Record<View, () => ReactElement> = {
   categories: categoriesView,
   settings: settingsView,
   business: businessHub,
-  bizdash: businessScreen,
-  businesses: () => businessesView(manageCtx()),
+  businessOverview: businessScreen,
+  products: () => productsView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
 };
@@ -169,7 +169,7 @@ function App() {
  * category or tab); a data refresh keeps what was typed or picked on it (a search, a half-typed name, a message).
  */
 const screenKey = () =>
-  JSON.stringify([state.view, state.filter?.id, state.period, state.kind, state.catKind, state.bizFilter, state.bizView, state.insights.dash, state.insights.cat, state.insights.sub, state.insights.side, state.insights.cmp]);
+  JSON.stringify([state.view, state.filter?.id, state.period, state.kind, state.catKind, state.productFilter, state.businessView, state.insights.dash, state.insights.cat, state.insights.sub, state.insights.side, state.insights.cmp]);
 
 const app = createRoot(root);
 let renderedView: View | undefined;

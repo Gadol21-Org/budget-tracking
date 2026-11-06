@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
-import { bizName, businessOf } from "../business";
+import { productName, productOf } from "../business";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
@@ -41,8 +41,8 @@ function FxLine({ t }: { t: Transaction }) {
 }
 
 function TransactionRow({ t }: { t: Transaction }) {
-  const biz = businessOf(state.biz, state.cats, t);
-  const own = t.id > 0 && state.biz.tx.has(t.id);
+  const product = productOf(state.products, state.cats, t);
+  const own = t.id > 0 && state.products.tx.has(t.id);
   const fx = fxOf(t);
   return (
     <div className={t.upcoming ? "row upcoming" : "row"}>
@@ -51,9 +51,9 @@ function TransactionRow({ t }: { t: Transaction }) {
           {t.upcoming ? <span className="upcoming-mark" title="טרם בוצע: ניתן לשנות מכאן והלאה">{"⏳ "}</span> : t.recurring_series_id != null ? <span title="הוצאה חוזרת">{"🔁 "}</span> : null}
           {catPath(t.category_id)}
         </div>
-        {biz != null && (
-          <span className={own ? "bizchip" : "bizchip auto"} title={own ? "סומנה בעסק" : "בעסק לפי הקטגוריה"}>
-            {bizName(state.biz, biz)}
+        {product != null && (
+          <span className={own ? "productchip" : "productchip auto"} title={own ? "סומנה במוצר" : "במוצר לפי הקטגוריה"}>
+            {productName(state.products, product)}
           </span>
         )}
         <FxLine t={t} />
@@ -89,10 +89,10 @@ function TransactionRow({ t }: { t: Transaction }) {
   );
 }
 
-const BIZ_FILTERS = [
+const PRODUCT_FILTERS = [
   ["all", "הכול"],
-  ["biz", "רק עסק"],
-  ["none", "ללא עסק"],
+  ["product", "רק מוצר"],
+  ["none", "ללא מוצר"],
 ] as const;
 
 export function listView(): ReactElement {
@@ -102,7 +102,7 @@ export function listView(): ReactElement {
 function ListScreen() {
   const txs = inPeriod()
     .filter(inFilter)
-    .filter((t) => state.bizFilter === "all" || (businessOf(state.biz, state.cats, t) != null) === (state.bizFilter === "biz"));
+    .filter((t) => state.productFilter === "all" || (productOf(state.products, state.cats, t) != null) === (state.productFilter === "product"));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
   // The first day (newest first) with something that really happened: the list opens here, with later, upcoming days above it.
   const nowDay = days.find((d) => txs.some((t) => t.date === d && !t.upcoming));
@@ -122,10 +122,10 @@ function ListScreen() {
         </div>
       )}
       <ConnectedMonthBar />
-      {state.biz.businesses.length > 0 && (
+      {state.products.products.length > 0 && (
         <div className="seg3b">
-          {BIZ_FILTERS.map(([k, label]) => (
-            <button key={k} type="button" aria-pressed={state.bizFilter === k} onClick={() => ((state.bizFilter = k), render())}>
+          {PRODUCT_FILTERS.map(([k, label]) => (
+            <button key={k} type="button" aria-pressed={state.productFilter === k} onClick={() => ((state.productFilter = k), render())}>
               {label}
             </button>
           ))}

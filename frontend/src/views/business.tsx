@@ -1,19 +1,19 @@
 import { Icon } from "../components/Icon";
 import { type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
-import { api, type Business, type Category, type Transaction } from "../api";
+import { api, type Product, type Category, type Transaction } from "../api";
 import {
-  type BizCtx,
-  type BizData,
-  type BizTab,
+  type BusinessCtx,
+  type ProductsData,
+  type BusinessTab,
   type Fig,
   allocation,
-  businessOf,
+  productOf,
   figures,
   lastMonths,
   scopeName,
   scoped,
 } from "../business";
-import { BusinessChips } from "../components/BusinessChips";
+import { ProductChips } from "../components/ProductChips";
 import { DialogForm } from "../components/DialogForm";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
@@ -22,7 +22,7 @@ import { formatShekelsWhole, shortMonth } from "../format";
 import { contains, shift, title as periodTitle } from "../period";
 import { ConnectedMonthBar } from "./month";
 
-const TABS: [BizTab, string][] = [
+const TABS: [BusinessTab, string][] = [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
   ["cats", "קטגוריות"],
@@ -86,7 +86,7 @@ const figureCells = (f: Fig) => (
 );
 
 /** Income against expenses per month, with the profit above each pair. */
-function Chart({ ctx, scope }: { ctx: BizCtx; scope: "all" | number }) {
+function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
   const months = lastMonths(ctx.period);
   const ts = scoped(ctx, scope);
   const data = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m))));
@@ -120,7 +120,7 @@ function Chart({ ctx, scope }: { ctx: BizCtx; scope: "all" | number }) {
   );
 }
 
-function Overview({ ctx }: { ctx: BizCtx }) {
+function Overview({ ctx }: { ctx: BusinessCtx }) {
   const { scope } = ctx.view;
   const ts = scoped(ctx, scope);
   const cur = figures(ts.filter((t) => contains(ctx.period, t.date)));
@@ -148,10 +148,10 @@ function Overview({ ctx }: { ctx: BizCtx }) {
       {rows.length > 0 && <div className="card rows">{rows}</div>}
       {scope === "all" ? (
         <>
-          <h2>לפי עסק</h2>
+          <h2>לפי מוצר</h2>
           <FigureTable
-            heads={["עסק", "הכנסות", "הוצאות", "רווח"]}
-            rows={ctx.biz.businesses.map((b) => {
+            heads={["מוצר", "הכנסות", "הוצאות", "רווח"]}
+            rows={ctx.products.products.map((b) => {
               const f = figures(scoped(ctx, b.id).filter((t) => contains(ctx.period, t.date)));
               return (
                 <tr key={b.id} className="clickable" {...clickableProps(() => ctx.setView({ scope: b.id }))}>
@@ -182,12 +182,12 @@ function Overview({ ctx }: { ctx: BizCtx }) {
           </div>
         )
       )}
-      {!ts.length && <div className="empty">עוד אין תנועות בעסק. תייגו תנועה, או קשרו קטגוריה לעסק.</div>}
+      {!ts.length && <div className="empty">{`עוד אין תנועות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"}.`} תייגו תנועה, או קשרו קטגוריה למוצר.</div>}
     </>
   );
 }
 
-function Trends({ ctx }: { ctx: BizCtx }) {
+function Trends({ ctx }: { ctx: BusinessCtx }) {
   const { scope } = ctx.view;
   const months = lastMonths(ctx.period);
   const ts = scoped(ctx, scope);
@@ -216,7 +216,7 @@ function Trends({ ctx }: { ctx: BizCtx }) {
   );
 }
 
-function CategorySide({ ctx, sign, title, empty }: { ctx: BizCtx; sign: 1 | -1; title: string; empty: string }) {
+function CategorySide({ ctx, sign, title, empty }: { ctx: BusinessCtx; sign: 1 | -1; title: string; empty: string }) {
   const mine = scoped(ctx, ctx.view.scope).filter((t) => contains(ctx.period, t.date));
   const all = ctx.txs.filter((t) => contains(ctx.period, t.date));
   const top = (t: Transaction) => {
@@ -261,22 +261,22 @@ function CategorySide({ ctx, sign, title, empty }: { ctx: BizCtx; sign: 1 | -1; 
   );
 }
 
-function Categories({ ctx }: { ctx: BizCtx }) {
+function Categories({ ctx }: { ctx: BusinessCtx }) {
   return (
     <>
-      <CategorySide ctx={ctx} sign={-1} title="הוצאות" empty="אין הוצאות בעסק בתקופה זו" />
-      <CategorySide ctx={ctx} sign={1} title="הכנסות" empty="אין הכנסות בעסק בתקופה זו" />
+      <CategorySide ctx={ctx} sign={-1} title="הוצאות" empty={`אין הוצאות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"} בתקופה זו`} />
+      <CategorySide ctx={ctx} sign={1} title="הכנסות" empty={`אין הכנסות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"} בתקופה זו`} />
     </>
   );
 }
 
-function Compare({ ctx }: { ctx: BizCtx }) {
+function Compare({ ctx }: { ctx: BusinessCtx }) {
   const months = lastMonths(ctx.period);
   return (
     <>
-      <h2>רווח לפי עסק · 6 חודשים</h2>
+      <h2>רווח לפי מוצר · 6 חודשים</h2>
       <div className="card rows">
-        {ctx.biz.businesses.map((b) => {
+        {ctx.products.products.map((b) => {
           const ts = scoped(ctx, b.id);
           const series = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m))).profit);
           const cur = figures(ts.filter((t) => contains(ctx.period, t.date)));
@@ -298,19 +298,19 @@ function Compare({ ctx }: { ctx: BizCtx }) {
           );
         })}
       </div>
-      <div className="note muted">ההוצאות המשותפות מוצגות בנפרד ולא מחולקות. בסקירה של כל עסק אפשר לראות את הרווח אחרי חלוקה.</div>
+      <div className="note muted">ההוצאות המשותפות מוצגות בנפרד ולא מחולקות. בסקירה של כל מוצר אפשר לראות את הרווח אחרי חלוקה.</div>
     </>
   );
 }
 
 const BODIES = { overview: Overview, trends: Trends, cats: Categories, compare: Compare };
 
-/** The business dashboards: scope (the whole business or one of its businesses) and four tabs. */
-export function businessDashboard(ctx: BizCtx): ReactElement {
+/** The business dashboards: scope (the whole business or one of its products) and four tabs. */
+export function businessDashboard(ctx: BusinessCtx): ReactElement {
   return <BusinessDashboard ctx={ctx} />;
 }
 
-function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
+function BusinessDashboard({ ctx }: { ctx: BusinessCtx }) {
   const Body = BODIES[ctx.view.tab];
   const openScopes = () =>
     openReactDialog((close) => {
@@ -326,8 +326,8 @@ function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
         <div className="add">
           <h2>הצגת נתונים של</h2>
           {item("🏢 כל העסק", "all")}
-          {ctx.biz.businesses.filter((b) => !b.is_general).map((b) => item(b.name, b.id, "ind"))}
-          {ctx.biz.businesses.filter((b) => b.is_general).map((b) => item(`${b.name} (משותף)`, b.id, "ind"))}
+          {ctx.products.products.filter((b) => !b.is_general).map((b) => item(b.name, b.id, "ind"))}
+          {ctx.products.products.filter((b) => b.is_general).map((b) => item(`${b.name} (משותף)`, b.id, "ind"))}
         </div>
       );
     });
@@ -337,7 +337,7 @@ function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
         <div className="grow">
           <div className="name">סקירה</div>
         </div>
-        <button className="btn" title="בחירת עסק" onClick={openScopes}>{`${scopeName(ctx, ctx.view.scope)} ▾`}</button>
+        <button className="btn" title="בחירת מוצר" onClick={openScopes}>{`${scopeName(ctx, ctx.view.scope)} ▾`}</button>
       </div>
       <div className="seg4">
         {TABS.map(([k, label]) => (
@@ -352,10 +352,10 @@ function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
   );
 }
 
-// ---- Managing businesses ------------------------------------------------------------------------------
+// ---- Managing products ------------------------------------------------------------------------------
 
 export interface ManageCtx {
-  biz: BizData;
+  products: ProductsData;
   cats: Category[];
   txs: Transaction[];
   reload: () => Promise<void>;
@@ -366,21 +366,21 @@ export interface ManageCtx {
 
 const checkRow = { flexDirection: "row", alignItems: "center", gap: 8 } as const;
 
-function NameForm({ ctx, existing, close }: { ctx: ManageCtx; existing?: Business; close: () => void }) {
+function NameForm({ ctx, existing, close }: { ctx: ManageCtx; existing?: Product; close: () => void }) {
   const [name, setName] = useState(existing?.name ?? "");
   const [general, setGeneral] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   useEffect(() => void setTimeout(() => nameRef.current?.focus()), []);
-  const hasGeneral = ctx.biz.businesses.some((b) => b.is_general);
+  const hasGeneral = ctx.products.products.some((b) => b.is_general);
   return (
     <DialogForm
-      title={existing ? "שינוי שם" : "עסק חדש"}
+      title={existing ? "שינוי שם" : "מוצר חדש"}
       submitLabel={existing ? "שמירה" : "הוספה"}
       submitDisabled={!name.trim() || name.trim() === existing?.name}
       close={close}
       onSubmit={async () => {
-        if (existing) await api.renameBusiness(existing.id, name.trim());
-        else await api.addBusiness(name.trim(), general);
+        if (existing) await api.renameProduct(existing.id, name.trim());
+        else await api.addProduct(name.trim(), general);
         close();
         await ctx.reload();
       }}
@@ -392,31 +392,31 @@ function NameForm({ ctx, existing, close }: { ctx: ManageCtx; existing?: Busines
       {!existing && (
         <label style={checkRow}>
           <input type="checkbox" disabled={hasGeneral} checked={general} onChange={(e) => setGeneral(e.target.checked)} />
-          {hasGeneral ? "כבר יש עסק משותף" : "הוצאות משותפות (לא שייכות לעסק מסוים)"}
+          {hasGeneral ? "כבר יש מוצר משותף" : "הוצאות משותפות (לא שייכות למוצר מסוים)"}
         </label>
       )}
     </DialogForm>
   );
 }
 
-const openNameDialog = (ctx: ManageCtx, existing?: Business) => openReactDialog((close) => <NameForm ctx={ctx} existing={existing} close={close} />);
+const openNameDialog = (ctx: ManageCtx, existing?: Product) => openReactDialog((close) => <NameForm ctx={ctx} existing={existing} close={close} />);
 
-export function businessesView(ctx: ManageCtx): ReactElement {
-  return <Businesses ctx={ctx} />;
+export function productsView(ctx: ManageCtx): ReactElement {
+  return <Products ctx={ctx} />;
 }
 
-function Businesses({ ctx }: { ctx: ManageCtx }) {
-  const tagged = (id: number) => ctx.txs.filter((t) => businessOf(ctx.biz, ctx.cats, t) === id && !t.upcoming).length;
+function Products({ ctx }: { ctx: ManageCtx }) {
+  const tagged = (id: number) => ctx.txs.filter((t) => productOf(ctx.products, ctx.cats, t) === id && !t.upcoming).length;
   return (
     <div>
       <h1>מוצרים</h1>
       <div className="card">
         <p className="muted">
-          כל התנועות נשארות בסיכום משק הבית. עסק הוא רק מבט נוסף: אפשר לראות רווח והפסד לכל עסק ולכל העסקים יחד. הוצאה מסומנת בעסק בעת ההוספה, והכנסות נספרות לפי הקטגוריה שמקושרת לעסק (כפתור 💼 בהגדרות הקטגוריות).
+          כל התנועות נשארות בסיכום משק הבית. מוצר הוא רק מבט נוסף: אפשר לראות רווח והפסד לכל מוצר ולכל העסק יחד. הוצאה מסומנת במוצר בעת ההוספה, והכנסות נספרות לפי הקטגוריה שמקושרת למוצר (כפתור 💼 בהגדרות הקטגוריות).
         </p>
         <div className="rows">
-          {ctx.biz.businesses.length ? (
-            ctx.biz.businesses.map((b) => (
+          {ctx.products.products.length ? (
+            ctx.products.products.map((b) => (
               <div className="row" key={b.id}>
                 <div className="grow">
                   <div className="name">{b.is_general ? `${b.name} (משותף)` : b.name}</div>
@@ -431,8 +431,8 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
                   title="מחיקה"
                   aria-label="מחיקה"
                   onClick={async () => {
-                    if (!confirm(`למחוק את "${b.name}"? התנועות נשארות, רק הסימון שלהן לעסק יוסר.`)) return;
-                    await api.deleteBusiness(b.id);
+                    if (!confirm(`למחוק את "${b.name}"? התנועות נשארות, רק הסימון שלהן למוצר יוסר.`)) return;
+                    await api.deleteProduct(b.id);
                     await ctx.reload();
                   }}
                 >
@@ -441,13 +441,13 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
               </div>
             ))
           ) : (
-            <div className="empty">עוד אין עסקים</div>
+            <div className="empty">עוד אין מוצרים</div>
           )}
         </div>
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button type="button" className="btn" onClick={() => openNameDialog(ctx)}>
             <Icon name="plus" size={18} />
-            הוספת עסק
+            הוספת מוצר
           </button>
         </div>
       </div>
@@ -455,30 +455,30 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
   );
 }
 
-/** Choose the business for a category (all its transactions count in it), or none. */
-function CategoryBusinessForm({ ctx, cat, close }: { ctx: ManageCtx; cat: Category; close: () => void }) {
-  const [business, setBusiness] = useState<number | null>(ctx.biz.cat.get(cat.id) ?? null);
-  const [needed, setNeeded] = useState(ctx.biz.required.has(cat.id) && business == null);
+/** Choose the product for a category (all its transactions count in it), or none. */
+function CategoryProductForm({ ctx, cat, close }: { ctx: ManageCtx; cat: Category; close: () => void }) {
+  const [product, setProduct] = useState<number | null>(ctx.products.cat.get(cat.id) ?? null);
+  const [needed, setNeeded] = useState(ctx.products.required.has(cat.id) && product == null);
   return (
     <DialogForm
-      title={`עסק של "${cat.name}"`}
+      title={`מוצר של "${cat.name}"`}
       submitLabel="שמירה"
       close={close}
       onSubmit={async () => {
-        await api.linkCategoryBusiness(cat.id, business);
-        await api.requireCategoryBusiness(cat.id, needed && business == null);
+        await api.linkCategoryProduct(cat.id, product);
+        await api.requireCategoryProduct(cat.id, needed && product == null);
         close();
         await ctx.reload();
       }}
     >
-      <p className="muted">{cat.parent_id == null ? "כל התנועות בקטגוריה ובתתי-הקטגוריות שלה (שלא קושרו לעסק אחר) ייספרו בעסק, בלי תיוג נוסף." : "כל התנועות בתת-קטגוריה ייספרו בעסק, בלי תיוג נוסף."}</p>
-      <BusinessChips biz={ctx.biz} value={business} onChange={(v) => (setBusiness(v), v != null && setNeeded(false))} required={false} givenName={null} />
+      <p className="muted">{cat.parent_id == null ? "כל התנועות בקטגוריה ובתתי-הקטגוריות שלה (שלא קושרו למוצר אחר) ייספרו במוצר, בלי תיוג נוסף." : "כל התנועות בתת-קטגוריה ייספרו במוצר, בלי תיוג נוסף."}</p>
+      <ProductChips products={ctx.products} value={product} onChange={(v) => (setProduct(v), v != null && setNeeded(false))} required={false} givenName={null} />
       <label style={checkRow}>
-        <input type="checkbox" disabled={business != null} checked={needed} onChange={(e) => setNeeded(e.target.checked)} />
-        חובה לבחור עסק בכל תנועה (ללא עסק קבוע)
+        <input type="checkbox" disabled={product != null} checked={needed} onChange={(e) => setNeeded(e.target.checked)} />
+        חובה לבחור מוצר בכל תנועה (ללא מוצר קבוע)
       </label>
     </DialogForm>
   );
 }
 
-export const openCategoryBusinessDialog = (ctx: ManageCtx, cat: Category) => openReactDialog((close) => <CategoryBusinessForm ctx={ctx} cat={cat} close={close} />);
+export const openCategoryProductDialog = (ctx: ManageCtx, cat: Category) => openReactDialog((close) => <CategoryProductForm ctx={ctx} cat={cat} close={close} />);

@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
-import { businessOf, summaryFigures } from "../business";
+import { productOf, summaryFigures } from "../business";
 import { go, openBusinessDashboard } from "../nav";
 import { state } from "../state";
 import { ConnectedMonthBar } from "./month";
@@ -15,20 +15,20 @@ interface BusinessAction {
 }
 
 const ACTIONS: BusinessAction[] = [
-  { icon: "📊", title: "סקירה ורווח והפסד", text: "הכנסות, הוצאות, מגמות והשוואות, לכל העסק או לעסק אחד.", open: openBusinessDashboard },
-  { icon: "🏢", title: "ניהול מוצרים", text: "הוספה ושינוי שם, והוצאות משותפות.", open: () => go("businesses") },
+  { icon: "📊", title: "סקירה ורווח והפסד", text: "הכנסות, הוצאות, מגמות והשוואות, לכל העסק או למוצר אחד.", open: openBusinessDashboard },
+  { icon: "🏢", title: "ניהול מוצרים", text: "הוספה ושינוי שם, והוצאות משותפות.", open: () => go("products") },
 ];
 
 const sign = (n: number) => (n < 0 ? "expense" : "income");
 
-/** "Of which the businesses": profit of the businesses in the period; they stay in the household figures. */
+/** "Of which the products": profit of the products in the period; they stay in the household figures. */
 function Overview() {
-  const { total, per } = summaryFigures({ txs: state.txs, cats: state.cats, biz: state.biz, period: state.period });
-  const any = state.txs.some((t) => businessOf(state.biz, state.cats, t) != null);
-  if (!state.biz.businesses.length || !any) {
+  const { total, per } = summaryFigures({ txs: state.txs, cats: state.cats, products: state.products, period: state.period });
+  const any = state.txs.some((t) => productOf(state.products, state.cats, t) != null);
+  if (!state.products.products.length || !any) {
     return (
       <div className="card">
-        <div className="muted">אין עדיין תנועות של עסקים בתקופה הזו.</div>
+        <div className="muted">אין עדיין תנועות של מוצרים בתקופה הזו.</div>
       </div>
     );
   }
@@ -36,7 +36,7 @@ function Overview() {
     <div className="card bizcard clickable" {...clickableProps(openBusinessDashboard)}>
       <div className="head">
         <div className="grow">
-          <div className="bizname">סקירת העסקים</div>
+          <div className="bizname">סקירת המוצרים</div>
           <div className="muted small">כלול גם בסיכום משק הבית</div>
         </div>
         <b>
@@ -58,7 +58,6 @@ function Overview() {
 function BusinessHub() {
   return (
     <div className="bizhub">
-      <h1>העסק</h1>
       <ConnectedMonthBar />
       <Overview />
       <h2 className="bizmenu-title">פעולות</h2>
