@@ -54,6 +54,8 @@ Put both lines in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, 
 
 **Staging uses its own key.** Run the commands again for a second pair (do not reuse the production one) and save them as GitHub repository secrets `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY` (the values printed after the `=`). The staging workflow passes them to the staging container only; without them push is off on staging. Production never reads these secrets.
 
+To try email on staging, also add `STAGING_EMAIL_INBOUND_SECRET` (the Worker's `INBOUND_SECRET` for a staging Worker) and `STAGING_GEMINI_API_KEY` as repository secrets. Staging then has the email feature on, with its own secret and key. Point a separate staging Worker at `https://<staging-host>/api/email/inbound`, never the production one.
+
 ### 7. Try it
 Forward (or send) a sample receipt to the address. Within seconds **Settings > Suggestions from email** shows it. The card shows when the last message arrived and any error from the AI.
 

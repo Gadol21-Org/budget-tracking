@@ -72,6 +72,9 @@ jobs:
           # Optional web push keys for staging only (see deploy/EMAIL.md); never the production pair.
           VAPID_PRIVATE_KEY_PEM_B64: ${{ secrets.STAGING_VAPID_PRIVATE_KEY_PEM_B64 }}
           VAPID_PUBLIC_KEY: ${{ secrets.STAGING_VAPID_PUBLIC_KEY }}
+          # Optional email-to-transactions settings for staging only (see deploy/EMAIL.md).
+          EMAIL_INBOUND_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.STAGING_GEMINI_API_KEY }}
           RESET: ${{ inputs.teardown && 'teardown' || (inputs.reset && 'reset' || '') }}
         run: |
           ssh="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes $TARGET"
@@ -82,18 +85,26 @@ jobs:
             $ssh bash '~/budget-staging/deploy-staging.sh' - teardown
             exit 0
           fi
-          if [ -n "$VAPID_PRIVATE_KEY_PEM_B64" ] && [ -n "$VAPID_PUBLIC_KEY" ]; then
-            # An env file is one line per value: a pasted PEM or a line-wrapped base64 would be cut
-            # at the first newline, so make both single-line first.
-            case "$VAPID_PRIVATE_KEY_PEM_B64" in
-              -----*) priv=$(printf '%s\n' "$VAPID_PRIVATE_KEY_PEM_B64" | base64 -w0) ;;
-              *) priv=$(printf '%s' "$VAPID_PRIVATE_KEY_PEM_B64" | tr -d ' \r\n') ;;
-            esac
-            pub=$(printf '%s' "$VAPID_PUBLIC_KEY" | tr -d ' \r\n')
-            printf 'VAPID_PRIVATE_KEY_PEM_B64=%s\nVAPID_PUBLIC_KEY=%s\n' "$priv" "$pub" | $ssh 'umask 077; cat > ~/budget-staging/email.env'
+          {
+            if [ -n "$VAPID_PRIVATE_KEY_PEM_B64" ] && [ -n "$VAPID_PUBLIC_KEY" ]; then
+              # An env file is one line per value: a pasted PEM or a line-wrapped base64 would be cut
+              # at the first newline, so make both single-line first.
+              case "$VAPID_PRIVATE_KEY_PEM_B64" in
+                -----*) priv=$(printf '%s\n' "$VAPID_PRIVATE_KEY_PEM_B64" | base64 -w0) ;;
+                *) priv=$(printf '%s' "$VAPID_PRIVATE_KEY_PEM_B64" | tr -d ' \r\n') ;;
+              esac
+              pub=$(printf '%s' "$VAPID_PUBLIC_KEY" | tr -d ' \r\n')
+              printf 'VAPID_PRIVATE_KEY_PEM_B64=%s\nVAPID_PUBLIC_KEY=%s\n' "$priv" "$pub"
+            fi
+            [ -z "$EMAIL_INBOUND_SECRET" ] || printf 'EMAIL_INBOUND_SECRET=%s\n' "$(printf '%s' "$EMAIL_INBOUND_SECRET" | tr -d ' \r\n')"
+            [ -z "$GEMINI_API_KEY" ] || printf 'GEMINI_API_KEY=%s\n' "$(printf '%s' "$GEMINI_API_KEY" | tr -d ' \r\n')"
+          } > email.env.tmp
+          if [ -s email.env.tmp ]; then
+            $ssh 'umask 077; cat > ~/budget-staging/email.env' < email.env.tmp
           else
             $ssh 'rm -f ~/budget-staging/email.env'
           fi
+          rm -f email.env.tmp
           printf '%s' "$TOKEN" | $ssh docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           status=0
           $ssh bash '~/budget-staging/deploy-staging.sh' "$IMAGE:staging-${{ github.sha }}" "$RESET" || status=$?
