@@ -54,19 +54,27 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// A push carries no data: ask the server how many email suggestions wait and say so.
+// A push carries no data: ask the server what the latest mail brought and say so, one line per transaction.
+const SYMBOL = { ILS: "₪", USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
+const priceOf = (l) => {
+  const places = l.currency === "JPY" ? 0 : 2;
+  return `${SYMBOL[l.currency] ?? l.currency + " "}${(Math.abs(l.amount_minor) / 10 ** places).toFixed(places)}`;
+};
 self.addEventListener("push", (e) => {
   e.waitUntil(
     fetch("/api/email/status", { cache: "no-store" })
       .then((r) => r.json())
-      .then((o) => [o.latest_pending || 0, o.latest_auto || 0])
-      .catch(() => [0, 0])
-      .then(([n, auto]) => {
-        // Transactions added by themselves are announced; the ones that need a decision say so.
-        const lines = [];
-        if (auto) lines.push(auto > 1 ? `${auto} תנועות נוספו אוטומטית מדוא״ל` : "תנועה נוספה אוטומטית מדוא״ל");
-        if (n) lines.push(n > 1 ? `${n} הצעות ממתינות לבדיקה` : "תנועה שנמצאה במייל ממתינה לבדיקה");
-        return self.registration.showNotification(auto && !n ? "תנועה נוספה אוטומטית" : "הצעה חדשה מדוא״ל", { body: lines.join("\n") || "הצעה חדשה ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+      .then((o) => o.latest || [])
+      .catch(() => [])
+      .then((items) => {
+        const line = (l) => `${priceOf(l)} · ${l.note}`;
+        const added = items.filter((l) => l.auto);
+        const review = items.filter((l) => !l.auto);
+        const parts = [];
+        if (added.length) parts.push(`נוספה אוטומטית:\n${added.map(line).join("\n")}`);
+        if (review.length) parts.push(`ממתינה לבדיקה:\n${review.map(line).join("\n")}`);
+        const title = added.length && !review.length ? "תנועה נוספה אוטומטית" : review.length && !added.length ? "הצעה חדשה מדוא״ל" : "תנועות חדשות מדוא״ל";
+        return self.registration.showNotification(title, { body: parts.join("\n") || "הצעה חדשה ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
       }),
   );
 });

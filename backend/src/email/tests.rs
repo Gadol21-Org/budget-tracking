@@ -722,7 +722,15 @@ async fn a_sure_answer_with_a_category_is_added_at_once() {
     assert_eq!(rows(&r, "auto").await.len(), 1);
     assert_eq!(r.db.email_transaction_ids().await.unwrap(), vec![t[0].id]);
     let s = r.svc.status().await.unwrap();
-    assert_eq!((s.latest_pending, s.latest_auto), (0, 1));
+    assert_eq!(
+        s.latest,
+        vec![Latest {
+            auto: true,
+            note: "Corner shop".into(),
+            amount_minor: -1250,
+            currency: "ILS".into()
+        }]
+    );
     // Not sure: waits for a person as before.
     let out = r
         .svc

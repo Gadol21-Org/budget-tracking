@@ -84,13 +84,38 @@ pub struct Status {
     pub last_error: Option<String>,
     /// Suggestions waiting for a decision.
     pub pending: usize,
-    /// What the latest message that reached the app brought, for the push text.
-    pub latest_pending: usize,
-    pub latest_auto: usize,
+    /// What the latest message brought (up to 5 lines), for the push text.
+    pub latest: Vec<Latest>,
     /// Messages the AI has not read yet.
     pub queued: usize,
     /// VAPID public key for subscribing to web push; absent when push is not set up.
     pub push_public_key: Option<String>,
+}
+
+/// One transaction the latest message brought: added at once, or waiting for review.
+#[derive(Serialize, serde::Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct Latest {
+    pub auto: bool,
+    pub note: String,
+    pub amount_minor: i64,
+    pub currency: String,
+}
+
+/// The pending and `auto` rows as push lines.
+fn latest_of(rows: &[NewEmailSuggestion]) -> Vec<Latest> {
+    rows.iter()
+        .filter(|r| r.status == "pending" || r.status == "auto")
+        .map(|r| Latest {
+            auto: r.status == "auto",
+            note: if r.note.is_empty() {
+                truncate(&r.subject, 35)
+            } else {
+                r.note.clone()
+            },
+            amount_minor: r.amount_minor,
+            currency: r.currency.clone(),
+        })
+        .collect()
 }
 
 /// What became of one message.
@@ -181,16 +206,12 @@ impl Service {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
         self.expire_auto().await;
-        let (latest_pending, latest_auto) = self
+        let latest = self
             .db
             .get_setting(LATEST_KEY)
             .await?
-            .and_then(|v| {
-                v.split_once(':')
-                    .map(|(p, a)| (p.parse().ok(), a.parse().ok()))
-            })
-            .and_then(|(p, a)| Some((p?, a?)))
-            .unwrap_or((0, 0));
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
         Ok(Status {
             configured: self.cfg.is_some(),
             ai_configured: self.cfg.as_ref().is_some_and(|c| c.ai_key.is_some()),
@@ -205,8 +226,7 @@ impl Service {
                 .await?
                 .filter(|s| !s.is_empty()),
             pending,
-            latest_pending,
-            latest_auto,
+            latest,
             queued,
             push_public_key: crate::push::public_key(),
         })
@@ -227,14 +247,14 @@ impl Service {
     }
 
     /// Tell the devices what just arrived (the push itself carries no text; the app asks).
-    async fn announce(&self, pending: usize, auto: usize) {
-        if pending + auto == 0 {
+    async fn announce(&self, mut items: Vec<Latest>) {
+        if items.is_empty() {
             return;
         }
-        let _ = self
-            .db
-            .set_setting(LATEST_KEY, &format!("{pending}:{auto}"))
-            .await;
+        items.truncate(5);
+        if let Ok(json) = serde_json::to_string(&items) {
+            let _ = self.db.set_setting(LATEST_KEY, &json).await;
+        }
         crate::push::notify_all(self.db.as_ref()).await;
     }
 
@@ -344,8 +364,7 @@ impl Service {
         let categories = self.db.list_categories().await?;
         let out = self.read(&mail, &categories).await?;
         self.db.add_email_suggestions(&out.rows).await?;
-        self.announce(out.summary.suggestions, out.summary.auto)
-            .await;
+        self.announce(latest_of(&out.rows)).await;
         Ok(out.summary)
     }
 
@@ -498,7 +517,7 @@ impl Service {
         let _guard = self.running.lock().await;
         let categories = self.db.list_categories().await?;
         let mut done = 0;
-        let (mut new_pending, mut new_auto) = (0, 0);
+        let mut new_items = Vec::new();
         for row in self
             .db
             .list_email_suggestions(Some("queued"))
@@ -536,11 +555,10 @@ impl Service {
             if self.db.delete_email_suggestion(row.id).await? {
                 self.db.add_email_suggestions(&out.rows).await?;
                 done += 1;
-                new_pending += out.summary.suggestions;
-                new_auto += out.summary.auto;
+                new_items.extend(latest_of(&out.rows));
             }
         }
-        self.announce(new_pending, new_auto).await;
+        self.announce(new_items).await;
         Ok(done)
     }
 
