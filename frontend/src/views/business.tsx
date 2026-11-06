@@ -75,6 +75,21 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
   const max = Math.max(1, ...data.flatMap((d) => [d.income, d.expense]));
   return (
     <div className="card">
+      <div className="bizwrap">
+      {sel != null && (
+        <div className="biztip" role="status" style={{ right: `${Math.min(0.78, Math.max(0.22, (sel + 0.5) / months.length)) * 100}%` }}>
+          <b>{longMonth(months[sel]!)}</b>
+          <div>
+            הכנסות <span className="income num">{formatShekelsWhole(data[sel]!.income)}</span>
+          </div>
+          <div>
+            הוצאות <span className="expense num">{formatShekelsWhole(data[sel]!.expense)}</span>
+          </div>
+          <div>
+            רווח <span className={`${data[sel]!.profit < 0 ? "expense" : "income"} num`}>{formatShekelsWhole(data[sel]!.profit)}</span>
+          </div>
+        </div>
+      )}
       <div className="bizchart">
         {data.map((d, i) => (
           <div className={sel === i ? "bizcol sel" : "bizcol"} key={months[i]} {...clickableProps(() => setSel(sel === i ? null : i))}>
@@ -87,25 +102,7 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
           </div>
         ))}
       </div>
-      {sel != null && (
-        <div className="bizpicked rows">
-          <div className="row">
-            <div className="grow name">{longMonth(months[sel]!)}</div>
-          </div>
-          <div className="row">
-            <div className="grow">הכנסות</div>
-            {whole(data[sel]!.income, "income")}
-          </div>
-          <div className="row">
-            <div className="grow">הוצאות</div>
-            {whole(data[sel]!.expense, "expense")}
-          </div>
-          <div className="row">
-            <div className="grow name">רווח</div>
-            {signed(data[sel]!.profit)}
-          </div>
-        </div>
-      )}
+      </div>
       <div className="bizlegend muted">
         <span>
           <i className="in" />

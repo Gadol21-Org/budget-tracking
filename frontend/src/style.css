@@ -441,4 +441,5 @@ dialog { overscroll-behavior: contain; }
 .bizaction .grow { flex: 1; min-width: 0; }
 .bizcol { cursor: pointer; border-radius: 8px; }
 .bizcol.sel { background: var(--bg); outline: 2px solid var(--brand); }
-.bizpicked { margin-top: 10px; }
+.bizwrap { position: relative; }
+.biztip { position: absolute; top: 0; transform: translateX(50%); z-index: 2; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 6px 10px; font-size: .8rem; white-space: nowrap; }
