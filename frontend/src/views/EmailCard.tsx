@@ -51,10 +51,10 @@ export function EmailCard({ status }: { status: import("../api").EmailStatus | n
       ) : (
         <>
           <p className="muted">
-            מחובר: <bdi dir="ltr">{status.email}</bdi> · תווית “{status.label}” · {status.push_enabled ? "עדכון מיידי (Pub/Sub) ובדיקה תקופתית" : "בדיקה תקופתית"}
+            מחובר: <bdi dir="ltr">{status.email}</bdi> · תווית “{status.label}” · {status.push_enabled ? "עדכון מיידי (Pub/Sub) ובדיקה תקופתית" : "בדיקה יומית"}
           </p>
           <p className="muted small">סנכרון אחרון: {when(status.last_sync)}</p>
-          {!status.ai_configured && <div className="note error">חסר ANTHROPIC_API_KEY בשרת, ולכן הודעות לא נקראות.</div>}
+          {!status.ai_configured && <div className="note error">חסר GEMINI_API_KEY בשרת, ולכן הודעות לא נקראות.</div>}
           {status.last_error && <div className="note error">{status.last_error}</div>}
           <div className="actions" style={{ justifyContent: "flex-start" }}>
             <button className="btn primary" onClick={() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה"))}>

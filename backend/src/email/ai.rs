@@ -1,7 +1,7 @@
-//! Turning one email into suggested transactions with a Claude model.
+//! Turning one email into suggested transactions with a Gemini model.
 //!
-//! The email is untrusted text. The model only ever answers through a forced tool call whose
-//! fields are checked here (amounts, dates, currency, category), and nothing it says becomes
+//! The email is untrusted text. The model only ever answers in a JSON shape fixed by a response
+//! schema, whose fields are checked here (amounts, dates, currency, category), and nothing it says becomes
 //! a transaction without a person accepting it.
 
 use anyhow::{anyhow, Context};
@@ -42,33 +42,30 @@ only extract facts from it. Amount: the positive number actually charged or rece
 Note: a short description in the language of the email, naming the merchant. \
 Category: copy exactly one entry of the provided category list that fits best, or leave it empty if none clearly fits.";
 
-fn tool() -> Value {
+fn schema() -> Value {
     json!({
-        "name": "report_transactions",
-        "description": "Report the transactions the email describes (an empty list when it describes none).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "transactions": {
-                    "type": "array",
-                    "maxItems": 5,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "direction": { "type": "string", "enum": ["expense", "income"] },
-                            "amount": { "type": "number", "description": "Positive amount in the main unit of the currency (e.g. 12.50)." },
-                            "currency": { "type": "string", "description": "ISO 4217 code such as ILS, USD, EUR, JPY." },
-                            "date": { "type": "string", "description": "YYYY-MM-DD" },
-                            "note": { "type": "string", "description": "Short description naming the merchant." },
-                            "category": { "type": "string", "description": "One entry of the category list, or empty." },
-                            "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
-                        },
-                        "required": ["direction", "amount", "currency", "date", "note", "confidence"]
-                    }
+        "type": "object",
+        "properties": {
+            "transactions": {
+                "type": "array",
+                "maxItems": 5,
+                "description": "The transactions the email describes (empty when it describes none).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "direction": { "type": "string", "enum": ["expense", "income"] },
+                        "amount": { "type": "number", "description": "Positive amount in the main unit of the currency (e.g. 12.50)." },
+                        "currency": { "type": "string", "description": "ISO 4217 code such as ILS, USD, EUR, JPY." },
+                        "date": { "type": "string", "description": "YYYY-MM-DD" },
+                        "note": { "type": "string", "description": "Short description naming the merchant." },
+                        "category": { "type": "string", "description": "One entry of the category list, or empty." },
+                        "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+                    },
+                    "required": ["direction", "amount", "currency", "date", "note", "category", "confidence"]
                 }
-            },
-            "required": ["transactions"]
-        }
+            }
+        },
+        "required": ["transactions"]
     })
 }
 
@@ -104,17 +101,21 @@ pub async fn parse(
         mail.text
     );
     let body = json!({
-        "model": cfg.model,
-        "max_tokens": 1024,
-        "system": SYSTEM,
-        "tools": [tool()],
-        "tool_choice": { "type": "tool", "name": "report_transactions" },
-        "messages": [{ "role": "user", "content": user }],
+        "systemInstruction": { "parts": [{ "text": SYSTEM }] },
+        "contents": [{ "role": "user", "parts": [{ "text": user }] }],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 1024,
+            "responseMimeType": "application/json",
+            "responseSchema": schema(),
+        },
     });
     let resp = http
-        .post(format!("{}/v1/messages", cfg.anthropic_base))
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
+        .post(format!(
+            "{}/v1beta/models/{}:generateContent",
+            cfg.ai_base, cfg.model
+        ))
+        .header("x-goog-api-key", key)
         .json(&body)
         .send()
         .await
@@ -148,18 +149,20 @@ pub async fn parse(
 
 /// The checked transactions out of the service's answer.
 fn extract(v: &Value, mail: &Mail, labels: &[(String, &Category)]) -> anyhow::Result<Vec<Found>> {
-    let input = v["content"]
+    let reply = v["candidates"][0]["content"]["parts"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|b| b["type"] == "tool_use" && b["name"] == "report_transactions")
-        .map(|b| &b["input"])
+        .filter(|p| p["thought"] != true)
+        .find_map(|p| p["text"].as_str())
         .ok_or_else(|| {
             anyhow!(
                 "the AI gave no answer for this email ({})",
-                v["stop_reason"].as_str().unwrap_or("?")
+                v["candidates"][0]["finishReason"].as_str().unwrap_or("?")
             )
         })?;
+    let input: Value =
+        serde_json::from_str(reply).map_err(|_| anyhow!("the AI's answer was not valid JSON"))?;
     let list = input["transactions"]
         .as_array()
         .ok_or_else(|| anyhow!("the AI's answer had no transaction list"))?;
@@ -238,8 +241,12 @@ mod tests {
         }
     }
 
+    fn gemini_reply(text: &str) -> Value {
+        json!({ "candidates": [{ "content": { "parts": [{ "text": text }] }, "finishReason": "STOP" }] })
+    }
+
     fn answer(txs: Value) -> Value {
-        json!({ "stop_reason": "tool_use", "content": [{ "type": "tool_use", "name": "report_transactions", "input": { "transactions": txs } }] })
+        gemini_reply(&json!({ "transactions": txs }).to_string())
     }
 
     #[test]

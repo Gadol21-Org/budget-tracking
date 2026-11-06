@@ -163,7 +163,7 @@ async fn get_message(
 
 /// The pretend model: reports a 12.50 expense for a "receipt", nothing for anything else,
 /// garbage for "weird".
-async fn anthropic(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<Value>) {
+async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<Value>) {
     let mut w = w.lock().unwrap();
     w.ai_calls += 1;
     w.log.push("ai".into());
@@ -174,25 +174,24 @@ async fn anthropic(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Jso
             Json(json!({ "error": { "message": "busy" } })),
         );
     }
-    let prompt = b["messages"][0]["content"].as_str().unwrap_or("");
-    let txs = if prompt.contains("weird") {
-        return (
+    let prompt = b["contents"][0]["parts"][0]["text"].as_str().unwrap_or("");
+    let reply = |text: String| {
+        (
             StatusCode::OK,
             Json(
-                json!({ "stop_reason": "end_turn", "content": [{ "type": "text", "text": "hmm" }] }),
+                json!({ "candidates": [{ "content": { "parts": [{ "text": text }] }, "finishReason": "STOP" }] }),
             ),
-        );
-    } else if prompt.contains("receipt") {
+        )
+    };
+    if prompt.contains("weird") {
+        return reply("not json at all".into());
+    }
+    let txs = if prompt.contains("receipt") {
         json!([{ "direction": "expense", "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": "high" }])
     } else {
         json!([])
     };
-    (
-        StatusCode::OK,
-        Json(
-            json!({ "stop_reason": "tool_use", "content": [{ "type": "tool_use", "name": "report_transactions", "input": { "transactions": txs } }] }),
-        ),
-    )
+    reply(json!({ "transactions": txs }).to_string())
 }
 
 async fn start(w: W) -> String {
@@ -206,7 +205,7 @@ async fn start(w: W) -> String {
         .route("/gmail/v1/users/me/history", get(history))
         .route("/gmail/v1/users/me/messages", get(list_messages))
         .route("/gmail/v1/users/me/messages/:id", get(get_message))
-        .route("/v1/messages", post(anthropic))
+        .route("/v1beta/models/test-model:generateContent", post(gemini))
         .with_state(w);
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
@@ -224,13 +223,13 @@ fn config(base: &str) -> Config {
         push_token: Some("s3cret".into()),
         push_audience: None,
         push_service_account: None,
-        anthropic_key: Some("sk-test".into()),
+        ai_key: Some("test-key".into()),
         model: "test-model".into(),
         poll_minutes: 10,
         gmail_base: base.into(),
         oauth_base: base.into(),
         auth_url: "https://accounts.example.com/auth".into(),
-        anthropic_base: base.into(),
+        ai_base: base.into(),
         jwks_url: format!("{base}/certs"),
     }
 }
@@ -488,7 +487,11 @@ async fn an_unreadable_answer_becomes_a_failed_row_once() {
     assert_eq!(s.failed, 1);
     let rows = r.db.list_email_suggestions(Some("error")).await.unwrap();
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].error.contains("no answer"));
+    assert!(
+        rows[0].error.contains("not valid JSON"),
+        "{}",
+        rows[0].error
+    );
     r.svc.scan(None).await.unwrap();
     assert_eq!(r.w.lock().unwrap().ai_calls, 1);
 }

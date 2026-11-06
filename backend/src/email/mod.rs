@@ -4,7 +4,7 @@
 //!
 //! How it fits together:
 //! * [`gmail`]: the Gmail REST calls (OAuth refresh, `users.watch`, `history.list`, `messages.get`).
-//! * [`ai`]: the model call that turns one email into zero or more suggested transactions.
+//! * [`ai`]: the Gemini call that turns one email into zero or more suggested transactions.
 //! * [`push`]: checking the Google Pub/Sub push request that tells us "something changed".
 //! * [`Service`] (this file): connection state, the sync that ties them together, and renewal.
 //!
@@ -61,14 +61,14 @@ pub struct Config {
     pub push_audience: Option<String>,
     /// Expected `email` of the OIDC token (the service account Pub/Sub signs as).
     pub push_service_account: Option<String>,
-    pub anthropic_key: Option<String>,
+    pub ai_key: Option<String>,
     pub model: String,
     pub poll_minutes: u64,
     // Endpoints, overridden in tests.
     pub gmail_base: String,
     pub oauth_base: String,
     pub auth_url: String,
-    pub anthropic_base: String,
+    pub ai_base: String,
     pub jwks_url: String,
 }
 
@@ -84,19 +84,19 @@ impl Config {
             push_token: var("GMAIL_PUSH_TOKEN"),
             push_audience: var("GMAIL_PUSH_AUDIENCE"),
             push_service_account: var("GMAIL_PUSH_SERVICE_ACCOUNT"),
-            anthropic_key: var("ANTHROPIC_API_KEY"),
-            model: var("EMAIL_AI_MODEL").unwrap_or_else(|| "claude-haiku-5-5".into()),
+            ai_key: var("GEMINI_API_KEY"),
+            model: var("EMAIL_AI_MODEL").unwrap_or_else(|| "gemini-3.5-flash-lite".into()),
             poll_minutes: var("GMAIL_POLL_MINUTES")
                 .and_then(|m| m.parse().ok())
-                .unwrap_or(10),
+                .unwrap_or(24 * 60),
             gmail_base: var("GMAIL_API_BASE")
                 .unwrap_or_else(|| "https://gmail.googleapis.com".into()),
             oauth_base: var("GOOGLE_OAUTH_BASE")
                 .unwrap_or_else(|| "https://oauth2.googleapis.com".into()),
             auth_url: var("GOOGLE_AUTH_URL")
                 .unwrap_or_else(|| "https://accounts.google.com/o/oauth2/v2/auth".into()),
-            anthropic_base: var("ANTHROPIC_BASE_URL")
-                .unwrap_or_else(|| "https://api.anthropic.com".into()),
+            ai_base: var("GEMINI_BASE_URL")
+                .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into()),
             jwks_url: var("GOOGLE_JWKS_URL")
                 .unwrap_or_else(|| "https://www.googleapis.com/oauth2/v3/certs".into()),
         })
@@ -217,7 +217,7 @@ impl Service {
         let cfg = self.cfg.as_ref();
         Ok(Status {
             configured: cfg.is_some(),
-            ai_configured: cfg.is_some_and(|c| c.anthropic_key.is_some()),
+            ai_configured: cfg.is_some_and(|c| c.ai_key.is_some()),
             connected: c.is_some(),
             email: c.as_ref().map(|c| c.email.clone()).unwrap_or_default(),
             label: c
@@ -396,9 +396,9 @@ impl Service {
             return Ok(SyncSummary::default());
         };
         let key = cfg
-            .anthropic_key
+            .ai_key
             .as_deref()
-            .ok_or_else(|| anyhow!("ANTHROPIC_API_KEY is not set, so emails cannot be read"))?;
+            .ok_or_else(|| anyhow!("GEMINI_API_KEY is not set, so emails cannot be read"))?;
         let token = self.access_token(&conn).await?;
         let g = gmail::Client::new(&self.http, cfg, &token);
 
