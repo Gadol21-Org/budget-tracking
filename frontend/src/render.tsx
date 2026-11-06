@@ -7,7 +7,7 @@ import { currenciesView } from "./views/currencies";
 import { businessDashboard, businessesView } from "./views/business";
 import { businessHub } from "./views/businessHub";
 import { type View, root, state } from "./state";
-import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
+import { go, goBack, manageCtx, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
 import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
@@ -24,6 +24,8 @@ const ICONS: Record<string, string[]> = {
   list: ["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"],
   business: ["M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", "M20 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"],
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  bizdash: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  businesses: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
 
@@ -58,7 +60,27 @@ function openTab(view: View) {
   go(view);
 }
 
+/** Inside the business section the tray holds the business's own items; the first leaves it. Add an item here for each new action. */
+const BUSINESS_TABS: [View, string, () => void][] = [
+  ["month", "סיכום", () => openTab("month")],
+  ["business", "העסק", () => go("business")],
+  ["bizdash", "סקירה", openBusinessDashboard],
+  ["businesses", "עסקים", () => go("businesses")],
+];
+
 function Nav() {
+  if (BUSINESS_SCREENS.includes(state.view)) {
+    return (
+      <nav className="nav">
+        {BUSINESS_TABS.map(([view, label, open]) => (
+          <button key={view} aria-current={state.view === view ? "page" : undefined} onClick={open}>
+            <TabIcon view={view} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+    );
+  }
   return (
     <nav className="nav">
       {TABS.map(([view, label]) => {

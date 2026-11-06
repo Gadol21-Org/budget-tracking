@@ -436,3 +436,5 @@ dialog { overscroll-behavior: contain; }
 .bizaction .ico { font-size: 1.5rem; line-height: 1; }
 .bizaction .bizname { color: var(--biz); font-weight: 700; }
 @media (min-width: 700px) { .bizmenu { grid-template-columns: 1fr 1fr; } }
+.titlerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.titlerow h1 { margin: 0; }

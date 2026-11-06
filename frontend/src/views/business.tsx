@@ -411,10 +411,10 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
   const tagged = (id: number) => ctx.txs.filter((t) => businessOf(ctx.biz, ctx.cats, t) === id && !t.upcoming).length;
   return (
     <div>
-      <div className="actions" style={{ justifyContent: "flex-start" }}>
+      <div className="titlerow">
         <BackButton label={ctx.backLabel} title="חזרה" onClick={ctx.back} />
+        <h1>עסקים</h1>
       </div>
-      <h1>עסקים</h1>
       <div className="card">
         <p className="muted">
           כל התנועות נשארות בסיכום משק הבית. עסק הוא רק מבט נוסף: אפשר לראות רווח והפסד לכל עסק ולכל העסקים יחד. הוצאה מסומנת בעסק בעת ההוספה, והכנסות נספרות לפי הקטגוריה שמקושרת לעסק (כפתור 💼 בהגדרות הקטגוריות).

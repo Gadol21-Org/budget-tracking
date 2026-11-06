@@ -59,10 +59,10 @@ function Overview() {
 function BusinessHub({ back }: { back: () => void }) {
   return (
     <div className="bizhub">
-      <div className="actions" style={{ justifyContent: "flex-start" }}>
+      <div className="titlerow">
         <BackButton label="→ סיכום" title="חזרה לסיכום" onClick={back} />
+        <h1>העסק</h1>
       </div>
-      <h1>העסק</h1>
       <ConnectedMonthBar />
       <Overview />
       <h2 className="bizmenu-title">פעולות</h2>
