@@ -78,7 +78,7 @@ export function EmailCard({ status }: { status: EmailStatus | null }) {
           {status.last_error && <div className="note error">{status.last_error}</div>}
           <div className="actions" style={{ justifyContent: "flex-start" }}>
             <button className="btn primary" onClick={() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה"))}>
-              {status.pending + (status.auto ?? 0) ? `תנועות מדוא״ל לאישור (${status.pending + (status.auto ?? 0)})` : "תנועות מדוא״ל לאישור"}
+              {status.pending ? `תנועות מדוא״ל לאישור (${status.pending})` : "תנועות מדוא״ל לאישור"}
             </button>
             {offerPush && (
               <button className="btn" onClick={() => void notify()}>

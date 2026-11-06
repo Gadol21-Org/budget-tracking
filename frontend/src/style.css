@@ -443,3 +443,14 @@ a.btn { text-decoration: none; display: inline-block; text-align: center; }
 .aicost-total { text-align: center; }
 .aicost-sum { font-size: 1.8rem; font-weight: 700; }
 .aicost-row { align-items: center; gap: 10px; }
+
+/* A button waiting for its action: the label keeps the width, a ring takes its place. */
+.btn.busy { position: relative; }
+.btn.busy > .lbl { visibility: hidden; }
+.btn.busy > .sync-ring { position: absolute; inset: 0; margin: auto; }
+
+/* Badge on a transaction that came from an email: fuchsia, apart from the expense red, income green, brand blue and business indigo. */
+:root { --mail: #a21caf; --mail-soft: rgba(162, 28, 175, .12); }
+@media (prefers-color-scheme: dark) { :root { --mail: #f0abfc; --mail-soft: rgba(240, 171, 252, .16); } }
+.mailchip { display: inline-flex; align-items: center; background: var(--mail-soft); color: var(--mail); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
+.suggestion .actions .btn { white-space: nowrap; }

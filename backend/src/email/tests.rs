@@ -719,8 +719,10 @@ async fn a_sure_answer_with_a_category_is_added_at_once() {
         (-1250, a.category_id)
     );
     assert!(t[0].category_id.is_some());
+    assert_eq!(rows(&r, "auto").await.len(), 1);
+    assert_eq!(r.db.email_transaction_ids().await.unwrap(), vec![t[0].id]);
     let s = r.svc.status().await.unwrap();
-    assert_eq!((s.auto, s.pending), (1, 0));
+    assert_eq!((s.latest_pending, s.latest_auto), (0, 1));
     // Not sure: waits for a person as before.
     let out = r
         .svc
@@ -806,19 +808,20 @@ async fn a_category_that_needs_a_business_waits_unless_a_rule_names_one() {
 }
 
 #[tokio::test]
-async fn an_auto_row_is_acknowledged_without_losing_its_transaction() {
+async fn an_auto_row_stays_a_month_then_closes_and_keeps_its_transaction() {
     let r = rig().await;
     r.svc
         .ingest(&eml("k1", "Receipt", "Total 12.50 receipt sure"))
         .await
         .unwrap();
     let a = rows(&r, "auto").await.remove(0);
-    assert!(r
-        .db
-        .resolve_email_suggestion(a.id, "accepted", None)
-        .await
-        .unwrap());
+    // Received this month: kept.
+    assert_eq!(r.db.expire_auto_emails("2026-03-01").await.unwrap(), 0);
+    assert_eq!(rows(&r, "auto").await.len(), 1);
+    // Older than the cut-off (the status call applies it with today's date).
+    r.svc.status().await.unwrap();
+    assert!(rows(&r, "auto").await.is_empty());
     let done = rows(&r, "accepted").await.remove(0);
     assert_eq!(done.transaction_id, a.transaction_id);
-    assert!(done.transaction_id.is_some());
+    assert!(!done.has_html && done.transaction_id.is_some());
 }

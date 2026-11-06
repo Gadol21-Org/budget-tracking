@@ -217,8 +217,9 @@ export interface EmailStatus {
   last_error: string | null;
   /** Suggestions waiting for a decision. */
   pending: number;
-  /** Transactions added without asking that nobody has looked at yet. */
-  auto: number;
+  /** What the latest message brought: suggestions to review and transactions added without asking (for the push text). */
+  latest_pending: number;
+  latest_auto: number;
   /** Messages the AI has not read yet. */
   queued: number;
 }
@@ -323,8 +324,8 @@ export const api = {
   discardSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}`, { method: "DELETE" }),
   acceptSuggestion: (id: number, transactionId: number) =>
     request<void>(`/api/email/suggestions/${id}/accept`, { method: "POST", body: JSON.stringify({ transaction_id: transactionId }) }),
-  /** The person has seen a transaction that was added automatically. */
-  seenSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/seen`, { method: "POST" }),
+  /** Ids of the transactions made from an email. */
+  emailTransactions: () => request<number[]>("/api/email/transactions"),
   emailRules: () => request<EmailRule[]>("/api/email/rules"),
   putEmailRule: (r: EmailRule) => request<void>("/api/email/rules", { method: "POST", body: JSON.stringify(r) }),
   deleteEmailRule: (subject: string) => request<void>("/api/email/rules", { method: "DELETE", body: JSON.stringify({ subject }) }),

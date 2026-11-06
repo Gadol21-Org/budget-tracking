@@ -57,6 +57,8 @@ export const state = {
   suggestions: [] as EmailSuggestion[],
   /** The standing rules for mail subjects (loaded with the inbox). */
   emailRules: [] as EmailRule[],
+  /** Ids of the transactions made from an email (badge in the list). */
+  emailTx: new Set<number>(),
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };

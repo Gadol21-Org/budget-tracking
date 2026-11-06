@@ -59,7 +59,7 @@ self.addEventListener("push", (e) => {
   e.waitUntil(
     fetch("/api/email/status", { cache: "no-store" })
       .then((r) => r.json())
-      .then((o) => [o.pending || 0, o.auto || 0])
+      .then((o) => [o.latest_pending || 0, o.latest_auto || 0])
       .catch(() => [0, 0])
       .then(([n, auto]) => {
         // Transactions added by themselves are announced; the ones that need a decision say so.

@@ -56,6 +56,11 @@ function TransactionRow({ t }: { t: Transaction }) {
             {bizName(state.biz, biz)}
           </span>
         )}
+        {t.id > 0 && state.emailTx.has(t.id) && (
+          <span className="mailchip" title="נוספה מדוא״ל">
+            אימייל
+          </span>
+        )}
         <FxLine t={t} />
         {t.note ? <div className="muted">{t.note}</div> : null}
       </div>

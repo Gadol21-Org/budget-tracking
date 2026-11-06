@@ -35,6 +35,9 @@ use inbound::Mail;
 
 const LAST_RECEIVED_KEY: &str = "email_last_received";
 const LAST_ERROR_KEY: &str = "email_last_error";
+const LATEST_KEY: &str = "email_latest_batch";
+/// Mail added without asking stays listed this many days, then goes (with its stored email).
+const AUTO_KEEP_DAYS: i64 = 30;
 const AI_DAY_KEY: &str = "email_ai_day";
 
 /// Settings from the environment. Without `EMAIL_INBOUND_SECRET` the feature is off.
@@ -81,8 +84,9 @@ pub struct Status {
     pub last_error: Option<String>,
     /// Suggestions waiting for a decision.
     pub pending: usize,
-    /// Transactions added without asking that the person has not looked at yet.
-    pub auto: usize,
+    /// What the latest message that reached the app brought, for the push text.
+    pub latest_pending: usize,
+    pub latest_auto: usize,
     /// Messages the AI has not read yet.
     pub queued: usize,
     /// VAPID public key for subscribing to web push; absent when push is not set up.
@@ -176,7 +180,17 @@ impl Service {
     pub async fn status(&self) -> Result<Status> {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
-        let auto = self.db.list_email_suggestions(Some("auto")).await?.len();
+        self.expire_auto().await;
+        let (latest_pending, latest_auto) = self
+            .db
+            .get_setting(LATEST_KEY)
+            .await?
+            .and_then(|v| {
+                v.split_once(':')
+                    .map(|(p, a)| (p.parse().ok(), a.parse().ok()))
+            })
+            .and_then(|(p, a)| Some((p?, a?)))
+            .unwrap_or((0, 0));
         Ok(Status {
             configured: self.cfg.is_some(),
             ai_configured: self.cfg.as_ref().is_some_and(|c| c.ai_key.is_some()),
@@ -191,7 +205,8 @@ impl Service {
                 .await?
                 .filter(|s| !s.is_empty()),
             pending,
-            auto,
+            latest_pending,
+            latest_auto,
             queued,
             push_public_key: crate::push::public_key(),
         })
@@ -199,6 +214,28 @@ impl Service {
 
     async fn note_error(&self, e: Option<&str>) {
         let _ = self.db.set_setting(LAST_ERROR_KEY, e.unwrap_or("")).await;
+    }
+
+    /// Close the automatically added mail that is older than a month.
+    async fn expire_auto(&self) {
+        let before = (Utc::now() - chrono::Duration::days(AUTO_KEEP_DAYS))
+            .format("%Y-%m-%d")
+            .to_string();
+        if let Err(e) = self.db.expire_auto_emails(&before).await {
+            tracing::warn!("expiring automatically added mail failed: {e:#}");
+        }
+    }
+
+    /// Tell the devices what just arrived (the push itself carries no text; the app asks).
+    async fn announce(&self, pending: usize, auto: usize) {
+        if pending + auto == 0 {
+            return;
+        }
+        let _ = self
+            .db
+            .set_setting(LATEST_KEY, &format!("{pending}:{auto}"))
+            .await;
+        crate::push::notify_all(self.db.as_ref()).await;
     }
 
     /// Record one paid AI call in the operation log (kind `ai_email`), with what it cost.
@@ -307,9 +344,8 @@ impl Service {
         let categories = self.db.list_categories().await?;
         let out = self.read(&mail, &categories).await?;
         self.db.add_email_suggestions(&out.rows).await?;
-        if out.summary.suggestions + out.summary.auto > 0 {
-            crate::push::notify_all(self.db.as_ref()).await;
-        }
+        self.announce(out.summary.suggestions, out.summary.auto)
+            .await;
         Ok(out.summary)
     }
 
@@ -462,7 +498,7 @@ impl Service {
         let _guard = self.running.lock().await;
         let categories = self.db.list_categories().await?;
         let mut done = 0;
-        let mut found = false;
+        let (mut new_pending, mut new_auto) = (0, 0);
         for row in self
             .db
             .list_email_suggestions(Some("queued"))
@@ -500,12 +536,11 @@ impl Service {
             if self.db.delete_email_suggestion(row.id).await? {
                 self.db.add_email_suggestions(&out.rows).await?;
                 done += 1;
-                found |= out.summary.suggestions + out.summary.auto > 0;
+                new_pending += out.summary.suggestions;
+                new_auto += out.summary.auto;
             }
         }
-        if found {
-            crate::push::notify_all(self.db.as_ref()).await;
-        }
+        self.announce(new_pending, new_auto).await;
         Ok(done)
     }
 
@@ -514,6 +549,7 @@ impl Service {
         let mut tick = tokio::time::interval(Duration::from_secs(24 * 3600));
         loop {
             tick.tick().await;
+            self.expire_auto().await;
             if let Err(e) = self.retry_queued(None).await {
                 tracing::warn!("retrying queued emails failed: {e:#}");
             }

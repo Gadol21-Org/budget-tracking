@@ -272,6 +272,12 @@ impl Storage for Logged {
             .resolve_email_suggestion(id, status, transaction_id)
             .await
     }
+    async fn email_transaction_ids(&self) -> anyhow::Result<Vec<i64>> {
+        self.0.email_transaction_ids().await
+    }
+    async fn expire_auto_emails(&self, before: &str) -> anyhow::Result<usize> {
+        self.0.expire_auto_emails(before).await
+    }
     async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>> {
         self.0.email_html(id).await
     }

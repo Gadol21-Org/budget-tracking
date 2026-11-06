@@ -97,12 +97,9 @@ pub(crate) async fn accept(
     )
 }
 
-/// The person has seen a transaction that was added without asking.
-pub(crate) async fn seen(
-    State(db): State<Db>,
-    Path(id): Path<i64>,
-) -> Result<StatusCode, ApiError> {
-    resolved(db.resolve_email_suggestion(id, "accepted", None).await)
+/// Which transactions came from an email (they get a badge in the list).
+pub(crate) async fn transaction_ids(State(db): State<Db>) -> Result<Json<Vec<i64>>, ApiError> {
+    db.email_transaction_ids().await.map(Json).map_err(internal)
 }
 
 pub(crate) async fn rules_list(State(db): State<Db>) -> Result<Json<Vec<Rule>>, ApiError> {

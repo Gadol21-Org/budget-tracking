@@ -20,7 +20,6 @@ vi.mock("../api", async (orig) => ({
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
     rejectSuggestion: vi.fn(async () => {}),
-    seenSuggestion: vi.fn(async () => {}),
     deleteEmailRule: vi.fn(async () => {}),
     discardSuggestion: vi.fn(async () => {}),
   },
@@ -172,10 +171,32 @@ describe("the email inbox", () => {
     app.render();
     expect(await screen.findByText(/נוספה אוטומטית לתנועות/)).toBeTruthy();
     expect(screen.getByText("Gym receipt")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "הבנתי" }));
-    await waitFor(() => expect(api.seenSuggestion).toHaveBeenCalledWith(12));
     fireEvent.click(screen.getAllByRole("button", { name: "הסרה" })[0]);
     await waitFor(() => expect(api.deleteEmailRule).toHaveBeenCalledWith("Gym receipt"));
+  });
+
+  it("offers a rule for an automatically added mail whose subject has none", async () => {
+    state.suggestions = [{ ...suggestion, id: 13, status: "auto", subject: "Fwd: Cloud bill", transaction_id: 4 }];
+    state.emailRules = [];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByRole("button", { name: "כלל קבוע לנושא" })).toBeTruthy();
+    state.emailRules = [{ subject: "Cloud bill", category_id: 1, business_id: null }];
+    app.render();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "כלל קבוע לנושא" })).toBeNull());
+  });
+
+  it("marks a transaction that came from an email in the list", async () => {
+    const t = { id: 41, date: new Date().toISOString().slice(0, 10), amount_agorot: -5000, category_id: null, payment_method_id: null, note: "from mail", sync_state: "synced", recurring_series_id: null } as never;
+    Element.prototype.scrollIntoView = () => {};
+    state.txs = [t];
+    state.emailTx = new Set([41]);
+    state.view = "list";
+    app.render();
+    expect(await screen.findByText("אימייל")).toBeTruthy();
+    state.emailTx = new Set();
+    app.render();
+    await waitFor(() => expect(screen.queryByText("אימייל")).toBeNull());
   });
 
   it("says when an attachment was left unread", async () => {

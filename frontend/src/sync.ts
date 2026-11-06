@@ -78,6 +78,7 @@ export async function loadEmail() {
   if (state.offline) return;
   try {
     state.email = await api.emailStatus();
+    state.emailTx = new Set(await api.emailTransactions());
     if (state.view === "emailInbox") state.suggestions = await fetchInbox();
   } catch {
     state.email = null;

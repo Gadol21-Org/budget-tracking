@@ -584,6 +584,29 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
+    async fn email_transaction_ids(&self) -> Result<Vec<i64>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT transaction_id FROM email_items
+             WHERE transaction_id IS NOT NULL AND status IN ('accepted', 'auto')",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok(r.try_get::<i64, _>("transaction_id")?))
+            .collect()
+    }
+
+    async fn expire_auto_emails(&self, before: &str) -> Result<usize> {
+        let res = sqlx::query(
+            "UPDATE email_items SET status = 'accepted', excerpt = '', html = NULL
+             WHERE status = 'auto' AND received < ?",
+        )
+        .bind(before)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() as usize)
+    }
+
     async fn email_html(&self, id: i64) -> Result<Option<String>> {
         let row = sqlx::query("SELECT html FROM email_items WHERE id = ? AND status <> 'ignored'")
             .bind(id)

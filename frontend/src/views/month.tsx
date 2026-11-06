@@ -74,16 +74,12 @@ function BusinessCard() {
 /** Transactions found in emails wait for a decision. */
 function EmailBanner() {
   const n = state.email?.pending ?? 0;
-  const auto = state.email?.auto ?? 0;
-  if (!n && !auto) return null;
-  const waiting = n === 1 ? "הצעה אחת מדוא״ל ממתינה לבדיקה" : `${n} הצעות מדוא״ל ממתינות לבדיקה`;
-  const added = auto === 1 ? "תנועה אחת נוספה אוטומטית מדוא״ל" : `${auto} תנועות נוספו אוטומטית מדוא״ל`;
+  if (!n) return null;
   return (
     <div className="card clickable email-banner" style={{ marginTop: 10 }} {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
       <div className="head">
         <div className="grow">
-          {n > 0 && <div className="bizname">{waiting}</div>}
-          {auto > 0 && <div className={n > 0 ? "muted small" : "bizname"}>{added}</div>}
+          <div className="bizname">{n === 1 ? "הצעה אחת מדוא״ל ממתינה לבדיקה" : `${n} הצעות מדוא״ל ממתינות לבדיקה`}</div>
         </div>
         <span className="muted">›</span>
       </div>
