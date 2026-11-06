@@ -133,8 +133,10 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
     if (required && biz === undefined) return setErr("יש לבחור עסק");
     setBusy(true);
     try {
-      await api.putEmailRule({ subject: s.subject, category_id: cat, business_id: given != null ? null : (biz ?? null) });
+      await api.putEmailRule({ subject: s.subject, category_id: cat, business_id: given != null ? null : (biz ?? null) }, s.transaction_id ?? undefined);
       close();
+      // The transaction itself changed too.
+      await load();
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -158,7 +160,7 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
           סגירה
         </button>
       </div>
-      <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובעסק שתבחרו. ה-AI יקרא רק את הסכום והתאריך. תנועות שכבר נוספו לא משתנות.</p>
+      <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובעסק שתבחרו. ה-AI יקרא רק את הסכום והתאריך. גם התנועה הזו תעבור לקטגוריה ולעסק שבחרתם.</p>
       <CategoryPicker cats={expenseCats} value={choice} onChange={setChoice} />
       <BusinessChips biz={state.biz} value={biz} onChange={setBiz} required={required} givenName={given != null ? bizName(state.biz, given) : null} collapsed />
       <div className="error">{err}</div>

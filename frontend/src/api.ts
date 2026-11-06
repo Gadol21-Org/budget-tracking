@@ -326,7 +326,8 @@ export const api = {
   /** Ids of the transactions made from an email. */
   emailTransactions: () => request<number[]>("/api/email/transactions"),
   emailRules: () => request<EmailRule[]>("/api/email/rules"),
-  putEmailRule: (r: EmailRule) => request<void>("/api/email/rules", { method: "POST", body: JSON.stringify(r) }),
+  /** Save a rule; `applyTo` (a transaction id) moves that transaction to the rule's category and business too. */
+  putEmailRule: (r: EmailRule, applyTo?: number) => request<void>("/api/email/rules", { method: "POST", body: JSON.stringify({ ...r, apply_to: applyTo ?? null }) }),
   deleteEmailRule: (subject: string) => request<void>("/api/email/rules", { method: "DELETE", body: JSON.stringify({ subject }) }),
   rejectSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/reject`, { method: "POST" }),
   /** Whether changes are being written to Paamonim. */

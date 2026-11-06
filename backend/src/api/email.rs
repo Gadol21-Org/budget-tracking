@@ -106,10 +106,19 @@ pub(crate) async fn rules_list(State(db): State<Db>) -> Result<Json<Vec<Rule>>, 
     rules::list(db.as_ref()).await.map(Json).map_err(internal)
 }
 
+/// A rule, and optionally the transaction it was made from: that one is moved to the rule's
+/// category and business too.
+#[derive(Deserialize)]
+pub(crate) struct RulePut {
+    #[serde(flatten)]
+    rule: Rule,
+    apply_to: Option<i64>,
+}
+
 /// Always file mail with this subject under a category (and business).
 pub(crate) async fn rules_put(
     State(db): State<Db>,
-    Json(r): Json<Rule>,
+    Json(RulePut { rule: r, apply_to }): Json<RulePut>,
 ) -> Result<StatusCode, ApiError> {
     let bad = |m: &str| ApiError::new(StatusCode::BAD_REQUEST, m.to_string());
     if rules::normalize(&r.subject).is_empty() {
@@ -125,8 +134,83 @@ pub(crate) async fn rules_put(
             return Err(bad("unknown business"));
         }
     }
+    if let Some(id) = apply_to {
+        let tx = db
+            .list_transactions()
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| bad("unknown transaction"))?;
+        db.update_transaction(
+            id,
+            &crate::storage::NewTransaction {
+                date: tx.date,
+                amount_agorot: tx.amount_agorot,
+                category_id: Some(r.category_id),
+                payment_method_id: tx.payment_method_id,
+                note: tx.note,
+            },
+        )
+        .await
+        .map_err(internal)?;
+        db.set_transactions_business(&[id], r.business_id)
+            .await
+            .map_err(internal)?;
+        super::mirroring::trigger_mirror(&db);
+    }
     rules::put(db.as_ref(), r).await.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{NewCategory, NewTransaction};
+
+    #[tokio::test]
+    async fn a_rule_made_from_a_transaction_moves_that_transaction_too() {
+        let db: Db = std::sync::Arc::new(crate::testdb::fresh().await);
+        let new = |name: &str, parent: Option<i64>| NewCategory {
+            name: name.into(),
+            is_income: false,
+            parent_id: parent,
+            linked_to: None,
+        };
+        let top = db.create_category(&new("Top", None)).await.unwrap();
+        let a = db.create_category(&new("A", Some(top))).await.unwrap();
+        let b = db.create_category(&new("B", Some(top))).await.unwrap();
+        let biz = db.insert_business("Studio", false).await.unwrap();
+        let tx = db
+            .create_transaction(&NewTransaction {
+                date: "2026-03-01".into(),
+                amount_agorot: -1250,
+                category_id: Some(a),
+                payment_method_id: None,
+                note: "shop".into(),
+            })
+            .await
+            .unwrap();
+        let body = RulePut {
+            rule: Rule {
+                subject: "Receipt".into(),
+                category_id: b,
+                business_id: Some(biz),
+            },
+            apply_to: Some(tx),
+        };
+        rules_put(State(db.clone()), Json(body)).await.unwrap();
+        let t = &db.list_transactions().await.unwrap()[0];
+        assert_eq!(
+            (t.category_id, t.amount_agorot, t.note.as_str()),
+            (Some(b), -1250, "shop")
+        );
+        assert_eq!(
+            db.business_links().await.unwrap().transactions,
+            vec![(tx, biz)]
+        );
+        assert_eq!(rules::list(db.as_ref()).await.unwrap().len(), 1);
+    }
 }
 
 #[derive(Deserialize)]
