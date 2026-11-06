@@ -1,5 +1,5 @@
 import { dequeue, isNetworkError, loadSnapshot, queuedList, requestPersistence, saveSnapshot, type Queued, type Snapshot } from "./offline";
-import { toBizData } from "./business";
+import { toProductsData } from "./business";
 import { loadEnabledCurrencies } from "./currencies";
 import { api, type Fx, type LogEntry, type Transaction } from "./api";
 import { state } from "./state";
@@ -39,8 +39,8 @@ export async function fetchAll(from?: string): Promise<ServerData & { log?: LogE
     state.view === "log" ? api.log(undefined, Math.max(LOG_PAGE, state.log.length)) : undefined,
     api.mirrorStatus().catch(() => ({ enabled: false })),
     api.foreign().catch((e) => (isNetworkError(e) ? Promise.reject(e) : undefined)),
-    // Businesses are optional: a failure leaves the last ones in place.
-    api.businesses().catch(() => undefined),
+    // Products are optional: a failure leaves the last ones in place.
+    api.products().catch(() => undefined),
   ]);
   return { cats, txs, recurring, occurrences, mirror: mirror.enabled, log, fx, biz };
 }
@@ -84,8 +84,8 @@ export async function showCached(): Promise<boolean> {
 async function apply(data: ServerData & { log?: LogEntry[] }) {
   const { cats, recurring, occurrences, log } = data;
   // Foreign-currency details (fetched with the rest; the server may just have re-priced stand-in rates).
-  // Businesses come with the offline copy too, so the business card shows at once; a missing one keeps what we had.
-  if (data.biz) state.biz = toBizData(data.biz);
+  // Products come with the offline copy too (stored under the old key `biz`), so they show at once; a missing one keeps what we had.
+  if (data.biz) state.products = toProductsData(data.biz);
   if (data.fx) state.fx = new Map(data.fx.map((f) => [f.transaction_id, f]));
   const queued = await queuedList();
   // A queued foreign line has no shekel amount yet: the server converts it when it is sent.
@@ -155,7 +155,7 @@ export async function loadHistory(from: string): Promise<void> {
 export function neededFrom(): string {
   let from = bounds(state.period).from;
   const cmp = state.insights.cmp;
-  if (state.view === "insights" || state.view === "business") {
+  if (state.view === "insights" || state.view === "businessOverview") {
     // Trends show 12 months; a year earlier is the "same period last year"; an average looks back n periods.
     const avgBack = state.view === "insights" && cmp.kind === "avg" ? cmp.n * (state.period.kind === "year" ? 12 : 1) : 0;
     from = `${addMonths(from.slice(0, 7), -12 - avgBack)}-01`;
@@ -167,6 +167,7 @@ export function neededFrom(): string {
     from = `${addMonths(from.slice(0, 7), -(back + (state.insights.cat !== undefined ? 12 : 0)))}-01`;
     if (cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
   }
+  // A product's every line: from the very start (""; loaded once, then kept).
   return from;
 }
 
@@ -175,7 +176,7 @@ export function ensureHistory() {
   const needed = neededFrom();
   if (state.loadedFrom === undefined || needed >= state.loadedFrom || extending || historyFailed) return;
   // Fetch 3 months more than needed, so paging back a month or two does not fetch again.
-  const from = `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
+  const from = needed === "" ? "" : `${addMonths(needed.slice(0, 7), -HISTORY_PADDING_MONTHS)}-01`;
   state.loadingOlder = true;
   void loadHistory(from);
 }

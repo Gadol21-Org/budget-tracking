@@ -87,3 +87,14 @@ describe("the app shell", () => {
     expect(screen.queryByText(/אין חיבור או שהשרת אינו זמין/)).toBeNull();
   });
 });
+
+describe("the business section", () => {
+  it("opens on the overview, with a tray that has an exit item and the actions page", async () => {
+    state.view = "businessOverview";
+    app.render();
+    expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "פעולות" }));
+    expect(state.view).toBe("actions");
+    expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
+  });
+});
