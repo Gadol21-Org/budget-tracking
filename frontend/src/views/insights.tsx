@@ -124,7 +124,7 @@ function LegendRow({ color, name, value, total, state, onTap }: { color: string;
 function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const pick = (i: number) => setSel(sel === i ? null : i);
-  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `${items[sel]!.name}: ${formatShekelsWhole(items[sel]!.value)}`);
+  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `\u2068${items[sel]!.name}\u2069: \u2066${formatShekelsWhole(items[sel]!.value)}\u2069`);
   return (
     <div className="card donutcard">
       <Chart html={html} onTap={pick} />
