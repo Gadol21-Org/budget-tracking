@@ -17,6 +17,8 @@ struct World {
     ai_fail: Vec<u16>,
     ai_calls: usize,
     prompts: Vec<String>,
+    /// How many PDF parts each AI call carried.
+    pdf_parts: Vec<usize>,
 }
 
 type W = Arc<Mutex<World>>;
@@ -30,6 +32,12 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         .unwrap_or("")
         .to_string();
     w.prompts.push(prompt.clone());
+    let pdfs = b["contents"][0]["parts"].as_array().map_or(0, |p| {
+        p.iter()
+            .filter(|x| x["inlineData"]["mimeType"] == "application/pdf")
+            .count()
+    });
+    w.pdf_parts.push(pdfs);
     if !w.ai_fail.is_empty() {
         let code = w.ai_fail.remove(0);
         return (
@@ -48,7 +56,7 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
     if prompt.contains("weird") {
         return reply("not json at all".into());
     }
-    let txs = if prompt.contains("receipt") {
+    let txs = if prompt.contains("receipt") || pdfs > 0 {
         json!([{ "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": "high" }])
     } else {
         json!([])
@@ -617,4 +625,75 @@ async fn each_ai_call_is_logged_with_its_cost_and_summed_for_a_period() {
         .await
         .unwrap();
     assert_eq!(bad.status(), 400);
+}
+
+/// A mail with an attachment: `kind` is its content type, `name` its file name.
+fn with_attachment(id: &str, body: &str, kind: &str, name: &str) -> Vec<u8> {
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4 fake attachment bytes");
+    format!(
+        "From: Shop <shop@example.com>\r\nSubject: Your document\r\nMessage-ID: <{id}@example.com>\r\nDate: Mon, 02 Mar 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"b1\"\r\n\r\n--b1\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}\r\n--b1\r\nContent-Type: {kind}; name=\"{name}\"\r\nContent-Disposition: attachment; filename=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{data}\r\n--b1--\r\n"
+    )
+    .into_bytes()
+}
+
+#[tokio::test]
+async fn a_pdf_attachment_is_read_with_the_body() {
+    let r = rig().await;
+    let raw = with_attachment(
+        "p1",
+        "Your invoice is attached.",
+        "application/pdf",
+        "invoice.pdf",
+    );
+    let out = r.svc.ingest(&raw).await.unwrap();
+    assert_eq!(out.suggestions, 1);
+    assert_eq!(r.w.lock().unwrap().pdf_parts, vec![1]);
+    // A message with nothing but a PDF is read too.
+    let raw = with_attachment("p2", "", "application/pdf", "bill.pdf");
+    assert_eq!(r.svc.ingest(&raw).await.unwrap().suggestions, 1);
+    assert_eq!(r.w.lock().unwrap().pdf_parts, vec![1, 1]);
+}
+
+#[tokio::test]
+async fn an_attachment_the_ai_cannot_read_is_flagged_instead_of_dropped() {
+    let r = rig().await;
+    // Nothing to read in the body: no AI call, shown for a person to look at.
+    let raw = with_attachment("i1", "", "image/jpeg", "scan.jpg");
+    let out = r.svc.ingest(&raw).await.unwrap();
+    assert!(out.failed);
+    assert_eq!(r.w.lock().unwrap().ai_calls, 0);
+    let e = rows(&r, "error").await;
+    assert_eq!(e.len(), 1);
+    assert!(e[0].error.contains("scan.jpg"), "{}", e[0].error);
+    // A body the AI reads but finds nothing in, with such an attachment, is flagged too.
+    let raw = with_attachment("i2", "see the scan", "image/png", "receipt.png");
+    assert!(r.svc.ingest(&raw).await.unwrap().failed);
+    assert_eq!(rows(&r, "error").await.len(), 2);
+    // Without attachments, "nothing found" stays quiet.
+    let out = r
+        .svc
+        .ingest(&eml("q1", "Hello", "just chatting"))
+        .await
+        .unwrap();
+    assert!(out.ignored);
+}
+
+#[tokio::test]
+async fn a_queued_message_keeps_its_pdf_for_the_retry() {
+    let r = rig().await;
+    r.w.lock().unwrap().ai_fail = vec![503];
+    let raw = with_attachment(
+        "p3",
+        "Your invoice is attached.",
+        "application/pdf",
+        "invoice.pdf",
+    );
+    assert!(r.svc.ingest(&raw).await.unwrap().queued);
+    let q = rows(&r, "queued").await;
+    assert!(r.db.email_raw(q[0].id).await.unwrap().is_some());
+    assert_eq!(r.svc.retry_queued(None).await.unwrap(), 1);
+    // Second call (the retry) carried the PDF.
+    assert_eq!(r.w.lock().unwrap().pdf_parts, vec![1, 1]);
+    assert_eq!(rows(&r, "pending").await.len(), 1);
 }

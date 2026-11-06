@@ -14,7 +14,7 @@ use std::sync::Arc;
 type Svc = Extension<Arc<Service>>;
 
 /// Mail larger than this is refused (the Worker also drops it).
-pub(crate) const MAX_MAIL_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_MAIL_BYTES: usize = 11 * 1024 * 1024;
 
 pub(crate) async fn status(Extension(svc): Svc) -> Result<Json<Status>, ApiError> {
     svc.status().await.map(Json).map_err(internal)

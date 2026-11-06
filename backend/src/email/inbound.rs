@@ -1,13 +1,15 @@
 //! A forwarded email, reduced to what the parser needs.
 
 use anyhow::{anyhow, Result};
-use mail_parser::MessageParser;
+use mail_parser::{MessageParser, MimeHeaders};
 use std::hash::{Hash, Hasher};
 
 /// Biggest piece of a body passed on to the AI (and kept while it waits for a retry).
 const MAX_TEXT: usize = 12_000;
 /// Biggest HTML body stored for viewing.
 const MAX_HTML: usize = 300_000;
+/// PDF attachments handed to the AI (the first ones; any more count as unread).
+const MAX_PDFS: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct Mail {
@@ -22,6 +24,12 @@ pub struct Mail {
     pub html: String,
     /// Plain text of the body (HTML is turned into text), cut to a size the AI call can take.
     pub text: String,
+    /// PDF attachments (at most [`MAX_PDFS`]); the AI reads them with the body.
+    pub pdfs: Vec<Vec<u8>>,
+    /// Attachments the AI does not read (other file types, PDFs beyond the limit), by name or type.
+    pub unread: Vec<String>,
+    /// The raw message, kept in case it has to wait for a retry.
+    pub raw: std::sync::Arc<[u8]>,
 }
 
 pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
@@ -64,6 +72,32 @@ pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
             format!("noid-{:016x}", h.finish())
         }
     };
+    let (mut pdfs, mut unread) = (Vec::new(), Vec::new());
+    for part in msg.attachments() {
+        let kind = part.content_type().map_or_else(String::new, |c| {
+            format!("{}/{}", c.ctype(), c.subtype().unwrap_or_default()).to_lowercase()
+        });
+        let name = part.attachment_name().unwrap_or_default();
+        if kind == "application/pdf" || name.to_lowercase().ends_with(".pdf") {
+            if pdfs.len() < MAX_PDFS && !part.contents().is_empty() {
+                pdfs.push(part.contents().to_vec());
+            } else {
+                unread.push(if name.is_empty() {
+                    kind
+                } else {
+                    name.to_string()
+                });
+            }
+        } else if part.content_id().is_some() && kind.starts_with("image/") {
+            // A picture shown inside the message (a logo), not a document.
+        } else {
+            unread.push(if name.is_empty() {
+                kind
+            } else {
+                name.to_string()
+            });
+        }
+    }
     Ok(Mail {
         id,
         from,
@@ -71,6 +105,9 @@ pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
         received,
         html,
         text,
+        pdfs,
+        unread,
+        raw: raw.into(),
     })
 }
 

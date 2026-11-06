@@ -275,6 +275,9 @@ impl Storage for Logged {
     async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>> {
         self.0.email_html(id).await
     }
+    async fn email_raw(&self, id: i64) -> anyhow::Result<Option<Vec<u8>>> {
+        self.0.email_raw(id).await
+    }
     async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool> {
         self.0.delete_email_suggestion(id).await
     }

@@ -161,4 +161,11 @@ describe("the email inbox", () => {
     expect(screen.getByText("$0.000160")).toBeTruthy();
     expect(screen.getByText(/לא נמצאה תנועה/)).toBeTruthy();
   });
+
+  it("says when an attachment was left unread", async () => {
+    state.suggestions = [{ ...suggestion, id: 11, status: "error", error: "attachment not read by the AI: scan.jpg" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText(/קובץ מצורף שה-AI לא קורא \(scan\.jpg\)/)).toBeTruthy();
+  });
 });

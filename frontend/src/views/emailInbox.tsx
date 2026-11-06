@@ -19,6 +19,7 @@ function categoryPath(id: number | null): string {
   return parent ? `${parent.name} › ${c.name}` : c.name;
 }
 
+const UNREAD_PREFIX = "attachment not read by the AI: ";
 const CONFIDENCE: Record<string, string> = { high: "ביטחון גבוה", medium: "ביטחון בינוני", low: "ביטחון נמוך" };
 
 /** Transactions found in emails, waiting for a person to check and add them (or throw them away). */
@@ -139,10 +140,17 @@ function SuggestionCard({ s }: { s: EmailSuggestion }) {
 
 function FailedCard({ s }: { s: EmailSuggestion }) {
   const [busy, setBusy] = useState(false);
+  // The server says which attachments it could not read: "attachment not read by the AI: a.jpg, b.png".
+  const attachments = s.error.startsWith(UNREAD_PREFIX) ? s.error.slice(UNREAD_PREFIX.length) : "";
   return (
     <div className="card suggestion failed">
       <div className="name">לא הצלחתי לקרוא את ההודעה</div>
       <div className="muted small">{s.subject || s.sender}</div>
+      {attachments && (
+        <div className="muted small" dir="auto">
+          {`קובץ מצורף שה-AI לא קורא (${attachments}), ייתכן שהתנועה נמצאת בו`}
+        </div>
+      )}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <ViewButton s={s} />
         <button

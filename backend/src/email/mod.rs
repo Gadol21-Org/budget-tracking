@@ -273,7 +273,15 @@ impl Service {
                 IngestError::from(e)
             });
         }
-        if mail.text.is_empty() {
+        if mail.text.is_empty() && mail.pdfs.is_empty() {
+            // Nothing to read. With attachments the AI cannot read, a person should look.
+            if !mail.unread.is_empty() {
+                self.db.add_email_suggestions(&[unread_row(&mail)]).await?;
+                return Ok(Ingested {
+                    failed: true,
+                    ..Default::default()
+                });
+            }
             self.db
                 .add_email_suggestions(&rows_for(&mail, &[], &[]))
                 .await?;
@@ -300,6 +308,9 @@ impl Service {
         let wait = |why: String| {
             let mut row = queued_row(mail, &why);
             row.excerpt = mail.text.clone();
+            if !mail.pdfs.is_empty() {
+                row.raw = mail.raw.to_vec();
+            }
             Read {
                 rows: vec![row],
                 summary: Ingested {
@@ -325,6 +336,16 @@ impl Service {
             self.log_cost(cfg, mail, &u, &parsed).await;
         }
         Ok(match parsed {
+            Ok(found) if found.is_empty() && !mail.unread.is_empty() => {
+                self.note_error(None).await;
+                Read {
+                    rows: vec![unread_row(mail)],
+                    summary: Ingested {
+                        failed: true,
+                        ..Default::default()
+                    },
+                }
+            }
             Ok(found) => {
                 self.note_error(None).await;
                 Read {
@@ -368,14 +389,24 @@ impl Service {
             if only.is_some_and(|id| id != row.id) {
                 continue;
             }
-            let html = self.db.email_html(row.id).await?.unwrap_or_default();
-            let mail = Mail {
-                id: row.message_id.clone(),
-                from: row.sender.clone(),
-                subject: row.subject.clone(),
-                received: row.received.clone(),
-                html,
-                text: row.excerpt.clone(),
+            // A message kept whole (it had attachments) is parsed again; otherwise rebuilt from its text.
+            let kept = match self.db.email_raw(row.id).await? {
+                Some(raw) => inbound::parse_raw(&raw).ok(),
+                None => None,
+            };
+            let mail = match kept {
+                Some(m) => m,
+                None => Mail {
+                    id: row.message_id.clone(),
+                    from: row.sender.clone(),
+                    subject: row.subject.clone(),
+                    received: row.received.clone(),
+                    html: self.db.email_html(row.id).await?.unwrap_or_default(),
+                    text: row.excerpt.clone(),
+                    pdfs: Vec::new(),
+                    unread: Vec::new(),
+                    raw: Default::default(),
+                },
             };
             let out = self.read(&mail, &categories).await?;
             if out.summary.queued {
@@ -451,6 +482,15 @@ fn queued_row(mail: &Mail, why: &str) -> NewEmailSuggestion {
         error: truncate(why, 300),
         ..base_row(mail, 0, "queued")
     }
+}
+
+/// A message with attachments the AI cannot read and nothing found in the body: shown for a person to look at.
+fn unread_row(mail: &Mail) -> NewEmailSuggestion {
+    let names = mail.unread.join(", ");
+    error_row(
+        mail,
+        &anyhow!("attachment not read by the AI: {}", truncate(&names, 200)),
+    )
 }
 
 fn error_row(mail: &Mail, why: &anyhow::Error) -> NewEmailSuggestion {

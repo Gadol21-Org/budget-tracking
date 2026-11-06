@@ -363,4 +363,7 @@ pub struct NewEmailSuggestion {
     pub error: String,
     /// The email's HTML, kept until the suggestion is decided so it can be shown as it looked.
     pub html: String,
+    /// The whole raw message, kept only while it waits unread (so its attachments can be read on
+    /// the retry); empty otherwise.
+    pub raw: Vec<u8>,
 }

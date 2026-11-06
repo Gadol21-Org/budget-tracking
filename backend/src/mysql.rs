@@ -217,6 +217,10 @@ impl MySqlStorage {
         let _ = sqlx::query("ALTER TABLE email_items ADD COLUMN html MEDIUMTEXT NULL")
             .execute(&pool)
             .await;
+        // The raw message of mail waiting unread, so attachments survive until it is read.
+        let _ = sqlx::query("ALTER TABLE email_items ADD COLUMN raw LONGBLOB NULL")
+            .execute(&pool)
+            .await;
         let _ = sqlx::query("ALTER TABLE categories ADD COLUMN linked_to BIGINT NULL")
             .execute(&pool)
             .await;
@@ -508,8 +512,8 @@ impl Storage for MySqlStorage {
             let res = sqlx::query(
                 "INSERT IGNORE INTO email_items
                    (message_id, idx, status, received, sender, subject, excerpt, date,
-                    amount_minor, currency, category_id, note, confidence, error, html)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    amount_minor, currency, category_id, note, confidence, error, html, raw)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&r.message_id)
             .bind(r.idx)
@@ -526,6 +530,7 @@ impl Storage for MySqlStorage {
             .bind(&r.confidence)
             .bind(&r.error)
             .bind(&r.html)
+            .bind((!r.raw.is_empty()).then_some(&r.raw))
             .execute(&self.pool)
             .await?;
             added += res.rows_affected() as usize;
@@ -587,6 +592,19 @@ impl Storage for MySqlStorage {
             Some(r) => r
                 .try_get::<Option<String>, _>("html")?
                 .filter(|h| !h.is_empty()),
+            None => None,
+        })
+    }
+
+    async fn email_raw(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        let row = sqlx::query("SELECT raw FROM email_items WHERE id = ? AND status = 'queued'")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r
+                .try_get::<Option<Vec<u8>>, _>("raw")?
+                .filter(|b| !b.is_empty()),
             None => None,
         })
     }

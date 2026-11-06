@@ -7,7 +7,7 @@
 //   FALLBACK_ADDRESS (optional) a verified destination address; mail is forwarded there when the app is unreachable
 //   ALLOWED_FROM     (optional) comma-separated sender addresses that are accepted; anything else is dropped.
 //                    Matches the envelope sender or the From header. Empty or unset: no filtering.
-const MAX_BYTES = 1_500_000;
+const MAX_BYTES = 10_000_000; // keep below MAX_MAIL_BYTES in the app (11 MB)
 
 // The address inside "Name <address>" (or a bare address), lower case.
 const addressOf = (v) => {
