@@ -378,10 +378,6 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .bizm { font-size: .72rem; }
 .bizlegend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .78rem; margin-top: 8px; }
 .bizlegend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 4px; }
-.bizmini { display: flex; align-items: flex-end; gap: 3px; height: 30px; width: 90px; direction: rtl; }
-.bizmini i { flex: 1; background: var(--biz); border-radius: 2px 2px 0 0; }
-.bizmini i.neg { background: #c2564b; }
-.bizamt { min-width: 76px; text-align: end; font-weight: 700; }
 .scopeitem { display: block; width: 100%; text-align: start; padding: 12px 8px; border: 0; border-bottom: 1px solid var(--line); background: none; cursor: pointer; }
 .scopeitem.ind { padding-inline-start: 24px; }
 .qchips { display: flex; flex-wrap: wrap; gap: 6px; }

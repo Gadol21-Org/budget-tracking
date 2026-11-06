@@ -30,7 +30,6 @@ const tabsFor = (): [BusinessTab, string][] => [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
   ["cats", "קטגוריות"],
-  ["compare", "השוואה"],
 ];
 
 const signed = (a: number) => <Money agorot={a} whole cls={a < 0 ? "expense" : "income"} />;
@@ -319,40 +318,7 @@ function Categories({ ctx }: { ctx: BusinessCtx }) {
   );
 }
 
-function Compare({ ctx }: { ctx: BusinessCtx }) {
-  const months = lastMonths(ctx.period);
-  return (
-    <>
-      <h2>רווח לפי מוצר · 6 חודשים</h2>
-      <div className="card rows">
-        {ctx.products.products.map((b) => {
-          const ts = scoped(ctx, b.id);
-          const series = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m))).profit);
-          const cur = figures(ts.filter((t) => contains(ctx.period, t.date)));
-          const max = Math.max(1, ...series.map(Math.abs));
-          const margin = cur.income > 0 ? `שולי רווח ${Math.round((cur.profit / cur.income) * 100)}%` : "אין הכנסות";
-          return (
-            <div className="row clickable" key={b.id} {...clickableProps(() => ctx.setView({ tab: "overview", scope: b.id }))}>
-              <div className="grow">
-                <div className="name">{b.is_general ? `${b.name} (משותף)` : b.name}</div>
-                <div className="muted small">{margin}</div>
-              </div>
-              <div className="bizmini">
-                {series.map((v, i) => (
-                  <i key={months[i]} className={v < 0 ? "neg" : ""} style={{ height: `${Math.max(6, (Math.abs(v) / max) * 100)}%` }} />
-                ))}
-              </div>
-              <div className="bizamt">{signed(cur.profit)}</div>
-            </div>
-          );
-        })}
-      </div>
-      <div className="note muted">ההוצאות המשותפות מוצגות בנפרד ולא מחולקות. בסקירה של כל מוצר אפשר לראות את הרווח אחרי חלוקה.</div>
-    </>
-  );
-}
-
-const BODIES = { overview: Overview, trends: Trends, cats: Categories, compare: Compare, txs: ProductTransactions };
+const BODIES = { overview: Overview, trends: Trends, cats: Categories };
 
 /** The business dashboards: scope (the whole business or one of its products) and four tabs. */
 export function businessDashboard(ctx: BusinessCtx): ReactElement {
