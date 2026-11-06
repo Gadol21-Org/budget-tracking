@@ -57,8 +57,8 @@ function TransactionRow({ t }: { t: Transaction }) {
           </span>
         )}
         {t.id > 0 && state.emailTx.has(t.id) && (
-          <span className="mailchip" title="נוספה מדוא״ל">
-            אימייל
+          <span className="mailchip" title="נקלט מאימייל">
+            נקלט מאימייל
           </span>
         )}
         <FxLine t={t} />

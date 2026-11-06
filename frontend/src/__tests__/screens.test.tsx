@@ -193,10 +193,10 @@ describe("the email inbox", () => {
     state.emailTx = new Set([41]);
     state.view = "list";
     app.render();
-    expect(await screen.findByText("אימייל")).toBeTruthy();
+    expect(await screen.findByText("נקלט מאימייל")).toBeTruthy();
     state.emailTx = new Set();
     app.render();
-    await waitFor(() => expect(screen.queryByText("אימייל")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("נקלט מאימייל")).toBeNull());
   });
 
   it("says when an attachment was left unread", async () => {
