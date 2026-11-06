@@ -48,7 +48,12 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Option<Config> {
-        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let var = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
         Some(Config {
             inbound_secret: var("EMAIL_INBOUND_SECRET")?,
             ai_key: var("GEMINI_API_KEY"),
