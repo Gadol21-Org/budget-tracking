@@ -25,7 +25,6 @@ const ICONS: Record<string, string[]> = {
   business: ["M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", "M20 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"],
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   businessOverview: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
-  products: ["M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z", "M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2", "M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2", "M10 6h4", "M10 10h4", "M10 14h4", "M10 18h4"],
   actions: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"],
   exit: ["M5 12h14", "m12 5 7 7-7 7"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
@@ -68,7 +67,6 @@ const BUSINESS_TABS: [View, string, () => void, string][] = [
   ["month", "יציאה מהעסק", () => openTab("month"), "exit"],
   ["businessOverview", "סקירה", openBusinessDashboard, "business"],
   ["actions", "פעולות", () => go("actions"), "actions"],
-  ["products", "מוצרים", () => go("products"), "products"],
 ];
 
 function Nav() {
@@ -76,7 +74,7 @@ function Nav() {
     return (
       <nav className="nav">
         {BUSINESS_TABS.map(([view, label, open, icon]) => (
-          <button key={view} aria-current={state.view === view ? "page" : undefined} onClick={open}>
+          <button key={view} aria-current={(state.view === "products" ? "actions" : state.view) === view ? "page" : undefined} onClick={open}>
             <TabIcon view={icon} />
             <span>{label}</span>
           </button>
