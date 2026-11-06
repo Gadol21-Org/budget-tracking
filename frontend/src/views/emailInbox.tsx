@@ -169,14 +169,8 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
         void save();
       }}
     >
-      {/* The close button comes first, so it (not the category field) takes the focus when the dialog opens. */}
-      <div className="head">
-        <div className="name grow" dir="auto">
-          כלל קבוע לנושא <bdi>«{s.subject}»</bdi>
-        </div>
-        <button type="button" className="btn" aria-label="סגירה" onClick={close}>
-          ✕
-        </button>
+      <div className="name" dir="auto">
+        כלל קבוע לנושא <bdi>«{s.subject}»</bdi>
       </div>
       <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובעסק שתבחרו. ה-AI יקרא רק את הסכום והתאריך. גם התנועה הזו תעבור לקטגוריה ולעסק שבחרתם.</p>
       <CategoryPicker cats={expenseCats} value={choice} onChange={setChoice} />

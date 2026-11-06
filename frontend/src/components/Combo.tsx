@@ -103,7 +103,7 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
         value={disabled ? label : (typed ?? label)}
         onFocus={(e) => {
           // The layout can shift after a pick (the shekel box hides) so the tap's click lands on the field: stay closed.
-          if (justPicked()) return e.currentTarget.blur();
+          if (justPicked() || e.currentTarget.closest("dialog[data-opening]")) return e.currentTarget.blur();
           e.currentTarget.select();
           setOpen(true);
         }}

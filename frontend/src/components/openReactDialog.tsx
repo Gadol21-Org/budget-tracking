@@ -22,6 +22,9 @@ export function openReactDialog(render: (close: () => void) => ReactNode, classN
   // Do not put the cursor (and the keyboard) on a field when the dialog opens.
   dlg.tabIndex = -1;
   dlg.setAttribute("autofocus", "");
+  // The browser puts the focus on the first field as the dialog opens; a drop-down must not open from that.
+  dlg.dataset.opening = "";
   dlg.showModal();
   if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
+  setTimeout(() => delete dlg.dataset.opening);
 }
