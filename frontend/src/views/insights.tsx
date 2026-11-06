@@ -48,7 +48,7 @@ const swatch = (background: string) => <i style={{ background }} />;
 // ---- Small pieces --------------------------------------------------------------------------------
 
 /** "▲ 12%" against the comparison; red when it is a rise in spending, green when it is a fall. */
-function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
+export function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
   if (base === 0) return cur === 0 ? null : <span className="delta flat">חדש</span>;
   const pct = Math.round(((cur - base) / base) * 100);
   const flat = Math.abs(pct) < 3;
@@ -121,7 +121,7 @@ function LegendRow({ color, name, value, total, state, onTap }: { color: string;
  * A card with a donut and its legend. Tapping a slice or a legend line greys out the other slices and shows its name and
  * amount in the middle; tapping it again puts it back.
  */
-function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
+export function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const pick = (i: number) => setSel(sel === i ? null : i);
   const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `\u2068${items[sel]!.name}\u2069: \u2066${formatShekelsWhole(items[sel]!.value)}\u2069`);

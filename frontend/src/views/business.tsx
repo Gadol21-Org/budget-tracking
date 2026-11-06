@@ -20,7 +20,9 @@ import { clickableProps } from "../components/clickable";
 import { openReactDialog } from "../components/openReactDialog";
 import { formatShekelsWhole, shortMonth } from "../format";
 import { contains, shift, title as periodTitle } from "../period";
+import { colorAt } from "../insights/model";
 import { ConnectedMonthBar } from "./month";
+import { DonutCard, Delta } from "./insights";
 
 const TABS: [BusinessTab, string][] = [
   ["overview", "סקירה"],
@@ -31,30 +33,6 @@ const TABS: [BusinessTab, string][] = [
 
 const signed = (a: number) => <Money agorot={a} whole cls={a < 0 ? "expense" : "income"} />;
 const whole = (a: number, cls = "") => <Money agorot={a} whole cls={cls} />;
-
-function Delta({ label, diff }: { label: string; diff: number }) {
-  return (
-    <div className="row">
-      <div className="grow">{label}</div>
-      <span className={`num ${diff < 0 ? "expense" : "income"}`}>{`${diff < 0 ? "▼" : "▲"} ${formatShekelsWhole(Math.abs(diff))}`}</span>
-    </div>
-  );
-}
-
-function Hero({ label, f }: { label: string; f: Fig }) {
-  const margin = f.income > 0 ? Math.round((f.profit / f.income) * 100) : null;
-  return (
-    <div className="bizhero">
-      <div className="small">{label}</div>
-      <div className="big num">{formatShekelsWhole(f.profit)}</div>
-      <div className="sub">
-        <span>{`הכנסות ${formatShekelsWhole(f.income)}`}</span>
-        <span>{`הוצאות ${formatShekelsWhole(f.expense)}`}</span>
-        {margin != null ? <span>{`שולי רווח ${margin}%`}</span> : null}
-      </div>
-    </div>
-  );
-}
 
 /** A table of the four figures per row, with a closing total row. */
 function FigureTable({ heads, rows, total }: { heads: string[]; rows: ReactNode; total: ReactNode }) {
@@ -120,54 +98,74 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
   );
 }
 
+/** One of the three figures at the top, styled like the summary's cards. */
+function Stat({ label, agorot, cls }: { label: string; agorot: number; cls: string }) {
+  return (
+    <div className="card">
+      <div className="label">{label}</div>
+      <div className="value">
+        <Money agorot={agorot} cls={cls} />
+      </div>
+    </div>
+  );
+}
+
+const profitCls = (n: number) => (n < 0 ? "expense" : "income");
+
+/** The overview, laid out like the summary: income, expense and profit cards, then a pie and a list of profit per product. */
 function Overview({ ctx }: { ctx: BusinessCtx }) {
   const { scope } = ctx.view;
   const ts = scoped(ctx, scope);
-  const cur = figures(ts.filter((t) => contains(ctx.period, t.date)));
-  const rows: ReactNode[] = [];
-  if (cur.expense > 0 && cur.income > 0)
-    rows.push(
-      <div className="row" key="ratio">
-        <div className="grow">על כל ₪1 הוצאה מרוויחים</div>
-        <b className="num">{`${(cur.income / cur.expense).toFixed(2)}₪`}</b>
-      </div>,
-    );
+  const inPeriod = (t: Transaction) => contains(ctx.period, t.date);
+  const cur = figures(ts.filter(inPeriod));
   const prevP = shift(ctx.period, -1);
-  if (prevP) {
-    const prev = figures(ts.filter((t) => contains(prevP, t.date)));
-    rows.push(<Delta key="prev" label={ctx.period.kind === "year" ? "לעומת השנה הקודמת" : "לעומת התקופה הקודמת"} diff={cur.profit - prev.profit} />);
-    if (ctx.period.kind === "month") {
-      const avg = [1, 2, 3].reduce((s, k) => s + figures(ts.filter((t) => contains(shift(ctx.period, -k)!, t.date))).profit, 0) / 3;
-      rows.push(<Delta key="avg" label="לעומת ממוצע 3 חודשים" diff={Math.round(cur.profit - avg)} />);
-    }
-  }
   const share = scope === "all" ? null : allocation(ctx, ctx.period, scope);
+  // Profit of each product against the period before it; colours stay with the product, whatever the order.
+  const rows = ctx.products.products
+    .map((b, i) => ({
+      b,
+      color: colorAt(i),
+      profit: figures(scoped(ctx, b.id).filter(inPeriod)).profit,
+      was: prevP ? figures(scoped(ctx, b.id).filter((t) => contains(prevP, t.date))).profit : 0,
+    }))
+    .sort((a, b) => b.profit - a.profit);
+  const positive = rows.filter((r) => r.profit > 0);
+  const positiveTotal = positive.reduce((sum, r) => sum + r.profit, 0);
+  const max = Math.max(1, ...rows.map((r) => Math.abs(r.profit)));
   return (
     <>
-      <Hero label={`רווח ${scopeName(ctx, scope)}`} f={cur} />
-      {rows.length > 0 && <div className="card rows">{rows}</div>}
+      <div className="stats">
+        <Stat label="הכנסות" agorot={cur.income} cls="income" />
+        <Stat label="הוצאות" agorot={cur.expense} cls="expense" />
+        <Stat label="רווח" agorot={cur.profit} cls={profitCls(cur.profit)} />
+      </div>
       {scope === "all" ? (
-        <>
-          <h2>לפי מוצר</h2>
-          <FigureTable
-            heads={["מוצר", "הכנסות", "הוצאות", "רווח"]}
-            rows={ctx.products.products.map((b) => {
-              const f = figures(scoped(ctx, b.id).filter((t) => contains(ctx.period, t.date)));
-              return (
-                <tr key={b.id} className="clickable" {...clickableProps(() => ctx.setView({ scope: b.id }))}>
-                  <td>{`${b.is_general ? `${b.name} (משותף)` : b.name} ›`}</td>
-                  {figureCells(f)}
-                </tr>
-              );
-            })}
-            total={
-              <>
-                <td>סך הכול</td>
-                {figureCells(cur)}
-              </>
-            }
-          />
-        </>
+        rows.length > 0 && (
+          <div className="catsgrid dash dash-cats">
+            {positive.length > 0 && <DonutCard items={positive.map((r) => ({ name: r.b.is_general ? `${r.b.name} (משותף)` : r.b.name, value: r.profit, color: r.color }))} total={positiveTotal} title="רווח" />}
+            <h2>רווח לפי מוצר</h2>
+            <div className="card rows">
+              {rows.map((r) => (
+                <div className="row clickable" key={r.b.id} {...clickableProps(() => ctx.setView({ scope: r.b.id }))}>
+                  <div className="grow">
+                    <div className="name">{r.b.is_general ? `${r.b.name} (משותף)` : r.b.name}</div>
+                    <div className="bar">
+                      <span style={{ width: `${Math.max(3, (Math.abs(r.profit) / max) * 100)}%`, background: r.profit < 0 ? "var(--expense)" : r.color }} />
+                    </div>
+                  </div>
+                  <div className="amt">
+                    <Money agorot={r.profit} whole cls={profitCls(r.profit)} />
+                    <div>
+                      <Delta cur={r.profit} base={r.was} higherIsBad={false} />
+                      {r.profit > 0 && positiveTotal > 0 && <span className="muted num">{` ${Math.round((r.profit / positiveTotal) * 100)}%`}</span>}
+                    </div>
+                  </div>
+                  <span className="chev muted">‹</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
       ) : (
         share != null && (
           <div className="card rows">
@@ -182,7 +180,7 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
           </div>
         )
       )}
-      {!ts.length && <div className="empty">{`עוד אין תנועות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"}.`} תייגו תנועה, או קשרו קטגוריה למוצר.</div>}
+      {!ts.length && <div className="empty">{`עוד אין תנועות ${scope === "all" ? "בעסק" : "במוצר"}.`} תייגו תנועה, או קשרו קטגוריה למוצר.</div>}
     </>
   );
 }
