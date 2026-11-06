@@ -62,7 +62,7 @@ h2 { font-size: .8125rem; font-weight: 400; text-transform: uppercase; letter-sp
 .periodbtn { color: var(--ios-blue); }
 
 /* Tab bar: blurred, hairline top, blue active. */
-.nav { background: color-mix(in srgb, var(--ios-card) 78%, transparent); backdrop-filter: saturate(180%) blur(20px); border-top: 0.5px solid var(--ios-sep); height: 64px; --nav-h: 64px; padding-top: 4px; }
+.nav { background: color-mix(in srgb, var(--ios-card) 78%, transparent); backdrop-filter: saturate(180%) blur(20px); border-top: 0.5px solid var(--ios-sep); height: calc(64px + var(--nav-inset)); --nav-h: 64px; padding-top: 4px; }
 :root { --nav-h: 64px; }
 .nav button { font-size: .65rem; font-weight: 500; color: #8e8e93; gap: 2px; letter-spacing: 0; }
 .nav button .ico { width: 26px; height: 26px; stroke-width: 1.75; }
