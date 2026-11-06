@@ -174,8 +174,8 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
         <div className="name grow" dir="auto">
           כלל קבוע לנושא <bdi>«{s.subject}»</bdi>
         </div>
-        <button type="button" className="btn" onClick={close}>
-          סגירה
+        <button type="button" className="btn" aria-label="סגירה" onClick={close}>
+          ✕
         </button>
       </div>
       <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובעסק שתבחרו. ה-AI יקרא רק את הסכום והתאריך. גם התנועה הזו תעבור לקטגוריה ולעסק שבחרתם.</p>
