@@ -69,7 +69,6 @@ async fn start(w: W) -> String {
 fn config(base: &str) -> Config {
     Config {
         inbound_secret: "s3cret".into(),
-        forwarder: None,
         ai_key: Some("test-key".into()),
         model: "test-model".into(),
         max_per_day: 100,
@@ -321,23 +320,6 @@ async fn without_a_key_mail_waits_unread() {
     );
     assert_eq!(r.w.lock().unwrap().ai_calls, 0);
     assert!(!r.svc.status().await.unwrap().ai_configured);
-}
-
-#[tokio::test]
-async fn the_forwarder_check_needs_the_gmail_header() {
-    let r = rig_with(|c| c.forwarder = Some("me@gmail.example".into())).await;
-    assert!(matches!(
-        r.svc.ingest(&eml("a", "Receipt", "receipt")).await,
-        Err(IngestError::Refused(_))
-    ));
-    let raw = "X-Forwarded-For: Me@Gmail.example budget@example.com\r\nFrom: a@b.example\r\nSubject: Receipt\r\nMessage-ID: <f1@x>\r\n\r\nreceipt\r\n";
-    assert_eq!(r.svc.ingest(raw.as_bytes()).await.unwrap().suggestions, 1);
-    // The header in the body of a message does not count.
-    let in_body = "From: a@b.example\r\nSubject: Receipt\r\nMessage-ID: <f2@x>\r\n\r\nX-Forwarded-For: me@gmail.example\r\n";
-    assert!(matches!(
-        r.svc.ingest(in_body.as_bytes()).await,
-        Err(IngestError::Refused(_))
-    ));
 }
 
 #[tokio::test]

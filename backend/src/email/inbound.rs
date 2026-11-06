@@ -24,23 +24,6 @@ pub struct Mail {
     pub text: String,
 }
 
-/// Does the header block carry `X-Forwarded-For` mentioning `address`? Gmail adds that header
-/// when it forwards mail automatically. It is not authenticated (anyone can write it), so it only
-/// raises the bar for random mail sent to the routed address.
-pub fn forwarded_by(raw: &[u8], address: &str) -> bool {
-    let head = &raw[..raw.len().min(65_536)];
-    let head = String::from_utf8_lossy(head).to_lowercase();
-    let head = head
-        .split("\r\n\r\n")
-        .next()
-        .unwrap_or("")
-        .split("\n\n")
-        .next()
-        .unwrap_or("");
-    head.lines()
-        .any(|l| l.starts_with("x-forwarded-for:") && l.contains(&address.to_lowercase()))
-}
-
 pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
     let msg = MessageParser::default()
         .parse(raw)

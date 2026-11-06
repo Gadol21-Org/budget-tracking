@@ -41,7 +41,7 @@ export default {
     } catch (e) {
       status = 599;
     }
-    // 200: handled. 422: the app refused it (not an email, not from the expected forwarder): drop it quietly.
+    // 200: handled. 422: the app refused it (not an email): drop it quietly.
     if (status === 200 || status === 422) return;
     // The app is down or misconfigured: keep the mail instead of losing it.
     if (env.FALLBACK_ADDRESS) {

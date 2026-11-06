@@ -14,7 +14,7 @@ There is no Google OAuth, no Gmail API, no token to expire and nothing to verify
 - Cloudflare processes the forwarded mail in transit (Email Routing and the Worker); it is not stored by the Worker.
 - The text of each message (up to 12,000 characters; HTML is turned into text; attachments are ignored) is sent to the Google AI API (`gemini-3.5-flash-lite`). On the free tier Google may use prompts to improve its products; enabling billing on the key's project avoids that.
 - The app keeps, per message: sender, subject, date, the AI's answer and a 600 character excerpt for you to check. The email's HTML (up to 300 KB) is kept too, for the "צפייה במייל" button; it is shown in a sandboxed frame without scripts, and images from the internet load (the sender may see that you opened it). The excerpt and the HTML are deleted when you accept or reject the suggestion. Attachments are ignored and never stored. A message the AI could not read yet is kept in full (so it can be retried) until it is read or removed.
-- Anyone who learns the routed address could mail it. They can only add suggestions for you to reject, never transactions. To make that harder: use an unguessable address (`budget-x7k2q9@...`), set `EMAIL_FORWARDER` (below), and the server caps AI calls per day (`EMAIL_MAX_PER_DAY`, default 100; the rest wait).
+- Anyone who learns the routed address could mail it. They can only add suggestions for you to reject, never transactions. To make that harder: use an unguessable address (`budget-x7k2q9@...`), list your own addresses in the Worker's `ALLOWED_FROM` if you forward by hand, and the server caps AI calls per day (`EMAIL_MAX_PER_DAY`, default 100; the rest wait).
 
 ## Setup
 
@@ -25,8 +25,6 @@ Create an API key in [Google AI Studio](https://aistudio.google.com/apikey) (the
 ```
 EMAIL_INBOUND_SECRET=<long random string, e.g. openssl rand -hex 32>
 GEMINI_API_KEY=...
-# Recommended: only accept mail Gmail says it forwarded for this address
-EMAIL_FORWARDER=you@gmail.com
 # Optional
 # EMAIL_AI_MODEL=gemini-3.5-flash-lite
 # EMAIL_MAX_PER_DAY=100
@@ -38,7 +36,7 @@ The Worker cannot sign in to Access, so make exactly one path public, like `/ass
 
 ### 4. Cloudflare Email Routing and the Worker
 1. **Email Routing:** Cloudflare dashboard > your domain > Email > Email Routing > enable it. It adds MX records to the domain; if the domain already receives mail elsewhere, use a subdomain such as `mail.your-domain` (Email Routing supports them) so nothing existing is touched.
-2. **Worker:** Workers & Pages > Create > Hello World, name it `budget-email`, paste `deploy/email-worker.js`, deploy. Under Settings > Variables and Secrets add `INBOUND_URL` = `https://<your-host>/api/email/inbound`, `INBOUND_SECRET` (type **Secret**) = the same value as on the server, and optionally `FALLBACK_ADDRESS` (a destination address verified under Email Routing > Destination addresses; mail is forwarded there when the app is down, so nothing is lost). Also add `ALLOWED_FROM` = your addresses, comma-separated (as a Secret, so they stay out of the repo): the Worker silently drops mail whose envelope sender and From header are both not in the list. Note this checks the message's own sender: a Gmail filter that forwards a shop's receipt keeps the shop as the sender, so such mail is dropped. It fits mail you forward by hand (the sender is you); for filter-forwarded mail leave `ALLOWED_FROM` empty and rely on `EMAIL_FORWARDER` on the server.
+2. **Worker:** Workers & Pages > Create > Hello World, name it `budget-email`, paste `deploy/email-worker.js`, deploy. Under Settings > Variables and Secrets add `INBOUND_URL` = `https://<your-host>/api/email/inbound`, `INBOUND_SECRET` (type **Secret**) = the same value as on the server, and optionally `FALLBACK_ADDRESS` (a destination address verified under Email Routing > Destination addresses; mail is forwarded there when the app is down, so nothing is lost). Also add `ALLOWED_FROM` = your addresses, comma-separated (as a Secret, so they stay out of the repo): the Worker silently drops mail whose envelope sender and From header are both not in the list. Note this checks the message's own sender: a Gmail filter that forwards a shop's receipt keeps the shop as the sender, so such mail is dropped. It fits mail you forward by hand (the sender is you); for filter-forwarded mail leave `ALLOWED_FROM` empty (Gmail does not authenticate who forwarded a message, so nothing can safely tell it apart from mail sent to the address; keep the address private).
 3. **Address:** Email Routing > Routing rules > Create address: custom address `budget-<random>`, action **Send to a Worker** > `budget-email`.
 
 ### 5. Gmail
@@ -61,7 +59,6 @@ Forward (or send) a sample receipt to the address. Within seconds **Settings > S
 - Each message is handled once (by its `Message-ID`), however many times it is delivered.
 - If the AI service is down, the daily limit is reached or the key is missing, the message is kept as "not read yet" with a button to read it now, and retried automatically once a day.
 - A message the AI answers nonsense for shows up as "could not read" with a button to add the transaction by hand.
-- `EMAIL_FORWARDER` checks for the `X-Forwarded-For` header Gmail adds when it forwards. Anyone can write that header, so it only stops random mail, not someone who knows the address and the format.
 
 ## AI cost
 Every AI call that reads an email is written to the change history ("קריאת מייל ב-AI") with its tokens and price, and Settings > עלות AI lists the calls and the total for a month, year or custom period. The price is the token counts Gemini reports times `EMAIL_AI_PRICE_IN_PER_M` and `EMAIL_AI_PRICE_OUT_PER_M` (USD per million input and output tokens; thinking tokens count as output). The defaults (0.10 and 0.40) are an estimate: set them to your model's real prices. Entries keep the price used when the call was made, so changing the prices only affects later calls. Like the rest of the history they are kept for a year.

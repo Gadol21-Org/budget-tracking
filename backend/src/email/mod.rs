@@ -39,8 +39,6 @@ const AI_DAY_KEY: &str = "email_ai_day";
 pub struct Config {
     /// Shared with the Cloudflare Worker; the inbound endpoint refuses requests without it.
     pub inbound_secret: String,
-    /// When set, a message must carry an `X-Forwarded-For` header naming this address.
-    pub forwarder: Option<String>,
     pub ai_key: Option<String>,
     pub model: String,
     /// AI calls per day at most (a guard against a flood of mail to the routed address).
@@ -58,7 +56,6 @@ impl Config {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         Some(Config {
             inbound_secret: var("EMAIL_INBOUND_SECRET")?,
-            forwarder: var("EMAIL_FORWARDER"),
             ai_key: var("GEMINI_API_KEY"),
             model: var("EMAIL_AI_MODEL").unwrap_or_else(|| "gemini-3.5-flash-lite".into()),
             max_per_day: var("EMAIL_MAX_PER_DAY")
@@ -110,7 +107,7 @@ pub struct Ingested {
 
 #[derive(Debug)]
 pub enum IngestError {
-    /// Not something we accept (not an email, not forwarded by the expected address).
+    /// Not something we accept (not an email).
     Refused(String),
     Internal(anyhow::Error),
 }
@@ -260,16 +257,8 @@ impl Service {
 
     /// Handle one raw email from the inbound endpoint.
     pub async fn ingest(&self, raw: &[u8]) -> Result<Ingested, IngestError> {
-        let cfg = self
-            .cfg
-            .as_ref()
-            .ok_or_else(|| IngestError::Refused("email is not configured".into()))?;
-        if let Some(f) = &cfg.forwarder {
-            if !inbound::forwarded_by(raw, f) {
-                return Err(IngestError::Refused(
-                    "not forwarded by the expected address".into(),
-                ));
-            }
+        if self.cfg.is_none() {
+            return Err(IngestError::Refused("email is not configured".into()));
         }
         let mail = inbound::parse_raw(raw).map_err(|e| IngestError::Refused(format!("{e:#}")))?;
         let _guard = self.running.lock().await;
