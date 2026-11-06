@@ -125,7 +125,7 @@ export function donut(parts: { value: number; color: string }[], caption: { titl
       const w = Math.min(136, 12 + tip.replace(/[\u2066-\u2069]/g, "").length * 5.2), h = 15;
       const px = c + R * Math.cos(mid);
       const x = Math.max(w / 2 + 2, Math.min(140 - w / 2 - 2, px)), tx = Math.max(x - w / 2 + 8, Math.min(x + w / 2 - 8, px));
-      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><text x="${x.toFixed(1)}" y="11.3" text-anchor="middle" font-size="8.5" font-weight="600" fill="#fff" direction="rtl">${esc(tip)}</text></g>`;
+      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><foreignObject x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}"><div xmlns="http://www.w3.org/1999/xhtml" dir="rtl" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:600;line-height:1;color:#fff;white-space:nowrap">${esc(tip)}</div></foreignObject></g>`;
     }
     a0 = a1;
   });
