@@ -14,6 +14,7 @@
 //! (its text stored until it is read) and retried each day or when asked.
 
 pub mod ai;
+pub mod handlers;
 pub mod inbound;
 #[cfg(test)]
 mod tests;
@@ -113,6 +114,8 @@ pub struct Service {
     http: reqwest::Client,
     /// Parsing happens one message at a time, so the daily count and duplicates are exact.
     running: Mutex<()>,
+    /// Manual handlers, asked before the AI (see [`handlers`]).
+    handlers: Vec<Box<dyn handlers::Handler>>,
 }
 
 /// Equal strings, compared without stopping at the first difference.
@@ -127,7 +130,16 @@ pub fn same(a: &str, b: &str) -> bool {
 
 impl Service {
     pub fn new(db: Db, cfg: Option<Config>) -> std::sync::Arc<Service> {
+        Service::with_handlers(db, cfg, handlers::registry())
+    }
+
+    pub fn with_handlers(
+        db: Db,
+        cfg: Option<Config>,
+        handlers: Vec<Box<dyn handlers::Handler>>,
+    ) -> std::sync::Arc<Service> {
         std::sync::Arc::new(Service {
+            handlers,
             db,
             cfg,
             http: reqwest::Client::builder()
@@ -227,6 +239,15 @@ impl Service {
             return Ok(Ingested {
                 duplicate: true,
                 ..Default::default()
+            });
+        }
+        if let Some(h) = self.handlers.iter().find(|h| h.matches(&mail)) {
+            let ctx = handlers::Ctx {
+                db: self.db.clone(),
+            };
+            return h.handle(&ctx, &mail).await.map_err(|e| {
+                tracing::warn!("email handler {} failed: {e:#}", h.name());
+                IngestError::from(e)
             });
         }
         if mail.text.is_empty() {

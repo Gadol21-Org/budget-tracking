@@ -103,3 +103,25 @@ fn collapse(s: &str) -> String {
     }
     lines.join("\n").trim().to_string()
 }
+
+#[allow(dead_code)] // for handlers
+impl Mail {
+    /// The `http(s)` links in the HTML body, in order, without repeats (for handlers that follow them).
+    pub fn links(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for part in self.html.split("href=").skip(1) {
+            let Some(q) = part.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                continue;
+            };
+            let url = part[1..]
+                .split(q)
+                .next()
+                .unwrap_or("")
+                .replace("&amp;", "&");
+            if (url.starts_with("https://") || url.starts_with("http://")) && !out.contains(&url) {
+                out.push(url);
+            }
+        }
+        out
+    }
+}

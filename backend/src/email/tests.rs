@@ -540,3 +540,50 @@ async fn a_queued_message_keeps_its_html_through_the_retry() {
         .unwrap()
         .contains("<i>12.50</i>"));
 }
+
+struct BillHandler;
+
+#[async_trait::async_trait]
+impl super::handlers::Handler for BillHandler {
+    fn name(&self) -> &'static str {
+        "bill"
+    }
+    fn matches(&self, mail: &super::inbound::Mail) -> bool {
+        mail.from.contains("billing@")
+    }
+    async fn handle(
+        &self,
+        ctx: &super::handlers::Ctx,
+        mail: &super::inbound::Mail,
+    ) -> anyhow::Result<super::Ingested> {
+        let mut row = ctx.suggestion(mail, 0);
+        row.note = mail.links().first().cloned().unwrap_or_default();
+        row.amount_minor = -4200;
+        row.currency = "ILS".into();
+        row.date = "2026-03-02".into();
+        ctx.finish(mail, vec![row]).await
+    }
+}
+
+#[tokio::test]
+async fn a_manual_handler_takes_its_messages_before_the_ai() {
+    let r = rig().await;
+    let svc = Service::with_handlers(
+        r.db.clone(),
+        Some(config(&r.base)),
+        vec![Box::new(BillHandler)],
+    );
+    let raw = "From: billing@utility.example\r\nSubject: Bill\r\nMessage-ID: <b1@x>\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Pay <a href=\"https://pay.example/x?a=1&amp;b=2\">here</a> <a href=\"mailto:a@b\">m</a></p>\r\n";
+    let out = svc.ingest(raw.as_bytes()).await.unwrap();
+    assert_eq!(out.suggestions, 1);
+    assert!(!out.queued);
+    assert_eq!(r.w.lock().unwrap().ai_calls, 0, "the AI was not asked");
+    let p = rows(&r, "pending").await;
+    assert_eq!(p[0].note, "https://pay.example/x?a=1&b=2");
+    assert!(svc.ingest(raw.as_bytes()).await.unwrap().duplicate);
+    // Other mail still goes to the AI.
+    svc.ingest(&eml("o1", "Receipt", "Corner shop 12.50"))
+        .await
+        .unwrap();
+    assert_eq!(r.w.lock().unwrap().ai_calls, 1);
+}

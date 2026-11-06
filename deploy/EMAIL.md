@@ -53,3 +53,6 @@ Forward (or send) a sample receipt to the address. Within seconds **Settings > S
 - If the AI service is down, the daily limit is reached or the key is missing, the message is kept as "not read yet" with a button to read it now, and retried automatically once a day.
 - A message the AI answers nonsense for shows up as "could not read" with a button to add the transaction by hand.
 - `EMAIL_FORWARDER` checks for the `X-Forwarded-For` header Gmail adds when it forwards. Anyone can write that header, so it only stops random mail, not someone who knows the address and the format.
+
+## Handling some mail without the AI
+The AI is the default reader. A message that needs its own treatment (for example, one whose link must be followed to fetch a bill) gets a handler: implement `Handler` in `backend/src/email/handlers.rs` and add it to `registry()`. Handlers are asked first, in order, by sender, subject or content; the first that matches handles the message and the AI is not used for it. A handler gets the parsed mail (text, HTML and `links()`), and returns suggestions for the review inbox the same way the AI does. There are none yet.
