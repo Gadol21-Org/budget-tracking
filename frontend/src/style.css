@@ -439,3 +439,6 @@ dialog { overscroll-behavior: contain; }
 a.btn { text-decoration: none; display: inline-block; text-align: center; }
 .email-banner { border-inline-start: 4px solid var(--brand); }
 .email-banner .head { display: flex; align-items: center; gap: 12px; }
+.email-view { display: flex; flex-direction: column; height: 100%; }
+.email-view .head { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border, #ddd); }
+.email-view iframe { flex: 1; width: 100%; border: 0; background: #fff; }

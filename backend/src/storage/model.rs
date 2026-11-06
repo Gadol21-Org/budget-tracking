@@ -340,6 +340,8 @@ pub struct EmailSuggestion {
     pub confidence: String,
     pub transaction_id: Option<i64>,
     pub error: String,
+    /// The email's own HTML is stored (see [`Storage::email_html`]).
+    pub has_html: bool,
 }
 
 /// What the parser found in a message; stored with [`Storage::add_email_suggestions`].
@@ -359,4 +361,6 @@ pub struct NewEmailSuggestion {
     pub note: String,
     pub confidence: String,
     pub error: String,
+    /// The email's HTML, kept until the suggestion is decided so it can be shown as it looked.
+    pub html: String,
 }

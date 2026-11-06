@@ -6,6 +6,8 @@ use std::hash::{Hash, Hasher};
 
 /// Biggest piece of a body passed on to the AI (and kept while it waits for a retry).
 const MAX_TEXT: usize = 12_000;
+/// Biggest HTML body stored for viewing.
+const MAX_HTML: usize = 300_000;
 
 #[derive(Debug, Clone)]
 pub struct Mail {
@@ -16,6 +18,8 @@ pub struct Mail {
     pub subject: String,
     /// Day it was sent (YYYY-MM-DD).
     pub received: String,
+    /// The body as HTML (plain-text mail is turned into HTML), cut to a size worth storing.
+    pub html: String,
     /// Plain text of the body (HTML is turned into text), cut to a size the AI call can take.
     pub text: String,
 }
@@ -58,6 +62,12 @@ pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
     let text = collapse(&msg.body_text(0).unwrap_or_default());
     let text: String = text.chars().take(MAX_TEXT).collect();
+    let html: String = msg
+        .body_html(0)
+        .unwrap_or_default()
+        .chars()
+        .take(MAX_HTML)
+        .collect();
     let id = match msg.message_id() {
         Some(id) if !id.trim().is_empty() => id
             .trim()
@@ -76,6 +86,7 @@ pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
         from,
         subject,
         received,
+        html,
         text,
     })
 }

@@ -108,6 +108,7 @@ describe("the email inbox", () => {
     confidence: "high" as const,
     transaction_id: null,
     error: "",
+    has_html: true,
   };
 
   it("shows what was found, and nothing is added until it is accepted", async () => {

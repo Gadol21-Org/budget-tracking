@@ -171,6 +171,7 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             "/api/email/suggestions/:id/reject",
             axum::routing::post(email::reject),
         )
+        .route("/api/email/suggestions/:id/view", get(email::view))
         .route(
             "/api/email/suggestions/:id",
             axum::routing::delete(email::discard),

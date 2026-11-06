@@ -480,3 +480,63 @@ async fn deciding_removes_the_excerpt_and_cannot_be_redone() {
             .duplicate
     );
 }
+
+#[tokio::test]
+async fn the_email_can_be_viewed_until_it_is_decided_and_never_with_active_content() {
+    let r = rig().await;
+    let raw = "From: a@b.example\r\nSubject: Invoice\r\nMessage-ID: <v1@x>\r\nDate: Mon, 02 Mar 2026 10:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Your <b>receipt</b></p><script>alert(1)</script><img src=\"https://tracker.example/p.gif\"></body></html>\r\n";
+    r.svc.ingest(raw.as_bytes()).await.unwrap();
+    let p = rows(&r, "pending").await;
+    assert!(p[0].has_html);
+    let app = serve(&r, r.svc.clone()).await;
+    let resp = reqwest::get(format!("{app}/api/email/suggestions/{}/view", p[0].id))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let csp = resp.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        csp.contains("default-src 'none'")
+            && csp.contains("sandbox")
+            && !csp.contains("script-src"),
+        "{csp}"
+    );
+    assert!(
+        csp.contains("img-src data: https:"),
+        "remote images are allowed: {csp}"
+    );
+    assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+    assert!(resp.text().await.unwrap().contains("<b>receipt</b>"));
+    // Decided: the HTML is gone.
+    r.db.resolve_email_suggestion(p[0].id, "rejected", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        reqwest::get(format!("{app}/api/email/suggestions/{}/view", p[0].id))
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+}
+
+#[tokio::test]
+async fn a_queued_message_keeps_its_html_through_the_retry() {
+    let r = rig().await;
+    r.w.lock().unwrap().ai_fail = vec![503];
+    let raw = "From: a@b.example\r\nSubject: Invoice\r\nMessage-ID: <v2@x>\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>receipt <i>12.50</i></p>\r\n";
+    r.svc.ingest(raw.as_bytes()).await.unwrap();
+    let q = rows(&r, "queued").await;
+    assert!(q[0].has_html);
+    assert_eq!(r.svc.retry_queued(None).await.unwrap(), 1);
+    let p = rows(&r, "pending").await;
+    assert!(r
+        .db
+        .email_html(p[0].id)
+        .await
+        .unwrap()
+        .unwrap()
+        .contains("<i>12.50</i>"));
+}

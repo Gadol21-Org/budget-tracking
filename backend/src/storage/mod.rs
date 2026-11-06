@@ -42,6 +42,8 @@ pub trait Storage: Send + Sync {
         status: &str,
         transaction_id: Option<i64>,
     ) -> anyhow::Result<bool>;
+    /// The stored HTML of an email, for showing it. None once the suggestion is decided.
+    async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>>;
     /// Remove a `queued` or `error` row (before its message is parsed again). False otherwise.
     async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;

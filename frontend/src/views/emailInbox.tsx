@@ -1,6 +1,7 @@
 import { type ReactElement, useState } from "react";
 import { api, formatMinor, type EmailSuggestion } from "../api";
 import { BackButton } from "../components/BackButton";
+import { openReactDialog } from "../components/openReactDialog";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { go, goBack } from "../nav";
@@ -66,6 +67,36 @@ function Source({ s }: { s: EmailSuggestion }) {
   );
 }
 
+/** The email as it was sent, in a frame without scripts (images from the internet are shown). */
+function openEmailView(s: EmailSuggestion) {
+  openReactDialog(
+    (close) => (
+      <div className="email-view">
+        <div className="head">
+          <div className="grow small" dir="auto">
+            <b>{s.subject || s.sender}</b>
+            <div className="muted">{s.sender}</div>
+          </div>
+          <button className="btn" onClick={close}>
+            סגירה
+          </button>
+        </div>
+        <iframe title="תצוגת המייל" sandbox="" src={`/api/email/suggestions/${s.id}/view`} />
+      </div>
+    ),
+    "fullpage",
+  );
+}
+
+function ViewButton({ s }: { s: EmailSuggestion }) {
+  if (!s.has_html) return null;
+  return (
+    <button className="btn" onClick={() => openEmailView(s)}>
+      צפייה במייל
+    </button>
+  );
+}
+
 async function refresh() {
   state.suggestions = await fetchInbox();
   await load();
@@ -104,6 +135,7 @@ function SuggestionCard({ s }: { s: EmailSuggestion }) {
       <Source s={s} />
       {err && <div className="error">{err}</div>}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <ViewButton s={s} />
         <button className="btn" disabled={busy} onClick={reject}>
           דחייה
         </button>
@@ -127,6 +159,7 @@ function FailedCard({ s }: { s: EmailSuggestion }) {
       <div className="muted small">{s.subject || s.sender}</div>
       <Source s={s} />
       <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <ViewButton s={s} />
         <button
           className="btn"
           disabled={busy}
@@ -168,6 +201,7 @@ function QueuedCard({ s }: { s: EmailSuggestion }) {
       <Source s={s} />
       {err && <div className="error">{err}</div>}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <ViewButton s={s} />
         <button className="btn" disabled={busy} onClick={act(() => api.discardSuggestion(s.id))}>
           הסרה
         </button>

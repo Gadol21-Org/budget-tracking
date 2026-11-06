@@ -213,6 +213,10 @@ impl MySqlStorage {
                 .await?;
         }
         // Tables created before categories could be linked; fails harmlessly if present.
+        // The email's HTML, kept only until its suggestion is decided (email_items came first without it).
+        let _ = sqlx::query("ALTER TABLE email_items ADD COLUMN html MEDIUMTEXT NULL")
+            .execute(&pool)
+            .await;
         let _ = sqlx::query("ALTER TABLE categories ADD COLUMN linked_to BIGINT NULL")
             .execute(&pool)
             .await;
@@ -504,8 +508,8 @@ impl Storage for MySqlStorage {
             let res = sqlx::query(
                 "INSERT IGNORE INTO email_items
                    (message_id, idx, status, received, sender, subject, excerpt, date,
-                    amount_minor, currency, category_id, note, confidence, error)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    amount_minor, currency, category_id, note, confidence, error, html)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&r.message_id)
             .bind(r.idx)
@@ -521,6 +525,7 @@ impl Storage for MySqlStorage {
             .bind(&r.note)
             .bind(&r.confidence)
             .bind(&r.error)
+            .bind(&r.html)
             .execute(&self.pool)
             .await?;
             added += res.rows_affected() as usize;
@@ -539,7 +544,8 @@ impl Storage for MySqlStorage {
     async fn list_email_suggestions(&self, status: Option<&str>) -> Result<Vec<EmailSuggestion>> {
         let rows = sqlx::query(
             "SELECT id, message_id, idx, status, received, sender, subject, excerpt, date,
-                    amount_minor, currency, category_id, note, confidence, transaction_id, error
+                    amount_minor, currency, category_id, note, confidence, transaction_id, error,
+                    html IS NOT NULL AND html <> '' AS has_html
              FROM email_items WHERE (? IS NULL OR status = ?)
              ORDER BY received DESC, id DESC LIMIT 500",
         )
@@ -566,9 +572,23 @@ impl Storage for MySqlStorage {
                     confidence: r.try_get("confidence")?,
                     transaction_id: r.try_get("transaction_id")?,
                     error: r.try_get("error")?,
+                    has_html: r.try_get("has_html")?,
                 })
             })
             .collect()
+    }
+
+    async fn email_html(&self, id: i64) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT html FROM email_items WHERE id = ? AND status <> 'ignored'")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r
+                .try_get::<Option<String>, _>("html")?
+                .filter(|h| !h.is_empty()),
+            None => None,
+        })
     }
 
     async fn delete_email_suggestion(&self, id: i64) -> Result<bool> {
@@ -587,7 +607,7 @@ impl Storage for MySqlStorage {
         transaction_id: Option<i64>,
     ) -> Result<bool> {
         let res = sqlx::query(
-            "UPDATE email_items SET status = ?, transaction_id = ?, excerpt = ''
+            "UPDATE email_items SET status = ?, transaction_id = ?, excerpt = '', html = NULL
              WHERE id = ? AND status = 'pending'",
         )
         .bind(status)

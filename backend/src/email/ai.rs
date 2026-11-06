@@ -236,6 +236,7 @@ mod tests {
             from: "a@b".into(),
             subject: "s".into(),
             received: "2026-03-02".into(),
+            html: String::new(),
             text: "t".into(),
         }
     }

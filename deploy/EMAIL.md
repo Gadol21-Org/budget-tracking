@@ -13,7 +13,7 @@ There is no Google OAuth, no Gmail API, no token to expire and nothing to verify
 ## What is stored and who sees it
 - Cloudflare processes the forwarded mail in transit (Email Routing and the Worker); it is not stored by the Worker.
 - The text of each message (up to 12,000 characters; HTML is turned into text; attachments are ignored) is sent to the Google AI API (`gemini-3.5-flash-lite`). On the free tier Google may use prompts to improve its products; enabling billing on the key's project avoids that.
-- The app keeps, per message: sender, subject, date, the AI's answer and a 600 character excerpt for you to check. The excerpt is deleted when you accept or reject the suggestion. A message the AI could not read yet is kept in full (so it can be retried) until it is read or removed.
+- The app keeps, per message: sender, subject, date, the AI's answer and a 600 character excerpt for you to check. The email's HTML (up to 300 KB) is kept too, for the "צפייה במייל" button; it is shown in a sandboxed frame without scripts, and images from the internet load (the sender may see that you opened it). The excerpt and the HTML are deleted when you accept or reject the suggestion. Attachments are ignored and never stored. A message the AI could not read yet is kept in full (so it can be retried) until it is read or removed.
 - Anyone who learns the routed address could mail it. They can only add suggestions for you to reject, never transactions. To make that harder: use an unguessable address (`budget-x7k2q9@...`), set `EMAIL_FORWARDER` (below), and the server caps AI calls per day (`EMAIL_MAX_PER_DAY`, default 100; the rest wait).
 
 ## Setup

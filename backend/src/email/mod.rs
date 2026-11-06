@@ -317,11 +317,13 @@ impl Service {
             if only.is_some_and(|id| id != row.id) {
                 continue;
             }
+            let html = self.db.email_html(row.id).await?.unwrap_or_default();
             let mail = Mail {
                 id: row.message_id.clone(),
                 from: row.sender.clone(),
                 subject: row.subject.clone(),
                 received: row.received.clone(),
+                html,
                 text: row.excerpt.clone(),
             };
             let out = self.read(&mail, &categories).await?;
@@ -376,6 +378,7 @@ fn rows_for(mail: &Mail, found: &[ai::Found], cats: &[Category]) -> Vec<NewEmail
         .enumerate()
         .map(|(i, f)| NewEmailSuggestion {
             excerpt: truncate(&mail.text, 600),
+            html: mail.html.clone(),
             date: f.date.clone(),
             amount_minor: f.amount_minor,
             currency: f.currency.clone(),
@@ -389,6 +392,7 @@ fn rows_for(mail: &Mail, found: &[ai::Found], cats: &[Category]) -> Vec<NewEmail
 
 fn queued_row(mail: &Mail, why: &str) -> NewEmailSuggestion {
     NewEmailSuggestion {
+        html: mail.html.clone(),
         error: truncate(why, 300),
         ..base_row(mail, 0, "queued")
     }
@@ -397,6 +401,7 @@ fn queued_row(mail: &Mail, why: &str) -> NewEmailSuggestion {
 fn error_row(mail: &Mail, why: &anyhow::Error) -> NewEmailSuggestion {
     NewEmailSuggestion {
         excerpt: truncate(&mail.text, 600),
+        html: mail.html.clone(),
         error: truncate(&format!("{why:#}"), 300),
         ..base_row(mail, 0, "error")
     }

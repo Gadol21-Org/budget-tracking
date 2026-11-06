@@ -5,7 +5,8 @@ use super::Db;
 use crate::email::{IngestError, Ingested, Service, Status};
 use crate::storage::EmailSuggestion;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -138,4 +139,30 @@ pub(crate) async fn retry(
 #[derive(Deserialize)]
 pub(crate) struct RetryQuery {
     id: Option<i64>,
+}
+
+/// The email as it looked, for the "view email" frame. It is untrusted HTML, so it is served
+/// with a policy that allows no script, no remote content (no tracking pixels) and no
+/// navigation, only inline styles and embedded images; the app also shows it in a sandboxed frame.
+pub(crate) async fn view(State(db): State<Db>, Path(id): Path<i64>) -> Result<Response, ApiError> {
+    let Some(html) = db.email_html(id).await.map_err(internal)? else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no email to show".into(),
+        ));
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; sandbox; base-uri 'none'; form-action 'none'",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        html,
+    )
+        .into_response())
 }

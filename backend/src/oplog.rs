@@ -270,6 +270,9 @@ impl Storage for Logged {
             .resolve_email_suggestion(id, status, transaction_id)
             .await
     }
+    async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>> {
+        self.0.email_html(id).await
+    }
     async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool> {
         self.0.delete_email_suggestion(id).await
     }

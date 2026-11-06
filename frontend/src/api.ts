@@ -179,6 +179,8 @@ export interface EmailSuggestion {
   confidence: "high" | "medium" | "low" | "";
   transaction_id: number | null;
   error: string;
+  /** The email's own HTML is stored and can be shown. */
+  has_html: boolean;
 }
 
 export interface EmailStatus {
