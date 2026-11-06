@@ -57,7 +57,7 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         return reply("not json at all".into());
     }
     let txs = if prompt.contains("receipt") || pdfs > 0 {
-        json!([{ "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": "high" }])
+        json!([{ "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": if prompt.contains("sure") { "high" } else { "medium" } }])
     } else {
         json!([])
     };
@@ -696,4 +696,129 @@ async fn a_queued_message_keeps_its_pdf_for_the_retry() {
     // Second call (the retry) carried the PDF.
     assert_eq!(r.w.lock().unwrap().pdf_parts, vec![1, 1]);
     assert_eq!(rows(&r, "pending").await.len(), 1);
+}
+
+async fn tx_count(r: &Rig) -> usize {
+    r.db.list_transactions().await.unwrap().len()
+}
+
+#[tokio::test]
+async fn a_sure_answer_with_a_category_is_added_at_once() {
+    let r = rig().await;
+    let out = r
+        .svc
+        .ingest(&eml("a1", "Receipt", "Total 12.50 receipt sure"))
+        .await
+        .unwrap();
+    assert_eq!((out.auto, out.suggestions), (1, 0));
+    let a = &rows(&r, "auto").await[0];
+    let t = r.db.list_transactions().await.unwrap();
+    assert_eq!((t.len(), Some(t[0].id)), (1, a.transaction_id));
+    assert_eq!(
+        (t[0].amount_agorot, t[0].category_id),
+        (-1250, a.category_id)
+    );
+    assert!(t[0].category_id.is_some());
+    let s = r.svc.status().await.unwrap();
+    assert_eq!((s.auto, s.pending), (1, 0));
+    // Not sure: waits for a person as before.
+    let out = r
+        .svc
+        .ingest(&eml("a2", "Receipt 2", "Total 12.50 receipt"))
+        .await
+        .unwrap();
+    assert_eq!((out.auto, out.suggestions, tx_count(&r).await), (0, 1, 1));
+}
+
+#[tokio::test]
+async fn a_rule_fixes_the_category_and_business_and_the_model_is_not_asked_for_one() {
+    let r = rig().await;
+    let new = |name: &str, parent: Option<i64>| crate::storage::NewCategory {
+        name: name.into(),
+        is_income: false,
+        parent_id: parent,
+        linked_to: None,
+    };
+    let fun = r.db.create_category(&new("Fun", None)).await.unwrap();
+    let gym = r.db.create_category(&new("Gym", Some(fun))).await.unwrap();
+    let biz = r.db.insert_business("Studio", false).await.unwrap();
+    rules::put(
+        r.db.as_ref(),
+        rules::Rule {
+            subject: "Fwd: Gym receipt".into(),
+            category_id: gym,
+            business_id: Some(biz),
+        },
+    )
+    .await
+    .unwrap();
+    // Even medium confidence is added: the rule names the category, and the amounts are the AI's.
+    let out = r
+        .svc
+        .ingest(&eml("r1", "Gym receipt", "Total 12.50 receipt sure"))
+        .await
+        .unwrap();
+    assert_eq!((out.auto, out.suggestions), (1, 0));
+    let t = &r.db.list_transactions().await.unwrap()[0];
+    assert_eq!((t.amount_agorot, t.category_id), (-1250, Some(gym)));
+    let links = r.db.business_links().await.unwrap();
+    assert_eq!(links.transactions, vec![(t.id, biz)]);
+}
+
+#[tokio::test]
+async fn a_rule_with_an_unsure_answer_waits_with_the_category_chosen() {
+    let r = rig().await;
+    let cats = r.db.list_categories().await.unwrap();
+    let groceries = cats.iter().find(|c| c.name == "Groceries").unwrap().id;
+    rules::put(
+        r.db.as_ref(),
+        rules::Rule {
+            subject: "Gym receipt".into(),
+            category_id: groceries,
+            business_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let out = r
+        .svc
+        .ingest(&eml("r2", "Gym receipt", "Total 12.50 receipt"))
+        .await
+        .unwrap();
+    assert_eq!((out.auto, out.suggestions, tx_count(&r).await), (0, 1, 0));
+    assert_eq!(rows(&r, "pending").await[0].category_id, Some(groceries));
+}
+
+#[tokio::test]
+async fn a_category_that_needs_a_business_waits_unless_a_rule_names_one() {
+    let r = rig().await;
+    let cats = r.db.list_categories().await.unwrap();
+    let groceries = cats.iter().find(|c| c.name == "Groceries").unwrap().id;
+    r.db.set_category_business_required(groceries, true)
+        .await
+        .unwrap();
+    let out = r
+        .svc
+        .ingest(&eml("n1", "Receipt", "Total 12.50 receipt sure"))
+        .await
+        .unwrap();
+    assert_eq!((out.auto, out.suggestions, tx_count(&r).await), (0, 1, 0));
+}
+
+#[tokio::test]
+async fn an_auto_row_is_acknowledged_without_losing_its_transaction() {
+    let r = rig().await;
+    r.svc
+        .ingest(&eml("k1", "Receipt", "Total 12.50 receipt sure"))
+        .await
+        .unwrap();
+    let a = rows(&r, "auto").await.remove(0);
+    assert!(r
+        .db
+        .resolve_email_suggestion(a.id, "accepted", None)
+        .await
+        .unwrap());
+    let done = rows(&r, "accepted").await.remove(0);
+    assert_eq!(done.transaction_id, a.transaction_id);
+    assert!(done.transaction_id.is_some());
 }

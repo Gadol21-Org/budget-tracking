@@ -512,8 +512,8 @@ impl Storage for MySqlStorage {
             let res = sqlx::query(
                 "INSERT IGNORE INTO email_items
                    (message_id, idx, status, received, sender, subject, excerpt, date,
-                    amount_minor, currency, category_id, note, confidence, error, html, raw)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    amount_minor, currency, category_id, note, confidence, error, html, raw, transaction_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&r.message_id)
             .bind(r.idx)
@@ -531,6 +531,7 @@ impl Storage for MySqlStorage {
             .bind(&r.error)
             .bind(&r.html)
             .bind((!r.raw.is_empty()).then_some(&r.raw))
+            .bind(r.transaction_id)
             .execute(&self.pool)
             .await?;
             added += res.rows_affected() as usize;
@@ -625,8 +626,8 @@ impl Storage for MySqlStorage {
         transaction_id: Option<i64>,
     ) -> Result<bool> {
         let res = sqlx::query(
-            "UPDATE email_items SET status = ?, transaction_id = ?, excerpt = '', html = NULL
-             WHERE id = ? AND status = 'pending'",
+            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id), excerpt = '', html = NULL
+             WHERE id = ? AND status IN ('pending', 'auto')",
         )
         .bind(status)
         .bind(transaction_id)

@@ -41,6 +41,8 @@ const choiceCategory = (c: CategoryChoice) => (c.sub ? Number(c.sub) : c.top ? N
 /** What an emailed suggestion starts a new transaction with. */
 export interface Prefill {
   suggestionId: number;
+  /** The mail's subject, for the "always do this" rule. */
+  subject?: string;
   date: string;
   /** Signed, in the currency's minor unit. */
   amount_minor: number;
@@ -107,6 +109,8 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
   const [forceLookup, setForceLookup] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Make a standing rule of this choice for mail with the same subject. */
+  const [always, setAlways] = useState(false);
   const quoteSeq = useRef(0);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -281,6 +285,7 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
           if (chosen != null) await api.tagTransactions([id], chosen);
           // The transaction exists; a failure to record the decision must not look like a failed save.
           if (prefill) await api.acceptSuggestion(prefill.suggestionId, id).catch(() => {});
+          if (prefill?.subject && always) await api.putEmailRule({ subject: prefill.subject, category_id: catId, business_id: chosen }).catch(() => {});
         } catch (e3) {
           // No connection: keep the line on this device and send it when the connection is back.
           if (!isNetworkError(e3)) throw e3;
@@ -396,6 +401,16 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
             <input type="checkbox" checked={repeat} onChange={(e) => changeRepeat(e.target.checked)} />
           </label>
           <span>חוזר מדי חודש</span>
+        </div>
+      )}
+      {prefill?.subject && !existing && !repeat && (
+        <div className="repeat-row">
+          <label className="repeat-hit">
+            <input type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} />
+          </label>
+          <span dir="auto">
+            תמיד לשמור מיילים עם הנושא <bdi>«{prefill.subject}»</bdi> בקטגוריה ובעסק האלה, בלי לבקש אישור
+          </span>
         </div>
       )}
       <div style={{ display: repeat ? "flex" : "none", flexDirection: "column", gap: 12 }}>

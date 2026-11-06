@@ -366,4 +366,6 @@ pub struct NewEmailSuggestion {
     /// The whole raw message, kept only while it waits unread (so its attachments can be read on
     /// the retry); empty otherwise.
     pub raw: Vec<u8>,
+    /// The transaction already made from it (status `auto`).
+    pub transaction_id: Option<i64>,
 }

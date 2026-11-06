@@ -1,7 +1,7 @@
 // Network first, falling back to cache, so the app shell (including hashed assets)
 // still opens offline once it has been loaded. API calls are never cached. A server error from the
 // proxy (502/503/504, Cloudflare 52x) counts as "no server": the cached copy is used instead of the error page.
-const CACHE = "budget-shell-v7";
+const CACHE = "budget-shell-v8";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icon-v2.svg", "/icon-192-v2.png"])));
@@ -59,9 +59,15 @@ self.addEventListener("push", (e) => {
   e.waitUntil(
     fetch("/api/email/status", { cache: "no-store" })
       .then((r) => r.json())
-      .then((o) => o.pending || 0)
-      .catch(() => 0)
-      .then((n) => self.registration.showNotification("הצעה חדשה מדוא״ל", { body: n > 1 ? `${n} הצעות ממתינות לבדיקה` : "תנועה שנמצאה במייל ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" })),
+      .then((o) => [o.pending || 0, o.auto || 0])
+      .catch(() => [0, 0])
+      .then(([n, auto]) => {
+        // Transactions added by themselves are announced; the ones that need a decision say so.
+        const lines = [];
+        if (auto) lines.push(auto > 1 ? `${auto} תנועות נוספו אוטומטית מדוא״ל` : "תנועה נוספה אוטומטית מדוא״ל");
+        if (n) lines.push(n > 1 ? `${n} הצעות ממתינות לבדיקה` : "תנועה שנמצאה במייל ממתינה לבדיקה");
+        return self.registration.showNotification(auto && !n ? "תנועה נוספה אוטומטית" : "הצעה חדשה מדוא״ל", { body: lines.join("\n") || "הצעה חדשה ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+      }),
   );
 });
 

@@ -8,6 +8,7 @@ mod transactions;
 mod users;
 
 pub(crate) use mirroring::{mirroring_enabled, run_mirror};
+pub(crate) use transactions::add_for_email;
 
 use self::error::{internal, ApiError};
 use self::mirroring::trigger_mirror;
@@ -178,6 +179,16 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
         .route(
             "/api/email/suggestions/:id",
             axum::routing::delete(email::discard),
+        )
+        .route(
+            "/api/email/suggestions/:id/seen",
+            axum::routing::post(email::seen),
+        )
+        .route(
+            "/api/email/rules",
+            get(email::rules_list)
+                .post(email::rules_put)
+                .delete(email::rules_delete),
         )
         .route("/api/email/retry", axum::routing::post(email::retry))
         // The one route the Cloudflare Worker calls: open to the internet, checks a shared secret.

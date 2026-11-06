@@ -2,6 +2,7 @@
 
 use super::error::{internal, ApiError};
 use super::Db;
+use crate::email::rules::{self, Rule};
 use crate::email::{IngestError, Ingested, Service, Status};
 use crate::storage::EmailSuggestion;
 use axum::extract::{Path, Query, State};
@@ -94,6 +95,59 @@ pub(crate) async fn accept(
         db.resolve_email_suggestion(id, "accepted", Some(b.transaction_id))
             .await,
     )
+}
+
+/// The person has seen a transaction that was added without asking.
+pub(crate) async fn seen(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    resolved(db.resolve_email_suggestion(id, "accepted", None).await)
+}
+
+pub(crate) async fn rules_list(State(db): State<Db>) -> Result<Json<Vec<Rule>>, ApiError> {
+    rules::list(db.as_ref()).await.map(Json).map_err(internal)
+}
+
+/// Always file mail with this subject under a category (and business).
+pub(crate) async fn rules_put(
+    State(db): State<Db>,
+    Json(r): Json<Rule>,
+) -> Result<StatusCode, ApiError> {
+    let bad = |m: &str| ApiError::new(StatusCode::BAD_REQUEST, m.to_string());
+    if rules::normalize(&r.subject).is_empty() {
+        return Err(bad("the mail has no subject to match"));
+    }
+    let cats = db.list_categories().await.map_err(internal)?;
+    if !cats.iter().any(|c| c.id == r.category_id && !c.is_income) {
+        return Err(bad("unknown expense category"));
+    }
+    if let Some(b) = r.business_id {
+        let known = db.list_businesses().await.map_err(internal)?;
+        if !known.iter().any(|x| x.id == b) {
+            return Err(bad("unknown business"));
+        }
+    }
+    rules::put(db.as_ref(), r).await.map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RuleSubject {
+    subject: String,
+}
+
+pub(crate) async fn rules_delete(
+    State(db): State<Db>,
+    Json(b): Json<RuleSubject>,
+) -> Result<StatusCode, ApiError> {
+    match rules::remove(db.as_ref(), &b.subject)
+        .await
+        .map_err(internal)?
+    {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(ApiError::new(StatusCode::NOT_FOUND, "no such rule".into())),
+    }
 }
 
 pub(crate) async fn reject(

@@ -1,6 +1,8 @@
 //! Email to transactions: mail you forward to an address on your own domain is read by an AI,
 //! which says what transaction each message describes. The answers go in a review queue, and
-//! nothing becomes a transaction until a person accepts it in the app.
+//! nothing becomes a transaction until a person accepts it in the app, except mail whose subject
+//! has a standing rule (see [`rules`]) or that the AI is sure about and gave a category: that is
+//! added at once, marked `auto`, and the person is told.
 //!
 //! How it fits together:
 //! * A Gmail filter forwards the mail you choose (receipts, card and bank notices) to an address
@@ -16,6 +18,7 @@
 pub mod ai;
 pub mod handlers;
 pub mod inbound;
+pub mod rules;
 #[cfg(test)]
 mod tests;
 
@@ -78,6 +81,8 @@ pub struct Status {
     pub last_error: Option<String>,
     /// Suggestions waiting for a decision.
     pub pending: usize,
+    /// Transactions added without asking that the person has not looked at yet.
+    pub auto: usize,
     /// Messages the AI has not read yet.
     pub queued: usize,
     /// VAPID public key for subscribing to web push; absent when push is not set up.
@@ -89,6 +94,8 @@ pub struct Status {
 pub struct Ingested {
     /// Suggested transactions added to the review queue.
     pub suggestions: usize,
+    /// Transactions added at once, without review.
+    pub auto: usize,
     /// The message was already handled.
     pub duplicate: bool,
     /// The message described no transaction.
@@ -169,6 +176,7 @@ impl Service {
     pub async fn status(&self) -> Result<Status> {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
+        let auto = self.db.list_email_suggestions(Some("auto")).await?.len();
         Ok(Status {
             configured: self.cfg.is_some(),
             ai_configured: self.cfg.as_ref().is_some_and(|c| c.ai_key.is_some()),
@@ -183,6 +191,7 @@ impl Service {
                 .await?
                 .filter(|s| !s.is_empty()),
             pending,
+            auto,
             queued,
             push_public_key: crate::push::public_key(),
         })
@@ -298,7 +307,7 @@ impl Service {
         let categories = self.db.list_categories().await?;
         let out = self.read(&mail, &categories).await?;
         self.db.add_email_suggestions(&out.rows).await?;
-        if out.summary.suggestions > 0 {
+        if out.summary.suggestions + out.summary.auto > 0 {
             crate::push::notify_all(self.db.as_ref()).await;
         }
         Ok(out.summary)
@@ -335,8 +344,18 @@ impl Service {
                 cfg.max_per_day
             )));
         }
+        // A rule for this subject fixes the category (and business): the model only reads the amounts.
+        let rules = rules::list(self.db.as_ref()).await?;
+        let rule = rules::find(&rules, &mail.subject)
+            .filter(|r| {
+                categories
+                    .iter()
+                    .any(|c| c.id == r.category_id && !c.is_income)
+            })
+            .cloned();
+        let for_ai: &[Category] = if rule.is_some() { &[] } else { categories };
         let mut usage = None;
-        let parsed = ai::parse(&self.http, cfg, key, mail, categories, &mut usage).await;
+        let parsed = ai::parse(&self.http, cfg, key, mail, for_ai, &mut usage).await;
         if let Some(u) = usage {
             self.log_cost(cfg, mail, &u, &parsed).await;
         }
@@ -353,13 +372,18 @@ impl Service {
             }
             Ok(found) => {
                 self.note_error(None).await;
+                let mut rows = rows_for(mail, &found, categories);
+                let auto = self
+                    .add_at_once(rule.as_ref(), &mut rows, categories)
+                    .await?;
                 Read {
                     summary: Ingested {
-                        suggestions: found.len(),
+                        suggestions: found.len() - auto,
+                        auto,
                         ignored: found.is_empty(),
                         ..Default::default()
                     },
-                    rows: rows_for(mail, &found, categories),
+                    rows,
                 }
             }
             Err(ai::Failure::Transient(e)) => {
@@ -375,6 +399,61 @@ impl Service {
                 },
             },
         })
+    }
+
+    /// Make transactions of the pending rows that need no review: a category is known (from the
+    /// subject's rule, else the AI's own pick) and the AI is sure about the rest. Such a row
+    /// becomes `auto`. A row stays pending when the category needs a business that nothing
+    /// names, or when the transaction cannot be made now. Returns how many were added.
+    async fn add_at_once(
+        &self,
+        rule: Option<&rules::Rule>,
+        rows: &mut [NewEmailSuggestion],
+        cats: &[Category],
+    ) -> Result<usize> {
+        let links = self.db.business_links().await?;
+        let mut added = 0;
+        for row in rows.iter_mut().filter(|r| r.status == "pending") {
+            if let Some(r) = rule {
+                row.category_id = Some(r.category_id);
+            }
+            let (Some(cid), "high") = (row.category_id, row.confidence.as_str()) else {
+                continue;
+            };
+            let Some(cat) = cats.iter().find(|c| c.id == cid) else {
+                continue;
+            };
+            let ids = [Some(cid), cat.parent_id];
+            let business = rule.and_then(|r| r.business_id);
+            let linked = links
+                .categories
+                .iter()
+                .any(|(c, _)| ids.contains(&Some(*c)));
+            let required = links.required.iter().any(|c| ids.contains(&Some(*c)));
+            if required && business.is_none() && !linked {
+                continue;
+            }
+            let Ok(tx) = crate::api::add_for_email(
+                &self.db,
+                &row.date,
+                row.amount_minor,
+                &row.currency,
+                cid,
+                &row.note,
+            )
+            .await
+            else {
+                tracing::warn!("a mail matching a rule could not be added, left for review");
+                continue;
+            };
+            if let Some(b) = business {
+                self.db.set_transactions_business(&[tx], Some(b)).await?;
+            }
+            row.status = "auto".into();
+            row.transaction_id = Some(tx);
+            added += 1;
+        }
+        Ok(added)
     }
 
     /// Read the messages the AI could not read earlier. Stops at the first one that still
@@ -421,7 +500,7 @@ impl Service {
             if self.db.delete_email_suggestion(row.id).await? {
                 self.db.add_email_suggestions(&out.rows).await?;
                 done += 1;
-                found |= out.summary.suggestions > 0;
+                found |= out.summary.suggestions + out.summary.auto > 0;
             }
         }
         if found {

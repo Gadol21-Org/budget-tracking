@@ -86,8 +86,9 @@ export async function loadEmail() {
 
 /** Suggestions waiting for a decision, then the messages the AI has not read yet or could not read. */
 export async function fetchInbox() {
-  const [pending, queued, failed] = await Promise.all([api.emailSuggestions("pending"), api.emailSuggestions("queued"), api.emailSuggestions("error")]);
-  return [...pending, ...queued, ...failed];
+  const [auto, pending, queued, failed, rules] = await Promise.all([api.emailSuggestions("auto"), api.emailSuggestions("pending"), api.emailSuggestions("queued"), api.emailSuggestions("error"), api.emailRules()]);
+  state.emailRules = rules;
+  return [...auto, ...pending, ...queued, ...failed];
 }
 
 /** First paint: show the offline copy at once, before anything is fetched. False if there is none yet. */

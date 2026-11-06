@@ -164,7 +164,7 @@ export interface LogUser {
 export interface EmailSuggestion {
   id: number;
   message_id: string;
-  status: "pending" | "accepted" | "rejected" | "ignored" | "queued" | "error";
+  status: "pending" | "auto" | "accepted" | "rejected" | "ignored" | "queued" | "error";
   received: string;
   sender: string;
   subject: string;
@@ -181,6 +181,13 @@ export interface EmailSuggestion {
   error: string;
   /** The email's own HTML is stored and can be shown. */
   has_html: boolean;
+}
+
+/** "Always file mail with this subject like this": the AI then reads only the amounts. */
+export interface EmailRule {
+  subject: string;
+  category_id: number;
+  business_id: number | null;
 }
 
 /** One AI call that read an email, with what it cost (millionths of a US dollar). */
@@ -210,6 +217,8 @@ export interface EmailStatus {
   last_error: string | null;
   /** Suggestions waiting for a decision. */
   pending: number;
+  /** Transactions added without asking that nobody has looked at yet. */
+  auto: number;
   /** Messages the AI has not read yet. */
   queued: number;
 }
@@ -314,6 +323,11 @@ export const api = {
   discardSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}`, { method: "DELETE" }),
   acceptSuggestion: (id: number, transactionId: number) =>
     request<void>(`/api/email/suggestions/${id}/accept`, { method: "POST", body: JSON.stringify({ transaction_id: transactionId }) }),
+  /** The person has seen a transaction that was added automatically. */
+  seenSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/seen`, { method: "POST" }),
+  emailRules: () => request<EmailRule[]>("/api/email/rules"),
+  putEmailRule: (r: EmailRule) => request<void>("/api/email/rules", { method: "POST", body: JSON.stringify(r) }),
+  deleteEmailRule: (subject: string) => request<void>("/api/email/rules", { method: "DELETE", body: JSON.stringify({ subject }) }),
   rejectSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/reject`, { method: "POST" }),
   /** Whether changes are being written to Paamonim. */
   mirrorStatus: () => request<{ enabled: boolean }>("/api/mirror/status"),

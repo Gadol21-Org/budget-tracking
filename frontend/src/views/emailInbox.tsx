@@ -6,6 +6,7 @@ import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { go, goBack } from "../nav";
 import { render } from "../render";
+import { bizName } from "../business";
 import { catById } from "../selectors";
 import { state } from "../state";
 import { fetchInbox, load } from "../sync";
@@ -24,6 +25,7 @@ const CONFIDENCE: Record<string, string> = { high: "ביטחון גבוה", medi
 
 /** Transactions found in emails, waiting for a person to check and add them (or throw them away). */
 export function emailInboxView(): ReactElement {
+  const auto = state.suggestions.filter((s) => s.status === "auto");
   const pending = state.suggestions.filter((s) => s.status === "pending");
   const queued = state.suggestions.filter((s) => s.status === "queued");
   const failed = state.suggestions.filter((s) => s.status === "error");
@@ -36,8 +38,11 @@ export function emailInboxView(): ReactElement {
           <div className="muted">נמצאו בהודעות שהועברו מ-Gmail</div>
         </div>
       </div>
-      <p className="muted small" style={{ margin: "10px 4px 0" }}>שום דבר לא נוסף לתנועות עד שתאשרו.</p>
-      {pending.length === 0 && queued.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
+      <p className="muted small" style={{ margin: "10px 4px 0" }}>תנועות שה-AI בטוח בהן, או שיש להן כלל קבוע, נוספות מיד; כל השאר ממתין לאישורכם.</p>
+      {auto.length === 0 && pending.length === 0 && queued.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
+      {auto.map((s) => (
+        <AutoCard key={s.id} s={s} />
+      ))}
       {pending.map((s) => (
         <SuggestionCard key={s.id} s={s} />
       ))}
@@ -47,6 +52,7 @@ export function emailInboxView(): ReactElement {
       {failed.map((s) => (
         <FailedCard key={s.id} s={s} />
       ))}
+      <RulesCard />
     </div>
   );
 }
@@ -90,6 +96,74 @@ async function refresh() {
   await load();
 }
 
+/** A transaction that was added without asking: shown so it can be checked, then dismissed. */
+function AutoCard({ s }: { s: EmailSuggestion }) {
+  const [busy, setBusy] = useState(false);
+  const path = categoryPath(s.category_id);
+  const biz = s.transaction_id != null ? state.biz.tx.get(s.transaction_id) : undefined;
+  return (
+    <div className="card suggestion auto">
+      <div className="head">
+        <div className="grow">
+          <div className="name">{s.note || s.subject || "תנועה מדוא״ל"}</div>
+          <div className="muted small">
+            {fmtDate(s.date)}
+            {path ? ` · ${path}` : ""}
+            {biz != null ? ` · ${bizName(state.biz, biz)}` : ""}
+          </div>
+        </div>
+        <Amount s={s} />
+      </div>
+      <div className="muted small">נוספה אוטומטית לתנועות · הודעה מ-{fmtDate(s.received)}</div>
+      <div className="actions" style={{ justifyContent: "flex-start" }}>
+        <ViewButton s={s} />
+        <button
+          className="btn primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await api.seenSuggestion(s.id).catch(() => {});
+            await refresh();
+          }}
+        >
+          הבנתי
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The standing rules ("always file mail with this subject like this") and a way to remove them. */
+function RulesCard() {
+  if (state.emailRules.length === 0) return null;
+  return (
+    <div className="card">
+      <div className="name">כללים קבועים לפי נושא</div>
+      <p className="muted small">מייל עם נושא כזה נשמר מיד בקטגוריה ובעסק שנבחרו; ה-AI קורא רק את הסכום והתאריך.</p>
+      {state.emailRules.map((r) => (
+        <div key={r.subject} className="head" style={{ marginTop: 8 }}>
+          <div className="grow small" dir="auto">
+            <b>{r.subject}</b>
+            <div className="muted">
+              {categoryPath(r.category_id)}
+              {r.business_id != null ? ` · ${bizName(state.biz, r.business_id)}` : ""}
+            </div>
+          </div>
+          <button
+            className="btn"
+            onClick={async () => {
+              await api.deleteEmailRule(r.subject).catch(() => {});
+              await refresh();
+            }}
+          >
+            הסרה
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SuggestionCard({ s }: { s: EmailSuggestion }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -129,7 +203,7 @@ function SuggestionCard({ s }: { s: EmailSuggestion }) {
         <button
           className="btn primary"
           disabled={busy}
-          onClick={() => openTransactionDialog(undefined, s.amount_minor > 0, { suggestionId: s.id, date: s.date, amount_minor: s.amount_minor, currency: s.currency, category_id: s.category_id, note: s.note })}
+          onClick={() => openTransactionDialog(undefined, s.amount_minor > 0, { suggestionId: s.id, subject: s.subject, date: s.date, amount_minor: s.amount_minor, currency: s.currency, category_id: s.category_id, note: s.note })}
         >
           בדיקה והוספה
         </button>

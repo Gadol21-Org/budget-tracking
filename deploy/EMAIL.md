@@ -1,6 +1,6 @@
 # Email to transactions
 
-Mail that Gmail forwards to an address on your own domain is read by an AI, which says which transaction each message describes. The answers wait in **Settings > Suggestions from email**. A suggestion becomes a transaction only when you open it, check it in the normal add dialog and save.
+Mail that Gmail forwards to an address on your own domain is read by an AI, which says which transaction each message describes. The answers wait in **Settings > Suggestions from email**. A suggestion becomes a transaction when you open it, check it in the normal add dialog and save; the exceptions are described under "Adding without review" below.
 
 ```
 Gmail filter  --forwards-->  budget-xxxx@your-domain  (Cloudflare Email Routing)

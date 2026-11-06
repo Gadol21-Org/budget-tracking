@@ -20,6 +20,8 @@ vi.mock("../api", async (orig) => ({
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
     rejectSuggestion: vi.fn(async () => {}),
+    seenSuggestion: vi.fn(async () => {}),
+    deleteEmailRule: vi.fn(async () => {}),
     discardSuggestion: vi.fn(async () => {}),
   },
 }));
@@ -160,6 +162,20 @@ describe("the email inbox", () => {
     expect(screen.getByText("Your receipt")).toBeTruthy();
     expect(screen.getByText("$0.000160")).toBeTruthy();
     expect(screen.getByText(/לא נמצאה תנועה/)).toBeTruthy();
+  });
+
+  it("shows a transaction that was added by itself, and the standing rules", async () => {
+    const { api } = await import("../api");
+    state.suggestions = [{ ...suggestion, id: 12, status: "auto", category_id: null, transaction_id: 3 }];
+    state.emailRules = [{ subject: "Gym receipt", category_id: 1, business_id: null }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText(/נוספה אוטומטית לתנועות/)).toBeTruthy();
+    expect(screen.getByText("Gym receipt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "הבנתי" }));
+    await waitFor(() => expect(api.seenSuggestion).toHaveBeenCalledWith(12));
+    fireEvent.click(screen.getAllByRole("button", { name: "הסרה" })[0]);
+    await waitFor(() => expect(api.deleteEmailRule).toHaveBeenCalledWith("Gym receipt"));
   });
 
   it("says when an attachment was left unread", async () => {
