@@ -85,8 +85,11 @@ function LogLines({ e }: { e: LogEntry }) {
       <span dir="auto">{text}</span>
     </div>
   );
+  // The AI calls show only their price (tokens and model stay recorded, not displayed).
+  const hidden = e.kind === "ai_email" ? ["model", "input_tokens", "output_tokens"] : [];
   const values = (o: Record<string, unknown> | null) =>
     Object.entries(o ?? {})
+      .filter(([k]) => !hidden.includes(k))
       .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
       .map(([k, v], i) => line(k, logValue(k, v), `${k}${i}`));
   if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override", "category_link", "category_move"].includes(e.kind)) {

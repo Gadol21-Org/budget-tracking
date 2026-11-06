@@ -75,7 +75,7 @@ function AiCostScreen() {
                 <div className="row aicost-row" key={`${i.at}${k}`}>
                   <div className="grow" dir="auto">
                     <div className="logtitle">{i.subject || i.sender}</div>
-                    <div className="muted small">{`${aiResultText(i.result)} · ${i.input_tokens.toLocaleString("he-IL")} נכנסים, ${i.output_tokens.toLocaleString("he-IL")} יוצאים`}</div>
+                    <div className="muted small">{aiResultText(i.result)}</div>
                   </div>
                   <b dir="ltr">{formatUsd(i.cost_micro_usd)}</b>
                 </div>
