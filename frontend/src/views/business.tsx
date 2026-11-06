@@ -218,20 +218,11 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
 
 /** The product's lines in the period, by day, as in the transactions tab. */
 function ProductTransactions({ ctx }: { ctx: BusinessCtx }) {
-  const all = ctx.view.all === true;
-  const txs = scoped(ctx, ctx.view.scope).filter((t) => all || contains(ctx.period, t.date));
+  const txs = scoped(ctx, ctx.view.scope).filter((t) => contains(ctx.period, t.date));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
   return (
     <>
-      <div className="seg3b" style={{ gridTemplateColumns: "1fr 1fr" }}>
-        <button type="button" aria-pressed={!all} onClick={() => ctx.setView({ all: false })}>
-          התקופה
-        </button>
-        <button type="button" aria-pressed={all} onClick={() => ctx.setView({ all: true })}>
-          כל התנועות
-        </button>
-      </div>
-      {!days.length && <div className="empty">{all ? "אין תנועות" : "אין תנועות בתקופה זו"}</div>}
+      {!days.length && <div className="empty">אין תנועות בתקופה זו</div>}
       {days.map((d) => (
         <div key={d}>
           <div className="daylabel">{dayTitle(d)}</div>
@@ -385,7 +376,7 @@ function BusinessDashboard({ ctx }: { ctx: BusinessCtx }) {
           </button>
         ))}
       </div>
-      {!(tab === "overview" && ctx.view.scope !== "all" && ctx.view.all) && <ConnectedMonthBar />}
+      <ConnectedMonthBar />
       <Body ctx={ctx} />
     </div>
   );

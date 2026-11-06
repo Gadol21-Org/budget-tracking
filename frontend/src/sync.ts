@@ -168,7 +168,6 @@ export function neededFrom(): string {
     if (cmp.kind === "custom") from = [from, bounds(cmp.period).from].sort()[0];
   }
   // A product's every line: from the very start (""; loaded once, then kept).
-  if (state.view === "businessOverview" && state.businessView.tab === "txs" && state.businessView.all) return "";
   return from;
 }
 

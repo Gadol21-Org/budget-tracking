@@ -54,8 +54,6 @@ export interface BusinessView {
   tab: BusinessTab;
   /** "all" = the whole business, or one product. */
   scope: "all" | number;
-  /** On a product's lines: every line it ever had, not just the period. */
-  all?: boolean;
 }
 
 export interface BusinessCtx {
