@@ -77,7 +77,15 @@ function EmailView({ s, close }: { s: EmailSuggestion; close: () => void }) {
     const locked = meta?.content;
     if (meta) meta.content = "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover";
     return () => {
-      if (meta && locked) meta.content = locked;
+      if (!meta || !locked) return;
+      // Closing while zoomed in must not leave the page zoomed or shifted (the fixed bottom bar ends up mid-screen):
+      // pin the scale to 1 first, then restore the app's own setting.
+      meta.content = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+      setTimeout(() => {
+        meta.content = locked;
+        window.scrollBy(0, 1);
+        window.scrollBy(0, -1);
+      }, 100);
     };
   }, []);
   return (
