@@ -587,7 +587,7 @@ impl Storage for MySqlStorage {
     async fn email_transaction_ids(&self) -> Result<Vec<i64>> {
         let rows = sqlx::query(
             "SELECT DISTINCT transaction_id FROM email_items
-             WHERE transaction_id IS NOT NULL AND status IN ('accepted', 'auto')",
+             WHERE transaction_id IS NOT NULL AND status IN ('accepted', 'auto', 'added')",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -599,7 +599,7 @@ impl Storage for MySqlStorage {
     async fn expire_auto_emails(&self, before: &str) -> Result<usize> {
         let res = sqlx::query(
             "UPDATE email_items SET status = 'accepted', excerpt = '', html = NULL
-             WHERE status = 'auto' AND received < ?",
+             WHERE status IN ('auto', 'added') AND received < ?",
         )
         .bind(before)
         .execute(&self.pool)
@@ -648,10 +648,16 @@ impl Storage for MySqlStorage {
         status: &str,
         transaction_id: Option<i64>,
     ) -> Result<bool> {
-        let res = sqlx::query(
-            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id), excerpt = '', html = NULL
-             WHERE id = ? AND status IN ('pending', 'auto')",
-        )
+        // A mail that became a transaction (`added`) stays listed, with its email, until it expires.
+        let keep = status == "added" || status == "auto";
+        let res = sqlx::query(if keep {
+            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id)
+             WHERE id = ? AND status IN ('pending', 'auto')"
+        } else {
+            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id),
+                    excerpt = '', html = NULL
+             WHERE id = ? AND status IN ('pending', 'auto')"
+        })
         .bind(status)
         .bind(transaction_id)
         .bind(id)

@@ -169,7 +169,7 @@ describe("the email inbox", () => {
     state.emailRules = [{ subject: "Gym receipt", category_id: 1, business_id: null }];
     state.view = "emailInbox";
     app.render();
-    expect(await screen.findByText(/נוספה אוטומטית לתנועות/)).toBeTruthy();
+    expect(await screen.findByText(/נוספה מדוא״ל לתנועות/)).toBeTruthy();
     expect(screen.getByText("Gym receipt")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "הסרה" })[0]);
     await waitFor(() => expect(api.deleteEmailRule).toHaveBeenCalledWith("Gym receipt"));

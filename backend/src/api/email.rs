@@ -92,7 +92,7 @@ pub(crate) async fn accept(
         ));
     }
     resolved(
-        db.resolve_email_suggestion(id, "accepted", Some(b.transaction_id))
+        db.resolve_email_suggestion(id, "added", Some(b.transaction_id))
             .await,
     )
 }

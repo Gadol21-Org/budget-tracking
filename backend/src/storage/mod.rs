@@ -44,7 +44,7 @@ pub trait Storage: Send + Sync {
     ) -> anyhow::Result<bool>;
     /// Ids of the transactions made from an email (accepted by hand or added automatically).
     async fn email_transaction_ids(&self) -> anyhow::Result<Vec<i64>>;
-    /// Close `auto` rows whose mail was received before this day (YYYY-MM-DD), dropping their
+    /// Close `auto` and `added` rows whose mail was received before this day (YYYY-MM-DD), dropping their
     /// stored email. Returns how many.
     async fn expire_auto_emails(&self, before: &str) -> anyhow::Result<usize>;
     /// The stored HTML of an email, for showing it. None once the suggestion is decided.

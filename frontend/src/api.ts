@@ -164,7 +164,7 @@ export interface LogUser {
 export interface EmailSuggestion {
   id: number;
   message_id: string;
-  status: "pending" | "auto" | "accepted" | "rejected" | "ignored" | "queued" | "error";
+  status: "pending" | "auto" | "added" | "accepted" | "rejected" | "ignored" | "queued" | "error";
   received: string;
   sender: string;
   subject: string;

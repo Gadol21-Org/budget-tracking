@@ -236,7 +236,7 @@ impl Service {
         let _ = self.db.set_setting(LAST_ERROR_KEY, e.unwrap_or("")).await;
     }
 
-    /// Close the automatically added mail that is older than a month.
+    /// Close the mail that became a transaction (added at once or approved) once it is a month old.
     async fn expire_auto(&self) {
         let before = (Utc::now() - chrono::Duration::days(AUTO_KEEP_DAYS))
             .format("%Y-%m-%d")

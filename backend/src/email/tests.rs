@@ -833,3 +833,27 @@ async fn an_auto_row_stays_a_month_then_closes_and_keeps_its_transaction() {
     assert_eq!(done.transaction_id, a.transaction_id);
     assert!(!done.has_html && done.transaction_id.is_some());
 }
+
+#[tokio::test]
+async fn an_approved_suggestion_stays_listed_with_its_email_until_it_expires() {
+    let r = rig().await;
+    r.svc
+        .ingest(&eml("p1", "Receipt", "Total 12.50 receipt"))
+        .await
+        .unwrap();
+    let p = rows(&r, "pending").await.remove(0);
+    let id = r.db.list_categories().await.unwrap()[0].id;
+    let tx = crate::api::add_for_email(&r.db, "2026-03-01", -1250, "ILS", id + 1, "x")
+        .await
+        .unwrap_or_else(|_| panic!("add"));
+    assert!(r
+        .db
+        .resolve_email_suggestion(p.id, "added", Some(tx))
+        .await
+        .unwrap());
+    assert_eq!(rows(&r, "added").await.len(), 1);
+    assert_eq!(r.db.email_transaction_ids().await.unwrap(), vec![tx]);
+    r.svc.status().await.unwrap();
+    assert!(rows(&r, "added").await.is_empty());
+    assert_eq!(rows(&r, "accepted").await[0].transaction_id, Some(tx));
+}

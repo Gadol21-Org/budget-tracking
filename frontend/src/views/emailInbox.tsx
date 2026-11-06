@@ -34,7 +34,7 @@ const CONFIDENCE: Record<string, string> = { high: "ביטחון גבוה", medi
 
 /** Transactions found in emails, waiting for a person to check and add them (or throw them away). */
 export function emailInboxView(): ReactElement {
-  const auto = state.suggestions.filter((s) => s.status === "auto");
+  const auto = state.suggestions.filter((s) => s.status === "auto" || s.status === "added");
   const pending = state.suggestions.filter((s) => s.status === "pending");
   const queued = state.suggestions.filter((s) => s.status === "queued");
   const failed = state.suggestions.filter((s) => s.status === "error");
@@ -174,7 +174,7 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
   );
 }
 
-/** A transaction that was added without asking. It stays listed for a month; it can be edited like any other. */
+/** A transaction made from an email (added at once, or approved). It stays listed for a month; it can be edited like any other. */
 function AutoCard({ s }: { s: EmailSuggestion }) {
   const tx = state.txs.find((t) => t.id === s.transaction_id);
   const path = categoryPath(tx ? tx.category_id : s.category_id);
@@ -192,7 +192,7 @@ function AutoCard({ s }: { s: EmailSuggestion }) {
         </div>
         <Amount s={s} />
       </div>
-      <div className="muted small">נוספה אוטומטית לתנועות · הודעה מ-{fmtDate(s.received)}</div>
+      <div className="muted small">נוספה מדוא״ל לתנועות · {s.status === "auto" ? "בלי בדיקה" : "אושרה על ידכם"} · הודעה מ-{fmtDate(s.received)}</div>
       <div className="actions" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
         <ViewButton s={s} />
         {tx && (

@@ -71,9 +71,9 @@ self.addEventListener("push", (e) => {
         const added = items.filter((l) => l.auto);
         const review = items.filter((l) => !l.auto);
         const parts = [];
-        if (added.length) parts.push(`נוספה אוטומטית:\n${added.map(line).join("\n")}`);
+        if (added.length) parts.push(`נוספה מדוא״ל:\n${added.map(line).join("\n")}`);
         if (review.length) parts.push(`ממתינה לבדיקה:\n${review.map(line).join("\n")}`);
-        const title = added.length && !review.length ? "תנועה נוספה אוטומטית" : review.length && !added.length ? "הצעה חדשה מדוא״ל" : "תנועות חדשות מדוא״ל";
+        const title = added.length && !review.length ? "תנועה נוספה מדוא״ל" : review.length && !added.length ? "הצעה חדשה מדוא״ל" : "תנועות חדשות מדוא״ל";
         return self.registration.showNotification(title, { body: parts.join("\n") || "הצעה חדשה ממתינה לבדיקה", tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
       }),
   );
