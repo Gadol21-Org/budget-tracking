@@ -10,6 +10,7 @@ import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
 import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
+import { trackScreen } from "./analytics";
 import { peopleView } from "./views/people";
 import { categoriesView } from "./views/categories";
 import { settingsView } from "./views/settings";
@@ -157,6 +158,7 @@ export function render() {
   const entering = renderedView !== state.view;
   if (entering) window.scrollTo(0, 0);
   renderedView = state.view;
+  trackScreen(state.view);
   // Transactions open focused on the latest day that actually happened; upcoming days stay reachable above.
   if (entering && state.view === "list") document.getElementById("now-anchor")?.scrollIntoView({ block: "start" });
 }

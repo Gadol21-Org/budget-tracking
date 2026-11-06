@@ -39,6 +39,8 @@ jobs:
         with:
           context: .
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          # Production image only: staging (staging.yml) does not set this, so it has no analytics.
+          build-args: VITE_ENABLE_ANALYTICS=true
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
