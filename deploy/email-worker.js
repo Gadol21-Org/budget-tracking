@@ -5,10 +5,26 @@
 //   INBOUND_URL      https://<your-host>/api/email/inbound
 //   INBOUND_SECRET   (secret) the same value as EMAIL_INBOUND_SECRET on the server
 //   FALLBACK_ADDRESS (optional) a verified destination address; mail is forwarded there when the app is unreachable
+//   ALLOWED_FROM     (optional) comma-separated sender addresses that are accepted; anything else is dropped.
+//                    Matches the envelope sender or the From header. Empty or unset: no filtering.
 const MAX_BYTES = 1_500_000;
+
+// The address inside "Name <address>" (or a bare address), lower case.
+const addressOf = (v) => {
+  const m = /<([^>]+)>/.exec(v || "");
+  return (m ? m[1] : v || "").trim().toLowerCase();
+};
+
+const allowed = (message, env) => {
+  const list = (env.ALLOWED_FROM || "").split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+  if (!list.length) return true;
+  return [message.from, message.headers.get("from")].some((v) => list.includes(addressOf(v)));
+};
 
 export default {
   async email(message, env) {
+    // Not from a listed sender: drop it without a bounce (a bounce would confirm the address exists).
+    if (!allowed(message, env)) return;
     if (message.rawSize > MAX_BYTES) {
       message.setReject("Message too large");
       return;
