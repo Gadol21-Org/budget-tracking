@@ -335,9 +335,9 @@ function BusinessDashboard({ ctx }: { ctx: BizCtx }) {
   return (
     <div className="bizdash">
       <div className="card filterbar">
-        <BackButton label="→ סיכום" title="חזרה לסיכום" onClick={ctx.back} />
+        <BackButton label="→ העסק" title="חזרה לעמוד העסק" onClick={ctx.back} />
         <div className="grow">
-          <div className="name">העסק</div>
+          <div className="name">סקירה</div>
         </div>
         <button className="btn" title="בחירת עסק" onClick={openScopes}>{`${scopeName(ctx, ctx.view.scope)} ▾`}</button>
       </div>
@@ -362,6 +362,8 @@ export interface ManageCtx {
   txs: Transaction[];
   reload: () => Promise<void>;
   back: () => void;
+  /** The back button's label (it defaults to the settings, where this screen used to live). */
+  backLabel?: string;
 }
 
 const checkRow = { flexDirection: "row", alignItems: "center", gap: 8 } as const;
@@ -410,7 +412,7 @@ function Businesses({ ctx }: { ctx: ManageCtx }) {
   return (
     <div>
       <div className="actions" style={{ justifyContent: "flex-start" }}>
-        <BackButton onClick={ctx.back} />
+        <BackButton label={ctx.backLabel} title="חזרה" onClick={ctx.back} />
       </div>
       <h1>עסקים</h1>
       <div className="card">

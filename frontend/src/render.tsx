@@ -5,6 +5,7 @@ import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
 import { businessDashboard, businessesView } from "./views/business";
+import { businessHub } from "./views/businessHub";
 import { type View, root, state } from "./state";
 import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
 import { monthView } from "./views/month";
@@ -21,6 +22,7 @@ import { openTransactionDialog } from "./dialogs/transaction";
 const ICONS: Record<string, string[]> = {
   month: ["M21.21 15.89A10 10 0 1 1 8 2.83", "M22 12A10 10 0 0 0 12 2v10z"],
   list: ["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"],
+  business: ["M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", "M20 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"],
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
@@ -39,10 +41,12 @@ const TABS: [View, string][] = [
   ["month", "סיכום"],
   ["list", "תנועות"],
   ["insights", "תובנות"],
+  ["business", "העסק"],
   ["settings", "הגדרות"],
 ];
 
-const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people"];
+const BUSINESS_SCREENS: View[] = ["business", "bizdash", "businesses"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people"];
 
 function openTab(view: View) {
   // Tapping the open tab goes back up from a category; opening another one starts at its top level.
@@ -58,7 +62,7 @@ function Nav() {
   return (
     <nav className="nav">
       {TABS.map(([view, label]) => {
-        const current = state.view === view || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "month" && state.view === "business");
+        const current = (view !== "business" && state.view === view) || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "business" && BUSINESS_SCREENS.includes(state.view));
         return (
           <button key={view} aria-current={current ? "page" : undefined} onClick={() => openTab(view)}>
             <TabIcon view={view} />
@@ -98,7 +102,7 @@ function businessScreen() {
     period: state.period,
     view: state.bizView,
     setView: (patch) => ((state.bizView = { ...state.bizView, ...patch }), render()),
-    back: () => goBack("month"),
+    back: () => goBack("business"),
   });
 }
 
@@ -109,7 +113,8 @@ const screens: Record<View, () => ReactElement> = {
   log: logView,
   categories: categoriesView,
   settings: settingsView,
-  business: businessScreen,
+  business: () => businessHub({ back: () => goBack("month") }),
+  bizdash: businessScreen,
   businesses: () => businessesView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,

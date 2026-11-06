@@ -429,3 +429,10 @@ dialog { overscroll-behavior: contain; }
 /* While one slice is picked, the other legend lines fade with their slices. */
 .donutlegend .lrow.dim { opacity: .45; }
 .filterbar .crumbs { margin-bottom: 0; }
+
+.bizhub .bizmenu-title { font-size: 1rem; margin: 16px 0 6px; color: var(--muted); }
+.bizmenu { display: grid; gap: 8px; }
+.bizaction { display: flex; align-items: center; gap: 12px; margin: 0; }
+.bizaction .ico { font-size: 1.5rem; line-height: 1; }
+.bizaction .bizname { color: var(--biz); font-weight: 700; }
+@media (min-width: 700px) { .bizmenu { grid-template-columns: 1fr 1fr; } }
