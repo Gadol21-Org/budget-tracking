@@ -18,6 +18,7 @@ vi.mock("../api", async (orig) => ({
     importPaamonim: vi.fn(async () => ({ transactions_added: 12, transactions_skipped: 30, categories_added: 1 })),
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
+    sumit: vi.fn(async () => ({ configured: false, last_poll_at: null, last_error: null, next_poll_at: null, calls_this_month: 0, monthly_limit: 0, products: [], notices: [], held: [], push_public_key: null })),
   },
 }));
 

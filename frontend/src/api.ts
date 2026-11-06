@@ -181,7 +181,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : res.json();
 }
 
+export interface SumitNotice {
+  id: number;
+  at: string;
+  title: string;
+  body: string;
+  tx_ids: number[];
+  read: boolean;
+}
+
+export interface SumitOverview {
+  configured: boolean;
+  last_poll_at: string | null;
+  last_error: string | null;
+  next_poll_at: string | null;
+  calls_this_month: number;
+  monthly_limit: number;
+  products: { name: string; business_id: number | null; category_id: number | null }[];
+  notices: SumitNotice[];
+  /** Receipts waiting for an income sub-category (default or per product) before they can be imported. */
+  held: { id: number; customer: string; total: number; products: string[] }[];
+  push_public_key: string | null;
+}
+
 export const api = {
+  sumit: () => request<SumitOverview>("/api/sumit"),
+  /** Look for new receipts now. Costs Sumit API calls (the server refuses within 10 minutes of the last check). */
+  sumitPoll: () => request<{ baseline: boolean; new_receipts: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
+  sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
+  sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
+  pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
+  pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>
     request<LogEntry[]>(`/api/log?limit=${limit}${beforeId != null ? `&before_id=${beforeId}` : ""}`),

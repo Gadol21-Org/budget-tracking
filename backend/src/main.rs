@@ -7,9 +7,11 @@ mod money;
 mod mysql;
 mod oplog;
 mod paamonim;
+mod push;
 mod recurring;
 mod sheets;
 mod storage;
+mod sumit;
 #[cfg(test)]
 mod testdb;
 
@@ -140,6 +142,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         });
+    }
+
+    // New receipts from Sumit, a few times a day, only when SUMIT_API_KEY is set.
+    match sumit::Config::from_env() {
+        Ok(Some(cfg)) => {
+            tokio::spawn(sumit::run_scheduler(db.clone(), cfg));
+        }
+        Ok(None) => {}
+        Err(e) => tracing::error!("sumit polling is off: {e:#}"),
     }
 
     // Keep the last year of the change log: prune now and then daily.

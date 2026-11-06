@@ -3,6 +3,7 @@ mod categories;
 mod error;
 mod mirroring;
 mod repeating;
+mod sumit;
 mod transactions;
 mod users;
 
@@ -154,6 +155,18 @@ pub(crate) fn router(db: Db) -> Router {
             "/api/categories/:id/business-required",
             axum::routing::put(businesses::require_category_business),
         )
+        .route("/api/sumit", get(sumit::overview))
+        .route(
+            "/api/sumit/products",
+            axum::routing::put(sumit::set_product),
+        )
+        .route(
+            "/api/sumit/notices/read",
+            axum::routing::post(sumit::mark_read),
+        )
+        .route("/api/sumit/poll", axum::routing::post(sumit::poll_now))
+        .route("/api/push", axum::routing::post(sumit::subscribe))
+        .route("/api/push/check", axum::routing::post(sumit::push_check))
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(

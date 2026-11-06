@@ -5,6 +5,7 @@ import { go } from "../nav";
 import { load } from "../sync";
 import { openLog } from "./log";
 import { openPeople } from "./people";
+import { SumitCard } from "./sumit";
 
 export function settingsView(): ReactElement {
   return <Settings />;
@@ -57,6 +58,7 @@ function Settings() {
       <LinkCard title="קטגוריות" text="הוספה ומחיקה של קטגוריות ותתי-קטגוריות." button="עריכת קטגוריות" onClick={() => go("categories")} />
       <LinkCard title="עסקים" text="עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." button="ניהול עסקים" onClick={() => go("businesses")} />
       <LinkCard title="מטבעות" text="בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." button="ניהול מטבעות" onClick={() => go("currencies")} />
+      <SumitCard />
       <LinkCard
         title="היסטוריית שינויים"
         text="כל הוספה, עריכה ומחיקה של תנועות, קטגוריות והוצאות חוזרות, עם הערכים לפני ואחרי. נשמרת שנה אחת."
