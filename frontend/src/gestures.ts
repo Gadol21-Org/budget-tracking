@@ -36,7 +36,7 @@ export function glideTo(dist: number) {
 document.addEventListener(
   "touchstart",
   (e) => {
-    pullStart = window.scrollY <= 0 && e.touches.length === 1 && !document.querySelector("dialog[open]") && !refreshing ? e.touches[0].clientY : undefined;
+    pullStart = window.scrollY <= 0 && e.touches.length === 1 && !(e.target as Element | null)?.closest?.(".draghandle") && !document.querySelector("dialog[open]") && !refreshing ? e.touches[0].clientY : undefined;
     pullDist = 0;
     armed = false;
     root.classList.remove("gliding");
