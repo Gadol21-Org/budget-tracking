@@ -49,7 +49,7 @@ export const productName = (d: ProductsData, id: number | undefined | null) => d
 
 // ---- Figures -------------------------------------------------------------------------------------
 
-export type BusinessTab = "overview" | "trends" | "cats";
+export type BusinessTab = "overview" | "trends" | "rhythm";
 export interface BusinessView {
   tab: BusinessTab;
   /** "all" = the whole business, or one product. */
