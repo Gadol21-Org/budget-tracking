@@ -1,7 +1,8 @@
 import { formatShekels, formatShekelsWhole, shortMonth } from "./format";
 import { api, type Business, type BusinessData, type Category, type Transaction } from "./api";
 import { clickable, el, type Child } from "./ui";
-import { contains, shift, title as periodTitle, type Period } from "./period";
+import { lineChart, svgBox } from "./insights";
+import { bounds, contains, shift, title as periodTitle, type Period } from "./period";
 
 /**
  * Businesses are a lens over the household's own transactions: nothing is moved or removed from
@@ -51,7 +52,7 @@ export const bizName = (d: BizData, id: number | undefined | null) => d.business
 
 // ---- Dashboards ----------------------------------------------------------------------------------
 
-export type BizTab = "overview" | "trends" | "cats" | "compare";
+export type BizTab = "overview" | "trends" | "rhythm" | "compare";
 export interface BizView {
   tab: BizTab;
   /** "all" = the whole business, or one business. */
@@ -73,7 +74,7 @@ export interface BizCtx {
 const TABS: [BizTab, string][] = [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
-  ["cats", "קטגוריות"],
+  ["rhythm", "קצב חודשי"],
   ["compare", "השוואה"],
 ];
 
@@ -229,41 +230,115 @@ function trends(ctx: BizCtx): Child[] {
   ];
 }
 
-function categories(ctx: BizCtx): Child[] {
-  const { scope } = ctx.view;
-  const mine = scoped(ctx, scope).filter((t) => contains(ctx.period, t.date));
-  const all = ctx.txs.filter((t) => contains(ctx.period, t.date));
-  const top = (t: Transaction) => {
-    const c = ctx.cats.find((x) => x.id === t.category_id);
-    return c?.parent_id ?? t.category_id;
-  };
-  const name = (id: number | null) => ctx.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
-  const side = (sign: 1 | -1, title: string, empty: string): Child[] => {
-    const of = (ts: Transaction[]) => {
-      const m = new Map<number | null, number>();
-      for (const t of ts.filter((t) => t.amount_agorot * sign > 0)) m.set(top(t), (m.get(top(t)) ?? 0) + t.amount_agorot * sign);
-      return m;
-    };
-    const m = of(mine);
-    const whole = of(all);
-    const rows = [...m.entries()].sort((a, b) => b[1] - a[1]);
-    const total = rows.reduce((s, [, v]) => s + v, 0);
-    const max = rows[0]?.[1] ?? 1;
-    return [
-      el("h2", { textContent: `${title} לפי קטגוריה · ${formatShekelsWhole(total)}` }),
-      rows.length
-        ? el(
-            "div",
-            { className: "card rows" },
-            ...rows.map(([id, v]) => {
-              const part = whole.get(id) ?? 0;
-              return el("div", { className: "row" }, el("div", { className: "grow" }, el("div", { className: "name", textContent: name(id) }), el("div", { className: "bar" }, el("span", { style: `width:${Math.max(3, (v / max) * 100)}%` })), part > v ? el("div", { className: "muted small", textContent: `${formatShekelsWhole(v)} מתוך ${formatShekelsWhole(part)} בקטגוריה` }) : null), money(v));
-            }),
-          )
-        : el("div", { className: "empty", textContent: empty }),
+const WEEKDAYS = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
+const dayOfWeek = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+const daysInMonth = (month: string) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/** Net result (income minus expenses) per day of a month, in agorot; index 0 = the 1st. Can be negative. */
+function dayNet(ts: Transaction[], month: string): number[] {
+  const out = Array<number>(daysInMonth(month)).fill(0);
+  for (const t of ts) if (t.date.startsWith(month)) out[Number(t.date.slice(8)) - 1] += t.amount_agorot;
+  return out;
+}
+
+/** Signed bars (green above the line, red below) with the figure over each bar; drawn right to left like the other charts. */
+function signedBars(labels: string[], values: number[], peak: number): string {
+  const W = 360, padX = 6, H = 100, top = 16, bottom = 18;
+  const slot = (W - 2 * padX) / labels.length;
+  const max = Math.max(1, ...values.map(Math.abs));
+  const half = H / 2;
+  const zero = top + half;
+  let out = `<svg viewBox="0 0 ${W} ${H + top + bottom}" width="100%" role="img" style="direction:ltr"><line x1="${padX}" x2="${W - padX}" y1="${zero}" y2="${zero}" stroke="var(--line)"/>`;
+  values.forEach((v, i) => {
+    const x0 = padX + (labels.length - 1 - i) * slot;
+    const h = (Math.abs(v) / max) * (half - 10);
+    const y = v >= 0 ? zero - h : zero;
+    const color = v < 0 ? "var(--expense)" : "var(--income)";
+    out += `<rect x="${x0 + slot * 0.14}" y="${y}" width="${slot * 0.72}" height="${h}" rx="3" fill="${color}" opacity="${i === peak ? 1 : 0.55}"><title>${labels[i]}: ${formatShekelsWhole(v)}</title></rect>`;
+    out += `<text x="${x0 + slot / 2}" y="${v >= 0 ? y - 3 : y + h + 9}" font-size="8" font-weight="700" text-anchor="middle" fill="${color}">${Math.round(v / 100).toLocaleString("he-IL")}</text>`;
+    out += `<text x="${x0 + slot / 2}" y="${H + top + 13}" font-size="9" text-anchor="middle" fill="var(--muted)">${labels[i]}</text>`;
+  });
+  return out + "</svg>";
+}
+
+/** The business's monthly rhythm: daily result as a calendar, the month so far against the last one, and the average per weekday. */
+function rhythm(ctx: BizCtx): Child[] {
+  const p = ctx.period;
+  const ts = scoped(ctx, ctx.view.scope);
+  const today = todayIso();
+  const out: Child[] = [];
+
+  if (p.kind === "month") {
+    const days = dayNet(ts, p.month);
+    const elapsed = p.month === today.slice(0, 7) ? Number(today.slice(8)) : p.month > today.slice(0, 7) ? 0 : days.length;
+    const shown = days.slice(0, elapsed);
+    const abs = shown.map(Math.abs).filter((v) => v > 0).sort((a, b) => a - b);
+    const scale = abs.length ? abs[Math.min(abs.length - 1, Math.floor(abs.length * 0.9))] : 1;
+    const lead = dayOfWeek(`${p.month}-01`); // the grid starts on Sunday
+    const cells: Child[] = [
+      ...WEEKDAYS.map((d) => el("div", { className: "hmhead", textContent: d })),
+      ...Array.from({ length: lead }, () => el("div", { className: "hmgap" })),
+      ...days.map((v, i) => {
+        const future = i >= elapsed;
+        const c = el("div", { className: `hmcell${future ? " future" : ""}`, title: `${i + 1}: ${formatShekelsWhole(v)}`, textContent: String(i + 1) });
+        if (!future && v !== 0) {
+          const t = Math.min(1, Math.abs(v) / scale);
+          c.style.background = `color-mix(in srgb, var(${v < 0 ? "--expense" : "--income"}) ${Math.round(12 + t * 78)}%, transparent)`;
+          if (t > 0.55) c.style.color = "#fff";
+        }
+        return c;
+      }),
     ];
-  };
-  return [...side(-1, "הוצאות", "אין הוצאות בעסק בתקופה זו"), ...side(1, "הכנסות", "אין הכנסות בעסק בתקופה זו")];
+    const best = shown.reduce((m, v, i) => (v > shown[m] ? i : m), 0);
+    const worst = shown.reduce((m, v, i) => (v < shown[m] ? i : m), 0);
+    out.push(
+      el("h2", { textContent: "תוצאה יומית" }),
+      el(
+        "div",
+        { className: "card" },
+        el("div", { className: "hm" }, ...cells),
+        el("div", { className: "muted small", style: "margin-top:8px", textContent: "ירוק = יום ברווח, אדום = יום בהפסד. כהה יותר = סכום גדול יותר." }),
+        shown[best] > 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "💰" }), el("div", {}, "היום הרווחי ביותר: ה-", el("b", { textContent: String(best + 1) }), " (", signed(shown[best]), ")")),
+        shown[worst] < 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "📉" }), el("div", {}, "היום החלש ביותר: ה-", el("b", { textContent: String(worst + 1) }), " (", signed(shown[worst]), ")")),
+      ),
+    );
+
+    // Cumulative result through the month, against the same days of the previous month.
+    const cum = (vs: number[]) => vs.reduce<number[]>((a, v, i) => (a.push((a[i - 1] ?? 0) + v), a), []);
+    const prev = shift(p, -1);
+    const ghost = prev && prev.kind === "month" ? (() => { const c = cum(dayNet(ts, prev.month)); return Array.from({ length: days.length }, (_, i) => c[Math.min(i, c.length - 1)] ?? 0); })() : undefined;
+    const cur = cum(shown);
+    out.push(
+      el("h2", { textContent: "רווח מצטבר במהלך החודש" }),
+      el(
+        "div",
+        { className: "card" },
+        cur.length ? svgBox(lineChart(cur, days.map((_, i) => String(i + 1)), "var(--biz)", ghost, 5)) : el("div", { className: "empty", textContent: "החודש עוד לא התחיל" }),
+        ghost ? el("div", { className: "legend" }, el("span", {}, el("i", { style: "background:var(--biz)" }), "החודש"), el("span", {}, el("i", { style: "background:var(--muted)" }), "חודש קודם")) : null,
+        ghost && cur.length > 0 ? delta(`לעומת היום ה-${cur.length} בחודש הקודם`, cur[cur.length - 1] - ghost[cur.length - 1]) : null,
+      ),
+    );
+  } else out.push(el("div", { className: "muted small pad", textContent: "המפה היומית זמינה כשבוחרים חודש בודד. להלן ממוצע לפי יום בשבוע לתקופה שנבחרה." }));
+
+  // Average result per weekday over the days of the period that have passed.
+  const { from, to } = bounds(p);
+  const end = to < today ? to : today;
+  const sums = Array<number>(7).fill(0), counts = Array<number>(7).fill(0);
+  for (let d = from; d <= end; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) counts[dayOfWeek(d)]++;
+  for (const t of ts) if (t.date >= from && t.date <= end) sums[dayOfWeek(t.date)] += t.amount_agorot;
+  const avg = sums.map((s, i) => (counts[i] ? s / counts[i] : 0));
+  const top = avg.reduce((m, v, i) => (v > avg[m] ? i : m), 0);
+  out.push(
+    el("h2", { textContent: "ממוצע לפי יום בשבוע" }),
+    el(
+      "div",
+      { className: "card" },
+      svgBox(signedBars(WEEKDAYS, avg, top)),
+      avg[top] > 0 && el("div", { className: "insight", style: "margin-top:8px" }, el("span", { className: "ico", textContent: "📅" }), el("div", {}, "יום ", el("b", { textContent: WEEKDAYS[top] }), " הוא היום הרווחי ביותר: ", signed(Math.round(avg[top])), " בממוצע.")),
+    ),
+  );
+  return out;
 }
 
 function compare(ctx: BizCtx): Child[] {
@@ -314,7 +389,7 @@ export function businessDashboard(ctx: BizCtx): HTMLElement {
       return b;
     }),
   );
-  const body = { overview, trends, cats: categories, compare }[ctx.view.tab](ctx);
+  const body = { overview, trends, rhythm, compare }[ctx.view.tab](ctx);
   return el("div", { className: "bizdash" }, el("div", { className: "card filterbar" }, back, el("div", { className: "grow" }, el("div", { className: "name", textContent: "העסק" })), scopeBtn), tabs, ctx.monthBar(), ...body);
 }
 

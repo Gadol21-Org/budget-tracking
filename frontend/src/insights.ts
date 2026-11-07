@@ -163,7 +163,7 @@ function kpi(label: string, value: HTMLElement, sub?: Child): HTMLElement {
   return el("div", { className: "kpi" }, el("div", { className: "l", textContent: label }), el("div", { className: "v" }, value), el("div", {}, sub || el("span", { innerHTML: "&nbsp;" })));
 }
 
-function svgBox(html: string, onTap?: (i: number) => void): HTMLElement {
+export function svgBox(html: string, onTap?: (i: number) => void): HTMLElement {
   const box = el("div", { className: "chart", innerHTML: html });
   if (onTap)
     box.addEventListener("click", (e) => {
@@ -256,7 +256,7 @@ function peekChart(o: BarOpts): HTMLElement {
   return box;
 }
 
-function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
+export function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
   const W = 360, H = 90, padX = 10, top = 10;
   const all = [...values, ...(ghost ?? [])];
   const max = Math.max(0, ...all), min = Math.min(0, ...all), span = max - min || 1;
