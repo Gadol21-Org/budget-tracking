@@ -36,7 +36,7 @@ afterEach(() => {
 
 describe("a data refresh on a screen", () => {
   it("keeps the result of a Settings action (it used to vanish when the data reloaded)", async () => {
-    state.view = "settings";
+    state.view = "dataTransfer";
     app.render();
     fireEvent.click(await screen.findByRole("button", { name: "ייבוא מפעמונים" }));
     await waitFor(() => expect(screen.getByText(/יובאו 12 תנועות חדשות/)).toBeTruthy());

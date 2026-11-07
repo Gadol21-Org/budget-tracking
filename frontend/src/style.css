@@ -441,3 +441,14 @@ dialog { overscroll-behavior: contain; }
 .biztip { position: absolute; top: 0; transform: translateX(50%); z-index: 2; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 6px 10px; font-size: .8rem; white-space: nowrap; }
 .cumread { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: .85rem; margin-top: 6px; }
 .cumread i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; }
+
+/* Settings: iOS-style grouped lists */
+.sgroup { background: var(--surface); border-radius: 12px; margin: 0 0 22px; overflow: hidden; }
+.srow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 14px; border: 0; background: none; color: var(--text); font: inherit; text-align: start; cursor: pointer; position: relative; }
+.srow + .srow::before { content: ""; position: absolute; top: 0; inset-inline: 56px 0; border-top: .5px solid var(--line); }
+.sicon { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-size: 17px; flex: none; box-shadow: inset 0 0 0 .5px #0002; }
+.slabel { flex: 1 1 auto; }
+.sval { color: var(--muted); font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: ltr; }
+.schev { color: var(--muted); opacity: .6; font-size: 1.2rem; }
+.sbtn { color: #007aff; }
+.sfoot { color: var(--muted); font-size: .8rem; margin: -14px 14px 20px; }
