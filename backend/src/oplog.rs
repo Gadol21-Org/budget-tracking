@@ -42,6 +42,8 @@ pub mod kind {
     /// A due occurrence turned into a transaction.
     pub const RECURRING_SETTLE: &str = "recurring_settle";
     pub const IMPORT: &str = "import";
+    /// One paid AI call that read an email (tokens and cost recorded).
+    pub const AI_EMAIL: &str = "ai_email";
 }
 
 pub struct NewLogEntry {
@@ -243,6 +245,47 @@ impl Logged {
 impl Storage for Logged {
     async fn list_payment_methods(&self) -> anyhow::Result<Vec<PaymentMethod>> {
         self.0.list_payment_methods().await
+    }
+    // Email suggestions are a review queue, not data; the transaction made from one is logged.
+    async fn add_email_suggestions(
+        &self,
+        rows: &[crate::storage::NewEmailSuggestion],
+    ) -> anyhow::Result<usize> {
+        self.0.add_email_suggestions(rows).await
+    }
+    async fn email_message_seen(&self, message_id: &str) -> anyhow::Result<bool> {
+        self.0.email_message_seen(message_id).await
+    }
+    async fn list_email_suggestions(
+        &self,
+        status: Option<&str>,
+    ) -> anyhow::Result<Vec<crate::storage::EmailSuggestion>> {
+        self.0.list_email_suggestions(status).await
+    }
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> anyhow::Result<bool> {
+        self.0
+            .resolve_email_suggestion(id, status, transaction_id)
+            .await
+    }
+    async fn email_transaction_ids(&self) -> anyhow::Result<Vec<i64>> {
+        self.0.email_transaction_ids().await
+    }
+    async fn expire_auto_emails(&self, before: &str) -> anyhow::Result<usize> {
+        self.0.expire_auto_emails(before).await
+    }
+    async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>> {
+        self.0.email_html(id).await
+    }
+    async fn email_raw(&self, id: i64) -> anyhow::Result<Option<Vec<u8>>> {
+        self.0.email_raw(id).await
+    }
+    async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool> {
+        self.0.delete_email_suggestion(id).await
     }
     // Businesses are a local view over the data, not logged.
     async fn list_businesses(&self) -> anyhow::Result<Vec<crate::storage::Business>> {
@@ -617,6 +660,14 @@ impl Storage for Logged {
     }
     async fn prune_log(&self, before: &str) -> anyhow::Result<usize> {
         self.0.prune_log(before).await
+    }
+    async fn list_log_kind(
+        &self,
+        kind: &str,
+        from: &str,
+        before: &str,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        self.0.list_log_kind(kind, from, before).await
     }
     async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         self.0.log_users().await

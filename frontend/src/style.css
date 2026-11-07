@@ -426,6 +426,31 @@ dialog { overscroll-behavior: contain; }
 .donutlegend .lrow.dim { opacity: .45; }
 .filterbar .crumbs { margin-bottom: 0; }
 
+/* Suggestions found in emails */
+.suggestion { margin-top: 10px; margin-bottom: 4px; display: flex; flex-direction: column; gap: 8px; }
+.suggestion .head { display: flex; align-items: flex-start; gap: 12px; }
+.suggestion.failed { border-inline-start: 4px solid var(--expense); }
+a.btn { text-decoration: none; display: inline-block; text-align: center; }
+.email-banner { border-inline-start: 4px solid var(--brand); }
+.email-banner .head { display: flex; align-items: center; gap: 12px; }
+.email-view { display: flex; flex-direction: column; height: 100%; }
+.email-view .head { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border, #ddd); }
+.email-view iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.aicost-total { text-align: center; }
+.aicost-sum { font-size: 1.8rem; font-weight: 700; }
+.aicost-row { align-items: center; gap: 10px; }
+
+/* A button waiting for its action: the label keeps the width, a ring takes its place. */
+.btn.busy { position: relative; }
+.btn.busy > .lbl { visibility: hidden; }
+.btn.busy > .sync-ring { position: absolute; inset: 0; margin: auto; }
+
+/* Badge on a transaction that came from an email: fuchsia, apart from the expense red, income green, brand blue and business indigo. */
+:root { --mail: #a21caf; --mail-soft: rgba(162, 28, 175, .12); }
+@media (prefers-color-scheme: dark) { :root { --mail: #f0abfc; --mail-soft: rgba(240, 171, 252, .16); } }
+.mailchip { display: inline-flex; align-items: center; background: var(--mail-soft); color: var(--mail); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
+.suggestion .actions .btn { white-space: nowrap; }
+
 .bizhub .bizmenu-title { font-size: 1rem; margin: 16px 0 6px; color: var(--muted); }
 .bizmenu { display: grid; gap: 8px; }
 .bizaction { display: flex; align-items: center; gap: 12px; margin: 0; }

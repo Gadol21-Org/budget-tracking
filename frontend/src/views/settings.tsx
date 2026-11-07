@@ -5,7 +5,9 @@ import { go, goBack } from "../nav";
 import { enabledCurrencies } from "../currencies";
 import { state } from "../state";
 import { load } from "../sync";
+import { EmailCard } from "./EmailCard";
 import { openLog } from "./log";
+import { openAiCost } from "./aiCost";
 import { openPeople } from "./people";
 
 export function settingsView(): ReactElement {
@@ -36,6 +38,7 @@ function Settings() {
   return (
     <div>
       <h1>הגדרות</h1>
+      <EmailCard status={state.email} />
       <div className="sgroup">
         <Row icon="▦" color={["#ffb340", "#ff8a00"]} label="קטגוריות" value={String(state.cats.length)} onClick={() => go("categories")} />
         <Row icon="₪" color={["#5fe27f", "#22b84a"]} label="מטבעות" value={enabledCurrencies().join(" · ")} onClick={() => go("currencies")} />
@@ -45,6 +48,7 @@ function Settings() {
       </div>
       <div className="sgroup">
         <Row icon="↺" color={["#b4b4ba", "#7c7c82"]} label="היסטוריית שינויים" onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))} />
+        <Row icon="$" color={["#ffd24a", "#e0a000"]} label="עלות AI" onClick={() => void openAiCost().catch(() => alert("טעינת העלות נכשלה"))} />
         <Row icon="☺" color={["#cf7bf2", "#9b3fd0"]} label="שמות משתמשים" onClick={() => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"))} />
       </div>
     </div>

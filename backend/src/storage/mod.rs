@@ -23,6 +23,36 @@ pub trait Storage: Send + Sync {
     /// App-wide settings (key/value text), synced across devices.
     async fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()>;
+    /// Store parsed suggestions. A (message, idx) pair that exists is left as it is, so
+    /// parsing the same message again can never duplicate or undo a decision. Returns how
+    /// many rows were new.
+    async fn add_email_suggestions(&self, rows: &[NewEmailSuggestion]) -> anyhow::Result<usize>;
+    /// Has any row for this email message been stored (whatever its status)?
+    async fn email_message_seen(&self, message_id: &str) -> anyhow::Result<bool>;
+    /// Suggestions with the given status (all of them when None), newest first.
+    async fn list_email_suggestions(
+        &self,
+        status: Option<&str>,
+    ) -> anyhow::Result<Vec<EmailSuggestion>>;
+    /// Move a `pending` suggestion to `accepted` (with the transaction made from it) or
+    /// `rejected`, and drop its excerpt. False if it was not pending.
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> anyhow::Result<bool>;
+    /// Ids of the transactions made from an email (accepted by hand or added automatically).
+    async fn email_transaction_ids(&self) -> anyhow::Result<Vec<i64>>;
+    /// Close `auto` and `added` rows whose mail was received before this day (YYYY-MM-DD), dropping their
+    /// stored email. Returns how many.
+    async fn expire_auto_emails(&self, before: &str) -> anyhow::Result<usize>;
+    /// The stored HTML of an email, for showing it. None once the suggestion is decided.
+    async fn email_html(&self, id: i64) -> anyhow::Result<Option<String>>;
+    /// The raw message of a row that is waiting unread, if it was kept.
+    async fn email_raw(&self, id: i64) -> anyhow::Result<Option<Vec<u8>>>;
+    /// Remove a `queued` or `error` row (before its message is parsed again). False otherwise.
+    async fn delete_email_suggestion(&self, id: i64) -> anyhow::Result<bool>;
     async fn list_businesses(&self) -> anyhow::Result<Vec<Business>>;
     async fn insert_business(&self, name: &str, is_general: bool) -> anyhow::Result<i64>;
     async fn rename_business(&self, id: i64, name: &str) -> anyhow::Result<()>;
@@ -415,6 +445,16 @@ pub trait Storage: Send + Sync {
         &self,
         _limit: usize,
         _before_id: Option<i64>,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        Ok(Vec::new())
+    }
+    /// Entries of one kind stamped from `from` up to (not including) `before` (UTC timestamps),
+    /// newest first.
+    async fn list_log_kind(
+        &self,
+        _kind: &str,
+        _from: &str,
+        _before: &str,
     ) -> anyhow::Result<Vec<LogEntry>> {
         Ok(Vec::new())
     }

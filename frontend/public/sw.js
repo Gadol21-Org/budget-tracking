@@ -1,7 +1,7 @@
 // Network first, falling back to cache, so the app shell (including hashed assets)
 // still opens offline once it has been loaded. API calls are never cached. A server error from the
 // proxy (502/503/504, Cloudflare 52x) counts as "no server": the cached copy is used instead of the error page.
-const CACHE = "budget-shell-v7";
+const CACHE = "budget-shell-v8";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/manifest.webmanifest", "/icon-v2.svg", "/icon-192-v2.png"])));
@@ -50,6 +50,50 @@ self.addEventListener("fetch", (e) => {
         return cached;
       }
       return (await network) ?? (await cache.match("/")) ?? Response.error();
+    }),
+  );
+});
+
+// A push carries no data: ask the server what the latest mail brought and say so, one line per transaction.
+const SYMBOL = { ILS: "₪", USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
+const priceOf = (l) => {
+  const places = l.currency === "JPY" ? 0 : 2;
+  return `${SYMBOL[l.currency] ?? l.currency + " "}${(Math.abs(l.amount_minor) / 10 ** places).toFixed(places)}`;
+};
+self.addEventListener("push", (e) => {
+  e.waitUntil(
+    fetch("/api/email/status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((o) => o.latest || [])
+      .catch(() => [])
+      .then((items) => {
+        const line = (l) => `${priceOf(l)} · ${l.note} · ${l.date.split("-").reverse().join("/")}`;
+        const added = items.filter((l) => l.auto);
+        const review = items.filter((l) => !l.auto);
+        let title = "חיוב חדש מדוא״ל";
+        let body;
+        if (added.length && review.length) {
+          title = "חיובים חדשים מדוא״ל";
+          body = `נוספו:\n${added.map(line).join("\n")}\nממתינות לבדיקה:\n${review.map(line).join("\n")}`;
+        } else if (added.length) {
+          title = "תנועה נוספה מדוא״ל";
+          body = added.map(line).join("\n");
+        } else {
+          body = review.map(line).join("\n") || "חיוב חדש ממתין לבדיקה";
+        }
+        return self.registration.showNotification(title, { body, tag: "email-suggestion", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+      }),
+  );
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  // Open the email list: tell a running app to go there, or start the app on it.
+  e.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((cs) => {
+      if (!cs.length) return self.clients.openWindow("/?action=email-inbox");
+      cs[0].postMessage({ type: "open-email-inbox" });
+      return cs[0].focus();
     }),
   );
 });

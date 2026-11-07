@@ -8,6 +8,7 @@ import { shift } from "../period";
 import { goBack, showSide } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
+import { openEmailInbox } from "./emailInbox";
 import { DrillCrumbs, SummaryCategories } from "./insights";
 import { categoryName } from "../categories";
 import { inPeriod } from "../selectors";
@@ -40,6 +41,22 @@ export function openPeriodDialog() {
 }
 
 const sign = (n: number) => (n < 0 ? "expense" : "income");
+
+/** Transactions found in emails wait for a decision. */
+function EmailBanner() {
+  const n = state.email?.pending ?? 0;
+  if (!n) return null;
+  return (
+    <div className="card clickable email-banner" style={{ marginTop: 10 }} {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
+      <div className="head">
+        <div className="grow">
+          <div className="bizname">{n === 1 ? "חיוב אחד מדוא״ל ממתין לבדיקה" : `${n} חיובים מדוא״ל ממתינים לבדיקה`}</div>
+        </div>
+        <span className="muted">›</span>
+      </div>
+    </div>
+  );
+}
 
 /** The top bar of a category drill-down: back to the level above (the summary, or the category when a sub-category is open). */
 function DrillBackBar() {
@@ -98,6 +115,7 @@ function MonthScreen() {
         <Stat label="הוצאות" agorot={-expense} cls="expense" kind="expense" />
         <Stat label="יתרה" agorot={balance} cls={sign(balance)} />
       </div>
+      <EmailBanner />
       <SummaryCategories ctx={insightsCtx()} />
     </div>
   );

@@ -61,6 +61,11 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+# Optional staging-only push keys (VAPID_*), written by the workflow from staging secrets.
+# They are never the production ones.
+extra_env=()
+[ -f "$HOME/budget-staging/email.env" ] && extra_env=(--env-file "$HOME/budget-staging/email.env")
+
 docker run -d --name "$name" \
   --init \
   --restart unless-stopped \
@@ -69,6 +74,7 @@ docker run -d --name "$name" \
   --network "$network" \
   -e MYSQL_URL="mysql://root:staging@$db:3306/budget" \
   -e PAAMONIM_MIRROR=0 \
+  "${extra_env[@]}" \
   "$image"
 
 for _ in $(seq 1 30); do

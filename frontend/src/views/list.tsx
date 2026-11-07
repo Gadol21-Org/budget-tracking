@@ -56,6 +56,11 @@ export function TransactionRow({ t }: { t: Transaction }) {
             {productName(state.products, product)}
           </span>
         )}
+        {t.id > 0 && state.emailTx.has(t.id) && (
+          <span className="mailchip" title="נקלט מאימייל">
+            נקלט מאימייל
+          </span>
+        )}
         <FxLine t={t} />
         {t.note ? <div className="muted">{t.note}</div> : null}
       </div>

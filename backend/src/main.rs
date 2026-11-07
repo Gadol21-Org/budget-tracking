@@ -1,5 +1,6 @@
 mod api;
 mod assets;
+mod email;
 mod fx;
 mod import;
 mod mirror;
@@ -7,6 +8,7 @@ mod money;
 mod mysql;
 mod oplog;
 mod paamonim;
+mod push;
 mod recurring;
 mod sheets;
 mod storage;
@@ -15,7 +17,7 @@ mod testdb;
 
 use std::sync::Arc;
 
-use api::{mirroring_enabled, router, run_mirror, today, Db};
+use api::{mirroring_enabled, router_with, run_mirror, today, Db};
 
 /// `budget-backend probe <out_dir>`: log in and save raw Paamonim responses so the
 /// importer's parsing can be written against real data. Output contains personal
@@ -158,7 +160,14 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let app = router(db);
+    // Email to transactions: only when EMAIL_INBOUND_SECRET is set. Retries once a day what the
+    // AI could not read.
+    let email = email::Service::from_env(db.clone());
+    if email.cfg.is_some() {
+        tokio::spawn(email.clone().run_background());
+    }
+
+    let app = router_with(db, email);
 
     let addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     tracing::info!("listening on http://{addr}");
@@ -173,6 +182,6 @@ mod tests {
     #[tokio::test]
     async fn router_builds_without_overlapping_routes() {
         let db: Db = Arc::new(crate::testdb::fresh().await);
-        let _ = router(db);
+        let _ = api::router(db);
     }
 }

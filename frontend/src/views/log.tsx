@@ -1,4 +1,4 @@
-import { formatShekels } from "../format";
+import { aiResultText, formatShekels, formatUsd } from "../format";
 import { fmtDate } from "../ui";
 import { api, type LogEntry } from "../api";
 import { go, goBack } from "../nav";
@@ -29,6 +29,7 @@ export const LOG_KINDS: Record<string, [string, string]> = {
   recurring_skip: ["⏭", "חודש אחד בהוצאה חוזרת דולג"],
   recurring_settle: ["✅", "חיוב חוזר בוצע"],
   import: ["⬇", "ייבוא מפעמונים"],
+  ai_email: ["🤖", "קריאת מייל ב-AI"],
 };
 
 export const LOG_FIELDS: Record<string, string> = {
@@ -53,6 +54,13 @@ export const LOG_FIELDS: Record<string, string> = {
   transactions_added: "תנועות חדשות",
   transactions_skipped: "תנועות שכבר היו קיימות",
   transactions_adopted: "תנועות שקושרו",
+  sender: "שולח",
+  subject: "נושא",
+  model: "מודל",
+  input_tokens: "טוקנים נכנסים",
+  output_tokens: "טוקנים יוצאים",
+  cost_micro_usd: "עלות",
+  result: "תוצאה",
 };
 
 export const monthLabel = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
@@ -61,6 +69,8 @@ export function logValue(key: string, v: unknown): string {
   if (v == null || v === "" || (Array.isArray(v) && !v.length)) return key === "end_month" ? "ללא סיום" : "—";
   if (key === "amount_agorot") return formatShekels(v as number);
   if (key === "date") return fmtDate(String(v));
+  if (key === "cost_micro_usd") return formatUsd(v as number);
+  if (key === "result") return aiResultText(String(v));
   if (key.endsWith("_month")) return monthLabel(v as string);
   if (key === "is_income") return v ? "הכנסה" : "הוצאה";
   if (Array.isArray(v)) return v.join(", ");
@@ -72,11 +82,14 @@ function LogLines({ e }: { e: LogEntry }) {
   const line = (key: string, text: string, id: string | number = key) => (
     <div className="logline" key={id}>
       <span className="muted">{`${LOG_FIELDS[key] ?? key}: `}</span>
-      <span>{text}</span>
+      <span dir="auto">{text}</span>
     </div>
   );
+  // The AI calls show only their price (tokens and model stay recorded, not displayed).
+  const hidden = e.kind === "ai_email" ? ["model", "input_tokens", "output_tokens"] : [];
   const values = (o: Record<string, unknown> | null) =>
     Object.entries(o ?? {})
+      .filter(([k]) => !hidden.includes(k))
       .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
       .map(([k, v], i) => line(k, logValue(k, v), `${k}${i}`));
   if (e.old && e.new && ["transaction_update", "recurring_update", "recurring_override", "category_link", "category_move"].includes(e.kind)) {

@@ -146,6 +146,36 @@ pub(crate) async fn create_transaction(
     Ok(Json(id))
 }
 
+/// Add a transaction on the server's own behalf (a mail that matched a rule): the same steps as
+/// the add dialog, with the foreign-currency rate worked out for the day.
+pub(crate) async fn add_for_email(
+    db: &Db,
+    date: &str,
+    amount_minor: i64,
+    currency: &str,
+    category_id: i64,
+    note: &str,
+) -> Result<i64, ApiError> {
+    let ils = currency == "ILS";
+    let body = TxBody {
+        date: date.to_string(),
+        amount_agorot: ils.then_some(amount_minor),
+        category_id: Some(category_id),
+        payment_method_id: None,
+        note: note.to_string(),
+        currency: Some(currency.to_string()),
+        orig_minor: Some(amount_minor),
+    };
+    let (t, fx) = resolve_body(db, None, body).await?;
+    let id = db.create_transaction(&t).await.map_err(internal)?;
+    if let Some(mut f) = fx {
+        f.transaction_id = id;
+        db.set_tx_fx(id, Some(&f)).await.map_err(internal)?;
+    }
+    trigger_mirror(db);
+    Ok(id)
+}
+
 pub(crate) async fn update_transaction(
     State(db): State<Db>,
     Path(id): Path<i64>,
