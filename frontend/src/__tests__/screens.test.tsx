@@ -40,7 +40,7 @@ afterEach(() => {
 
 describe("a data refresh on a screen", () => {
   it("keeps the result of a Settings action (it used to vanish when the data reloaded)", async () => {
-    state.view = "settings";
+    state.view = "dataTransfer";
     app.render();
     fireEvent.click(await screen.findByRole("button", { name: "ייבוא מפעמונים" }));
     await waitFor(() => expect(screen.getByText(/יובאו 12 תנועות חדשות/)).toBeTruthy());
@@ -204,5 +204,16 @@ describe("the email inbox", () => {
     state.view = "emailInbox";
     app.render();
     expect(await screen.findByText(/קובץ מצורף שה-AI לא קורא \(scan\.jpg\)/)).toBeTruthy();
+  });
+});
+
+describe("the business section", () => {
+  it("opens on the overview, with a tray that has an exit item and the actions page", async () => {
+    state.view = "businessOverview";
+    app.render();
+    expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "פעולות" }));
+    expect(state.view).toBe("actions");
+    expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
   });
 });

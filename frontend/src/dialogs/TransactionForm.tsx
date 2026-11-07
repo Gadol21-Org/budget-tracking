@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, currencyInfo, currencySymbol, decimals, formatRate, parseMinor, type Currency, type Transaction } from "../api";
-import { bizName, businessRequired, categoryBusiness } from "../business";
-import { BusinessChips } from "../components/BusinessChips";
+import { productName, productRequired, categoryProduct } from "../business";
+import { ProductChips } from "../components/ProductChips";
 import { type CategoryChoice, CategoryPicker } from "../components/CategoryPicker";
 import { Combo } from "../components/Combo";
 import { DateField } from "../components/DateField";
@@ -25,17 +25,17 @@ interface Quote {
 const lastKey = (cat: number) => `biz-last-${cat}`;
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** The business last used in a category, if it still exists. */
-function rememberedBiz(cat: number | null): number | null {
+/** The product last used in a category, if it still exists. */
+function rememberedProduct(cat: number | null): number | null {
   try {
     const v = cat != null ? localStorage.getItem(lastKey(cat)) : null;
-    return v && state.biz.businesses.some((b) => String(b.id) === v) ? Number(v) : null;
+    return v && state.products.products.some((b) => String(b.id) === v) ? Number(v) : null;
   } catch {
     return null; // storage unavailable
   }
 }
 
-/** The category a choice stands for, for the business rules: the sub-category, else the category. */
+/** The category a choice stands for, for the product rules: the sub-category, else the category. */
 const choiceCategory = (c: CategoryChoice) => (c.sub ? Number(c.sub) : c.top ? Number(c.top) : null);
 
 /** What an emailed suggestion starts a new transaction with. */
@@ -64,8 +64,8 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
   const startFx = existing && !existing.upcoming && existing.id > 0 ? state.fx.get(existing.id) : undefined;
   // A repeating charge in a foreign currency opens in that currency, with its original amount.
   const ruleFx = ruleFxOf(existing, segment);
-  // The business the line counts in: its own tag, or the one its category gives (then there is nothing to choose).
-  const ownTag = existing && existing.id > 0 ? (state.biz.tx.get(existing.id) ?? null) : null;
+  // The product the line counts in: its own tag, or the one its category gives (then there is nothing to choose).
+  const ownTag = existing && existing.id > 0 ? (state.products.tx.get(existing.id) ?? null) : null;
 
   const kindCats = (income: boolean) => state.cats.filter((c) => c.is_income === income);
   /** A category without sub-categories cannot hold transactions, so it is not offered (unless one already sits on it). */
@@ -95,9 +95,9 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
   const [duration, setDuration] = useState(segment?.end_month ? "months" : "forever");
   const [months, setMonths] = useState(segment?.end_month ? String(monthsBetween(existing!.date.slice(0, 7), segment.end_month) + 1) : "12");
   /** undefined = nothing chosen yet (only while a choice is required). */
-  const [bizValue, setBizValue] = useState<number | null | undefined>(() => {
+  const [productValue, setProductValue] = useState<number | null | undefined>(() => {
     if (ownTag != null || existing || prefill?.category_id == null) return ownTag;
-    return businessRequired(state.biz, state.cats, prefill.category_id) ? undefined : rememberedBiz(prefill.category_id);
+    return productRequired(state.products, state.cats, prefill.category_id) ? undefined : rememberedProduct(prefill.category_id);
   });
   // Foreign currency: the shekel amount follows the rate for the transaction's day.
   const [quote, setQuote] = useState<Quote | null>(startFx ? { rate: startFx.rate, date: startFx.rate_date, estimated: startFx.estimated } : null);
@@ -143,26 +143,26 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
     }
   };
 
-  // ---- Business ---------------------------------------------------------------------------------------
+  // ---- Product ---------------------------------------------------------------------------------------
   const cat = choiceCategory(choice);
-  const given = cat != null ? categoryBusiness(state.biz, state.cats, cat) : undefined;
-  const givenName = given != null && ownTag == null ? bizName(state.biz, given) : null;
-  /** A new line in a category that needs a business must pick one (None is a choice); nothing is chosen for it. */
-  const needsBiz = (c: number | null, repeating: boolean) => !existing && c != null && !repeating && businessRequired(state.biz, state.cats, c);
-  const bizRequired = needsBiz(cat, repeat);
-  const bizHidden = state.biz.businesses.length === 0 || repeat;
+  const given = cat != null ? categoryProduct(state.products, state.cats, cat) : undefined;
+  const givenName = given != null && ownTag == null ? productName(state.products, given) : null;
+  /** A new line in a category that needs a product must pick one (None is a choice); nothing is chosen for it. */
+  const needsProduct = (c: number | null, repeating: boolean) => !existing && c != null && !repeating && productRequired(state.products, state.cats, c);
+  const mustPickProduct = needsProduct(cat, repeat);
+  const productHidden = state.products.products.length === 0 || repeat;
 
   const changeChoice = (next: CategoryChoice) => {
     setChoice(next);
     setErr("");
     const c = choiceCategory(next);
-    // A new line starts with the business last used in the same category.
-    if (needsBiz(c, repeat)) setBizValue(undefined);
-    else if (!existing) setBizValue(rememberedBiz(c));
+    // A new line starts with the product last used in the same category.
+    if (needsProduct(c, repeat)) setProductValue(undefined);
+    else if (!existing) setProductValue(rememberedProduct(c));
   };
   const changeRepeat = (on: boolean) => {
     setRepeat(on);
-    if (needsBiz(cat, on) !== bizRequired) setBizValue(needsBiz(cat, on) ? undefined : null);
+    if (needsProduct(cat, on) !== mustPickProduct) setProductValue(needsProduct(cat, on) ? undefined : null);
   };
 
   // ---- Amount and currency ----------------------------------------------------------------------------
@@ -218,7 +218,7 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
     if (parseMinor(amount, currency) === 0 || amount.trim() === "") throw new Error();
   });
   /** Saving stays greyed out until the category (and its sub-category, if it has any) and the amount are chosen. */
-  const ready = succeeds(categoryId) && amountReady && bizValue !== undefined;
+  const ready = succeeds(categoryId) && amountReady && productValue !== undefined;
 
   // ---- Saving -----------------------------------------------------------------------------------------
   const buildBody = () =>
@@ -277,9 +277,9 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
         else await api.addRecurring(rule);
       } else if (existing) {
         await api.updateTransaction(existing.id, body);
-        if ((bizValue ?? null) !== ownTag) await api.tagTransactions([existing.id], bizValue ?? null);
+        if ((productValue ?? null) !== ownTag) await api.tagTransactions([existing.id], productValue ?? null);
       } else {
-        const chosen = bizValue ?? null;
+        const chosen = productValue ?? null;
         try {
           const id = await api.addTransaction(body);
           if (chosen != null) await api.tagTransactions([id], chosen);
@@ -294,7 +294,7 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
         }
       }
       try {
-        localStorage.setItem(lastKey(catId), bizValue == null ? "" : String(bizValue));
+        localStorage.setItem(lastKey(catId), productValue == null ? "" : String(productValue));
       } catch {
         /* storage unavailable */
       }
@@ -391,8 +391,8 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
       <Field label="הערה">
         <input type="text" placeholder="אופציונלי" maxLength={35} value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
-      <div style={{ display: bizHidden ? "none" : "" }}>
-        <BusinessChips biz={state.biz} value={bizValue} onChange={setBizValue} required={bizRequired} givenName={givenName} collapsed />
+      <div style={{ display: productHidden ? "none" : "" }}>
+        <ProductChips products={state.products} value={productValue} onChange={setProductValue} required={mustPickProduct} givenName={givenName} collapsed />
       </div>
       {/* Only the checkbox (inside a finger-sized hit box) toggles; the row and its text are inert. */}
       {!existing && (
@@ -409,7 +409,7 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
             <input type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} />
           </label>
           <span dir="auto">
-            תמיד לשמור מיילים עם הנושא <bdi>«{prefill.subject}»</bdi> בקטגוריה ובעסק האלה, בלי לבקש אישור
+            תמיד לשמור מיילים עם הנושא <bdi>«{prefill.subject}»</bdi> בקטגוריה ובמוצר האלה, בלי לבקש אישור
           </span>
         </div>
       )}

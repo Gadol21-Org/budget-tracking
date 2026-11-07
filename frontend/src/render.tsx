@@ -4,9 +4,10 @@ import { createRoot } from "react-dom/client";
 import { type Cmp, type Ctx } from "./insights/model";
 import { insightsView } from "./views/insights";
 import { currenciesView } from "./views/currencies";
-import { businessDashboard, businessesView } from "./views/business";
+import { businessDashboard, productsView } from "./views/business";
+import { actionsPage } from "./views/actionsPage";
 import { type View, root, state } from "./state";
-import { go, goBack, manageCtx, navigateInsights, showCategory } from "./nav";
+import { go, goBack, manageCtx, navigateBusiness, navigateInsights, openBusinessDashboard, showCategory } from "./nav";
 import { monthView } from "./views/month";
 import { listView } from "./views/list";
 import { logView } from "./views/log";
@@ -15,7 +16,7 @@ import { peopleView } from "./views/people";
 import { emailInboxView } from "./views/emailInbox";
 import { aiCostView } from "./views/aiCost";
 import { categoriesView } from "./views/categories";
-import { settingsView } from "./views/settings";
+import { dataTransferView, settingsView } from "./views/settings";
 import { ensureHistory, neededFrom } from "./sync";
 import { openTransactionDialog } from "./dialogs/transaction";
 
@@ -23,7 +24,11 @@ import { openTransactionDialog } from "./dialogs/transaction";
 const ICONS: Record<string, string[]> = {
   month: ["M21.21 15.89A10 10 0 1 1 8 2.83", "M22 12A10 10 0 0 0 12 2v10z"],
   list: ["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"],
+  business: ["M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", "M20 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2z"],
   insights: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  businessOverview: ["M22 7 13.5 15.5 8.5 10.5 2 17", "M16 7h6v6"],
+  actions: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M14 14h7v7h-7z", "M3 14h7v7H3z"],
+  exit: ["M5 12h14", "m12 5 7 7-7 7"],
   settings: ["M10 5H3", "M12 19H3", "M14 3v4", "M16 17v4", "M21 12h-9", "M21 19h-5", "M21 5h-7", "M8 10v4", "M8 12H3"],
 };
 
@@ -37,16 +42,19 @@ function TabIcon({ view }: { view: string }) {
   );
 }
 
-const TABS: [View, string][] = [
+const TABS: [View | "business", string][] = [
   ["month", "סיכום"],
   ["list", "תנועות"],
   ["insights", "תובנות"],
+  ["business", "העסק"],
   ["settings", "הגדרות"],
 ];
 
-const SETTINGS_SCREENS: View[] = ["log", "categories", "businesses", "currencies", "people", "emailInbox", "aiCost"];
+const BUSINESS_SCREENS: View[] = ["actions", "businessOverview", "products"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people", "dataTransfer", "emailInbox", "aiCost"];
 
-function openTab(view: View) {
+function openTab(view: View | "business") {
+  if (view === "business") return openBusinessDashboard();
   // Tapping the open tab goes back up from a category; opening another one starts at its top level.
   if ((view === "insights" || view === "month") && state.view === view) {
     if (state.insights.cat !== undefined) navigateInsights({}, "push");
@@ -56,11 +64,30 @@ function openTab(view: View) {
   go(view);
 }
 
+/** Inside the business section the tray holds the business's own items; the first leaves it. Add an item here for each new action. */
+const BUSINESS_TABS: [View, string, () => void, string][] = [
+  ["month", "יציאה מהעסק", () => openTab("month"), "exit"],
+  ["businessOverview", "סקירה", openBusinessDashboard, "business"],
+  ["actions", "פעולות", () => go("actions"), "actions"],
+];
+
 function Nav() {
+  if (BUSINESS_SCREENS.includes(state.view)) {
+    return (
+      <nav className="nav">
+        {BUSINESS_TABS.map(([view, label, open, icon]) => (
+          <button key={view} aria-current={(state.view === "products" ? "actions" : state.view) === view ? "page" : undefined} onClick={open}>
+            <TabIcon view={icon} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+    );
+  }
   return (
     <nav className="nav">
       {TABS.map(([view, label]) => {
-        const current = state.view === view || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "month" && state.view === "business");
+        const current = (view !== "business" && state.view === view) || (view === "settings" && SETTINGS_SCREENS.includes(state.view)) || (view === "business" && BUSINESS_SCREENS.includes(state.view));
         return (
           <button key={view} aria-current={current ? "page" : undefined} onClick={() => openTab(view)}>
             <TabIcon view={view} />
@@ -96,11 +123,10 @@ function businessScreen() {
   return businessDashboard({
     txs: state.txs,
     cats: state.cats,
-    biz: state.biz,
+    products: state.products,
     period: state.period,
-    view: state.bizView,
-    setView: (patch) => ((state.bizView = { ...state.bizView, ...patch }), render()),
-    back: () => goBack("month"),
+    view: state.businessView,
+    setView: (patch) => navigateBusiness({ ...(patch.scope !== undefined ? { all: false } : {}), ...patch }, patch.scope !== undefined && patch.scope !== state.businessView.scope ? "push" : "replace"),
   });
 }
 
@@ -111,10 +137,12 @@ const screens: Record<View, () => ReactElement> = {
   log: logView,
   categories: categoriesView,
   settings: settingsView,
-  business: businessScreen,
-  businesses: () => businessesView(manageCtx()),
+  actions: actionsPage,
+  businessOverview: businessScreen,
+  products: () => productsView(manageCtx()),
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
+  dataTransfer: dataTransferView,
   emailInbox: emailInboxView,
   aiCost: aiCostView,
 };
@@ -145,7 +173,7 @@ function App() {
  * category or tab); a data refresh keeps what was typed or picked on it (a search, a half-typed name, a message).
  */
 const screenKey = () =>
-  JSON.stringify([state.view, state.filter?.id, state.period, state.kind, state.catKind, state.bizFilter, state.bizView, state.insights.dash, state.insights.cat, state.insights.sub, state.insights.side, state.insights.cmp]);
+  JSON.stringify([state.view, state.filter?.id, state.period, state.kind, state.catKind, state.productFilter, state.businessView, state.insights.dash, state.insights.cat, state.insights.sub, state.insights.side, state.insights.cmp]);
 
 const app = createRoot(root);
 let renderedView: View | undefined;

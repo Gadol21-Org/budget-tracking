@@ -1,4 +1,4 @@
-import type { BusinessData, Category, Fx, Occurrence, RecurringSegment, Transaction, TxInput } from "./api";
+import type { ProductsWire, Category, Fx, Occurrence, RecurringSegment, Transaction, TxInput } from "./api";
 
 /** Offline support: the last data fetched from the server, and new transactions waiting to be sent.
  * Both live in IndexedDB (with persistent storage requested, so the browser does not evict them). */
@@ -11,8 +11,8 @@ export interface Snapshot {
   mirror: boolean;
   /** Foreign-currency details of the transactions. */
   fx?: Fx[];
-  /** The businesses and what is linked to them (missing in copies saved before businesses were kept). */
-  biz?: BusinessData;
+  /** The products and what is linked to them (stored under the old key `biz`; missing in older copies). */
+  biz?: ProductsWire;
   /** The transactions are those dated this day or later (YYYY-MM-DD). Missing: all of them. */
   from?: string;
   savedAt: number;
@@ -22,7 +22,7 @@ export type NewTransaction = TxInput;
 export interface Queued {
   qid: number;
   tx: NewTransaction;
-  /** The business to tag the line with once it is saved. */
+  /** The product to tag the line with once it is saved (stored under the old key `business`). */
   business?: number | null;
 }
 
@@ -53,7 +53,7 @@ async function run<T>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectS
 export const saveSnapshot = (s: Snapshot) => run("kv", "readwrite", (o) => o.put(s, "snapshot")).catch(() => {});
 export const loadSnapshot = () => run<Snapshot | undefined>("kv", "readonly", (o) => o.get("snapshot")).catch(() => undefined);
 export const queuedList = () => run<Queued[]>("queue", "readonly", (o) => o.getAll()).catch(() => [] as Queued[]);
-export const enqueue = (tx: NewTransaction, business: number | null = null) => run("queue", "readwrite", (o) => o.add({ tx, business }));
+export const enqueue = (tx: NewTransaction, product: number | null = null) => run("queue", "readwrite", (o) => o.add({ tx, business: product }));
 export const dequeue = (qid: number) => run("queue", "readwrite", (o) => o.delete(qid)).catch(() => {});
 
 /** Ask the browser not to evict our data under storage pressure (a no-op where unsupported). */

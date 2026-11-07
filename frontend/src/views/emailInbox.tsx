@@ -6,8 +6,8 @@ import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { go, goBack } from "../nav";
 import { render } from "../render";
-import { bizName, businessOf, businessRequired, categoryBusiness } from "../business";
-import { BusinessChips } from "../components/BusinessChips";
+import { productName, productOf, productRequired, categoryProduct } from "../business";
+import { ProductChips } from "../components/ProductChips";
 import { type CategoryChoice, CategoryPicker } from "../components/CategoryPicker";
 import { catById } from "../selectors";
 import { state } from "../state";
@@ -139,16 +139,16 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
   const expenseCats = state.cats.filter((c) => !c.is_income);
   const start = s.category_id != null ? catById(s.category_id) : undefined;
   const [choice, setChoice] = useState<CategoryChoice>(start ? { top: String(start.parent_id ?? start.id), sub: start.parent_id != null ? String(start.id) : "" } : { top: "", sub: "" });
-  const own = s.transaction_id != null ? (state.biz.tx.get(s.transaction_id) ?? null) : null;
+  const own = s.transaction_id != null ? (state.products.tx.get(s.transaction_id) ?? null) : null;
   const [biz, setBiz] = useState<number | null | undefined>(own);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const cat = choice.sub ? Number(choice.sub) : null;
-  const given = categoryBusiness(state.biz, state.cats, cat);
-  const required = businessRequired(state.biz, state.cats, cat);
+  const given = categoryProduct(state.products, state.cats, cat);
+  const required = productRequired(state.products, state.cats, cat);
   const save = async () => {
     if (cat == null) return setErr("יש לבחור קטגוריה ותת-קטגוריה");
-    if (required && biz === undefined) return setErr("יש לבחור עסק");
+    if (required && biz === undefined) return setErr("יש לבחור מוצר");
     setBusy(true);
     try {
       await api.putEmailRule({ subject: s.subject, category_id: cat, business_id: given != null ? null : (biz ?? null) }, s.transaction_id ?? undefined);
@@ -172,9 +172,9 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
       <div className="name" dir="auto">
         כלל קבוע לנושא <bdi>«{s.subject}»</bdi>
       </div>
-      <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובעסק שתבחרו. ה-AI יקרא רק את הסכום והתאריך. גם התנועה הזו תעבור לקטגוריה ולעסק שבחרתם.</p>
+      <p className="muted small">מיילים עם הנושא הזה יתווספו מיד בקטגוריה ובמוצר שתבחרו. ה-AI יקרא רק את הסכום והתאריך. גם התנועה הזו תעבור לקטגוריה ולעסק שבחרתם.</p>
       <CategoryPicker cats={expenseCats} value={choice} onChange={setChoice} />
-      <BusinessChips biz={state.biz} value={biz} onChange={setBiz} required={required} givenName={given != null ? bizName(state.biz, given) : null} collapsed />
+      <ProductChips products={state.products} value={biz} onChange={setBiz} required={required} givenName={given != null ? productName(state.products, given) : null} collapsed />
       <div className="error">{err}</div>
       <div className="actions">
         <button type="button" className="btn" onClick={close}>
@@ -192,7 +192,7 @@ function RuleForm({ s, close }: { s: EmailSuggestion; close: () => void }) {
 function AutoCard({ s }: { s: EmailSuggestion }) {
   const tx = state.txs.find((t) => t.id === s.transaction_id);
   const path = categoryPath(tx ? tx.category_id : s.category_id);
-  const biz = tx ? businessOf(state.biz, state.cats, tx) : undefined;
+  const biz = tx ? productOf(state.products, state.cats, tx) : undefined;
   return (
     <div className="card suggestion auto">
       <div className="head">
@@ -201,7 +201,7 @@ function AutoCard({ s }: { s: EmailSuggestion }) {
           <div className="muted small">
             {fmtDate(s.date)}
             {path ? ` · ${path}` : ""}
-            {biz != null ? ` · ${bizName(state.biz, biz)}` : ""}
+            {biz != null ? ` · ${productName(state.products, biz)}` : ""}
           </div>
         </div>
         <Amount s={s} />
@@ -232,7 +232,7 @@ function RuleRow({ r }: { r: EmailRule }) {
         <b>{r.subject}</b>
         <div className="muted">
           {categoryPath(r.category_id)}
-          {r.business_id != null ? ` · ${bizName(state.biz, r.business_id)}` : ""}
+          {r.business_id != null ? ` · ${productName(state.products, r.business_id)}` : ""}
         </div>
       </div>
       <Btn
@@ -255,7 +255,7 @@ function RulesCard() {
   return (
     <div className="card">
       <div className="name">כללים קבועים לפי נושא</div>
-      <p className="muted small">מייל עם נושא כזה נשמר מיד בקטגוריה ובעסק שנבחרו; ה-AI קורא רק את הסכום והתאריך.</p>
+      <p className="muted small">מייל עם נושא כזה נשמר מיד בקטגוריה ובמוצר שנבחרו; ה-AI קורא רק את הסכום והתאריך.</p>
       {state.emailRules.map((r) => (
         <RuleRow key={r.subject} r={r} />
       ))}

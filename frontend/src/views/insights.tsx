@@ -33,6 +33,7 @@ import {
 } from "../insights/model";
 import { bounds, contains, shift, title as periodTitle, type Period } from "../period";
 import { ConnectedMonthBar } from "./month";
+import { CumulativeChart } from "../components/CumulativeChart";
 
 const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
@@ -48,7 +49,7 @@ const swatch = (background: string) => <i style={{ background }} />;
 // ---- Small pieces --------------------------------------------------------------------------------
 
 /** "▲ 12%" against the comparison; red when it is a rise in spending, green when it is a fall. */
-function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
+export function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
   if (base === 0) return cur === 0 ? null : <span className="delta flat">חדש</span>;
   const pct = Math.round(((cur - base) / base) * 100);
   const flat = Math.abs(pct) < 3;
@@ -75,7 +76,7 @@ function Kpi({ label, value, sub }: { label: string; value: ReactNode; sub?: Rea
 const Note = ({ text }: { text: string }) => <span className="delta flat">{text}</span>;
 
 /** An SVG drawn from markup; taps on a part carrying data-i are reported with its index. */
-function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
+export function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
   return (
     <div
       className="chart"
@@ -100,7 +101,7 @@ function PeekChart(o: BarOpts) {
   return <Chart html={barChart({ ...o, peek })} onTap={(i) => setPeek(peek === i ? null : i)} />;
 }
 
-const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
+export const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
 
 /** One legend line: colour, name (cut with … when long), amount and share, each in its own column so the numbers line up. */
 function LegendRow({ color, name, value, total, state, onTap }: { color: string; name: string; value: number; total: number; state: "sel" | "dim" | ""; onTap?: () => void }) {
@@ -121,10 +122,10 @@ function LegendRow({ color, name, value, total, state, onTap }: { color: string;
  * A card with a donut and its legend. Tapping a slice or a legend line greys out the other slices and shows its name and
  * amount in the middle; tapping it again puts it back.
  */
-function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
+export function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const pick = (i: number) => setSel(sel === i ? null : i);
-  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `${items[sel]!.name}: ${formatShekelsWhole(items[sel]!.value)}`);
+  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `\u2068${items[sel]!.name}\u2069: \u2066${formatShekelsWhole(items[sel]!.value)}\u2069`);
   return (
     <div className="card donutcard">
       <Chart html={html} onTap={pick} />
@@ -137,7 +138,7 @@ function DonutCard({ items, total, title }: { items: { name: string; value: numb
   );
 }
 
-const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
+export const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
   <div className="insight" style={style}>
     <span className="ico">{ico}</span>
     <div>{children}</div>
@@ -936,19 +937,7 @@ function Rhythm({ ctx }: BodyProps) {
     parts.push(
       <h2 key="h-cum">הוצאה מצטברת במהלך החודש</h2>,
       <div className="card" key="cum">
-        <Chart html={lineChart(cum(shown), days.map((_, i) => String(i + 1)), "var(--expense)", ghost, 5)} />
-        {ghost ? (
-          <Legend>
-            <span>
-              {swatch("var(--expense)")}
-              החודש
-            </span>
-            <span>
-              {swatch("var(--muted)")}
-              {basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")}
-            </span>
-          </Legend>
-        ) : null}
+        <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cum(shown)} prev={ghost} color="var(--expense)" curLabel="החודש" prevLabel={basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")} />
       </div>,
     );
   } else {
