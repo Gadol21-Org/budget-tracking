@@ -22,7 +22,7 @@ import { bounds, contains, shift, title as periodTitle } from "../period";
 import { WEEKDAYS, colorAt, dayOfWeek, daysInMonth, todayIso } from "../insights/model";
 import { CumulativeChart } from "../components/CumulativeChart";
 import { ConnectedMonthBar } from "./month";
-import { Chart as SvgChart, DonutCard, Delta, Insight, Legend } from "./insights";
+import { Chart as SvgChart, DonutCard, Delta, Insight } from "./insights";
 import { TransactionRow } from "./list";
 import { dayTitle } from "../selectors";
 
