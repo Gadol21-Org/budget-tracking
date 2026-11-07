@@ -33,6 +33,7 @@ import {
 } from "../insights/model";
 import { bounds, contains, shift, title as periodTitle, type Period } from "../period";
 import { ConnectedMonthBar } from "./month";
+import { CumulativeChart } from "../components/CumulativeChart";
 
 const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
@@ -936,19 +937,7 @@ function Rhythm({ ctx }: BodyProps) {
     parts.push(
       <h2 key="h-cum">הוצאה מצטברת במהלך החודש</h2>,
       <div className="card" key="cum">
-        <Chart html={lineChart(cum(shown), days.map((_, i) => String(i + 1)), "var(--expense)", ghost, 5)} />
-        {ghost ? (
-          <Legend>
-            <span>
-              {swatch("var(--expense)")}
-              החודש
-            </span>
-            <span>
-              {swatch("var(--muted)")}
-              {basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")}
-            </span>
-          </Legend>
-        ) : null}
+        <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cum(shown)} prev={ghost} color="var(--expense)" curLabel="החודש" prevLabel={basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")} />
       </div>,
     );
   } else {

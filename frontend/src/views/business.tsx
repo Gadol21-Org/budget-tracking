@@ -20,7 +20,7 @@ import { openReactDialog } from "../components/openReactDialog";
 import { formatShekelsWhole, longMonth, shortMonth } from "../format";
 import { bounds, contains, shift, title as periodTitle } from "../period";
 import { WEEKDAYS, colorAt, dayOfWeek, daysInMonth, todayIso } from "../insights/model";
-import { lineChart } from "../insights/charts";
+import { CumulativeChart } from "../components/CumulativeChart";
 import { ConnectedMonthBar } from "./month";
 import { Chart as SvgChart, DonutCard, Delta, Insight, Legend } from "./insights";
 import { TransactionRow } from "./list";
@@ -372,27 +372,7 @@ function Rhythm({ ctx }: { ctx: BusinessCtx }) {
     parts.push(
       <h2 key="h-cum">רווח מצטבר במהלך החודש</h2>,
       <div className="card" key="cum">
-        {cur.length ? <SvgChart html={lineChart(cur, days.map((_, i) => String(i + 1)), "var(--biz)", ghost, 5)} /> : <div className="empty">החודש עוד לא התחיל</div>}
-        {ghost && cur.length > 0 && (
-          <Legend>
-            <span>
-              <i style={{ background: "var(--biz)" }} />
-              החודש
-            </span>
-            <span>
-              <i style={{ background: "var(--muted)" }} />
-              חודש קודם
-            </span>
-          </Legend>
-        )}
-        {ghost && cur.length > 0 && (
-          <div className="row">
-            <div className="grow">{`לעומת היום ה-${cur.length} בחודש הקודם`}</div>
-            <span className={`num ${cur[cur.length - 1]! - ghost[cur.length - 1]! < 0 ? "expense" : "income"}`}>
-              {cur[cur.length - 1]! - ghost[cur.length - 1]! < 0 ? "▼" : "▲"} {formatShekelsWhole(Math.abs(cur[cur.length - 1]! - ghost[cur.length - 1]!))}
-            </span>
-          </div>
-        )}
+        {cur.length ? <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cur} prev={ghost} color="var(--biz)" curLabel="החודש" prevLabel="חודש קודם" signed /> : <div className="empty">החודש עוד לא התחיל</div>}
       </div>,
     );
   } else {
