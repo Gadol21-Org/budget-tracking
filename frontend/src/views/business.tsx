@@ -373,7 +373,7 @@ function Rhythm({ ctx }: { ctx: BusinessCtx }) {
       <h2 key="h-cum">רווח מצטבר במהלך החודש</h2>,
       <div className="card" key="cum">
         {cur.length ? <SvgChart html={lineChart(cur, days.map((_, i) => String(i + 1)), "var(--biz)", ghost, 5)} /> : <div className="empty">החודש עוד לא התחיל</div>}
-        {ghost && (
+        {ghost && cur.length > 0 && (
           <Legend>
             <span>
               <i style={{ background: "var(--biz)" }} />
