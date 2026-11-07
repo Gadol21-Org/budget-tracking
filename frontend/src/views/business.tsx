@@ -18,10 +18,11 @@ import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
 import { openReactDialog } from "../components/openReactDialog";
 import { formatShekelsWhole, longMonth, shortMonth } from "../format";
-import { contains, shift, title as periodTitle } from "../period";
-import { colorAt } from "../insights/model";
+import { bounds, contains, shift, title as periodTitle } from "../period";
+import { WEEKDAYS, colorAt, dayOfWeek, daysInMonth, todayIso } from "../insights/model";
+import { CumulativeChart } from "../components/CumulativeChart";
 import { ConnectedMonthBar } from "./month";
-import { DonutCard, Delta } from "./insights";
+import { Chart as SvgChart, DonutCard, Delta, Insight } from "./insights";
 import { TransactionRow } from "./list";
 import { dayTitle } from "../selectors";
 
@@ -29,7 +30,7 @@ import { dayTitle } from "../selectors";
 const tabsFor = (): [BusinessTab, string][] => [
   ["overview", "סקירה"],
   ["trends", "מגמות"],
-  ["cats", "קטגוריות"],
+  ["rhythm", "קצב חודשי"],
 ];
 
 const signed = (a: number) => <Money agorot={a} whole cls={a < 0 ? "expense" : "income"} />;
@@ -264,61 +265,151 @@ function Trends({ ctx }: { ctx: BusinessCtx }) {
   );
 }
 
-function CategorySide({ ctx, sign, title, empty }: { ctx: BusinessCtx; sign: 1 | -1; title: string; empty: string }) {
-  const mine = scoped(ctx, ctx.view.scope).filter((t) => contains(ctx.period, t.date));
-  const all = ctx.txs.filter((t) => contains(ctx.period, t.date));
-  const top = (t: Transaction) => {
-    const c = ctx.cats.find((x) => x.id === t.category_id);
-    return c?.parent_id ?? t.category_id;
-  };
-  const name = (id: number | null) => ctx.cats.find((c) => c.id === id)?.name ?? "ללא קטגוריה";
-  const of = (ts: Transaction[]) => {
-    const m = new Map<number | null, number>();
-    for (const t of ts.filter((t) => t.amount_agorot * sign > 0)) m.set(top(t), (m.get(top(t)) ?? 0) + t.amount_agorot * sign);
-    return m;
-  };
-  const wholeCat = of(all);
-  const rows = [...of(mine).entries()].sort((a, b) => b[1] - a[1]);
-  const total = rows.reduce((s, [, v]) => s + v, 0);
-  const max = rows[0]?.[1] ?? 1;
-  return (
-    <>
-      <h2>{`${title} לפי קטגוריה · ${formatShekelsWhole(total)}`}</h2>
-      {rows.length ? (
-        <div className="card rows">
-          {rows.map(([id, v]) => {
-            const part = wholeCat.get(id) ?? 0;
+/** Net result (income minus expenses) per day of a month, in agorot; index 0 = the 1st. Can be negative. */
+function dayNet(ts: Transaction[], month: string): number[] {
+  const out = Array<number>(daysInMonth(month)).fill(0);
+  for (const t of ts) if (t.date.startsWith(month)) out[Number(t.date.slice(8)) - 1]! += t.amount_agorot;
+  return out;
+}
+
+/** Signed bars (green above the line, red below) with the figure by each bar; drawn right to left like the other charts. */
+function signedBars(labels: string[], values: number[], peak: number): string {
+  const W = 360, padX = 6, H = 100, top = 16, bottom = 18;
+  const slot = (W - 2 * padX) / labels.length;
+  const max = Math.max(1, ...values.map(Math.abs));
+  const half = H / 2;
+  const zero = top + half;
+  let out = `<svg viewBox="0 0 ${W} ${H + top + bottom}" width="100%" role="img" style="direction:ltr"><line x1="${padX}" x2="${W - padX}" y1="${zero}" y2="${zero}" stroke="var(--line)"/>`;
+  values.forEach((v, i) => {
+    const x0 = padX + (labels.length - 1 - i) * slot;
+    const h = (Math.abs(v) / max) * (half - 10);
+    const y = v >= 0 ? zero - h : zero;
+    const color = v < 0 ? "var(--expense)" : "var(--income)";
+    out += `<rect x="${x0 + slot * 0.14}" y="${y}" width="${slot * 0.72}" height="${h}" rx="3" fill="${color}" opacity="${i === peak ? 1 : 0.55}"><title>${labels[i]}: ${formatShekelsWhole(v)}</title></rect>`;
+    out += `<text x="${x0 + slot / 2}" y="${v >= 0 ? y - 3 : y + h + 9}" font-size="8" font-weight="700" text-anchor="middle" fill="${color}">${Math.round(v / 100).toLocaleString("he-IL")}</text>`;
+    out += `<text x="${x0 + slot / 2}" y="${H + top + 13}" font-size="9" text-anchor="middle" fill="var(--muted)">${labels[i]}</text>`;
+  });
+  return out + "</svg>";
+}
+
+/** The business's monthly rhythm: daily result as a calendar, the month so far against the last one, and the average per weekday. */
+function Rhythm({ ctx }: { ctx: BusinessCtx }) {
+  const p = ctx.period;
+  const ts = scoped(ctx, ctx.view.scope);
+  const today = todayIso();
+  const parts: ReactNode[] = [];
+
+  if (p.kind === "month") {
+    const days = dayNet(ts, p.month);
+    const nowMonth = today.slice(0, 7);
+    const elapsed = p.month === nowMonth ? Number(today.slice(8)) : p.month > nowMonth ? 0 : days.length;
+    const shown = days.slice(0, elapsed);
+    const abs = shown.map(Math.abs).filter((v) => v > 0).sort((a, b) => a - b);
+    const scale = abs.length ? abs[Math.min(abs.length - 1, Math.floor(abs.length * 0.9))]! : 1;
+    const lead = dayOfWeek(`${p.month}-01`); // the grid starts on Sunday
+    const best = shown.reduce((m, v, i) => (v > shown[m]! ? i : m), 0);
+    const worst = shown.reduce((m, v, i) => (v < shown[m]! ? i : m), 0);
+    parts.push(
+      <h2 key="h-daily">תוצאה יומית</h2>,
+      <div className="card" key="daily">
+        <div className="hm">
+          {WEEKDAYS.map((d) => (
+            <div className="hmhead" key={d}>
+              {d}
+            </div>
+          ))}
+          {Array.from({ length: lead }, (_, i) => (
+            <div className="hmgap" key={`gap${i}`} />
+          ))}
+          {days.map((v, i) => {
+            const future = i >= elapsed;
+            const style: React.CSSProperties = {};
+            if (!future && v !== 0) {
+              const t = Math.min(1, Math.abs(v) / scale);
+              style.background = `color-mix(in srgb, var(${v < 0 ? "--expense" : "--income"}) ${Math.round(12 + t * 78)}%, transparent)`;
+              if (t > 0.55) style.color = "#fff";
+            }
             return (
-              <div className="row" key={String(id)}>
-                <div className="grow">
-                  <div className="name">{name(id)}</div>
-                  <div className="bar">
-                    <span style={{ width: `${Math.max(3, (v / max) * 100)}%` }} />
-                  </div>
-                  {part > v ? <div className="muted small">{`${formatShekelsWhole(v)} מתוך ${formatShekelsWhole(part)} בקטגוריה`}</div> : null}
-                </div>
-                {whole(v)}
+              <div key={i} className={`hmcell${future ? " future" : ""}`} title={`${i + 1}: ${formatShekelsWhole(v)}`} style={style}>
+                {String(i + 1)}
               </div>
             );
           })}
         </div>
-      ) : (
-        <div className="empty">{empty}</div>
+        <div className="muted small" style={{ marginTop: 8 }}>
+          ירוק = יום ברווח, אדום = יום בהפסד. כהה יותר = סכום גדול יותר.
+        </div>
+        {shown[best]! > 0 && (
+          <Insight ico="💰" style={{ marginTop: 8 }}>
+            {"היום הרווחי ביותר: ה-"}
+            <b>{String(best + 1)}</b>
+            {" ("}
+            {signed(shown[best]!)}
+            {")"}
+          </Insight>
+        )}
+        {shown[worst]! < 0 && (
+          <Insight ico="📉" style={{ marginTop: 8 }}>
+            {"היום החלש ביותר: ה-"}
+            <b>{String(worst + 1)}</b>
+            {" ("}
+            {signed(shown[worst]!)}
+            {")"}
+          </Insight>
+        )}
+      </div>,
+    );
+
+    // Cumulative result through the month, against the same days of the previous month.
+    const cum = (vs: number[]) => vs.reduce<number[]>((a, v, i) => (a.push((a[i - 1] ?? 0) + v), a), []);
+    const prev = shift(p, -1);
+    let ghost: number[] | undefined;
+    if (prev && prev.kind === "month") {
+      const c = cum(dayNet(ts, prev.month));
+      ghost = Array.from({ length: days.length }, (_, i) => c[Math.min(i, c.length - 1)] ?? 0);
+    }
+    const cur = cum(shown);
+    parts.push(
+      <h2 key="h-cum">רווח מצטבר במהלך החודש</h2>,
+      <div className="card" key="cum">
+        {cur.length ? <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cur} prev={ghost} color="var(--biz)" curLabel="החודש" prevLabel="חודש קודם" signed /> : <div className="empty">החודש עוד לא התחיל</div>}
+      </div>,
+    );
+  } else {
+    parts.push(
+      <div className="muted small pad" key="note">
+        המפה היומית זמינה כשבוחרים חודש בודד. להלן ממוצע לפי יום בשבוע לתקופה שנבחרה.
+      </div>,
+    );
+  }
+
+  // Average result per weekday over the days of the period that have passed.
+  const { from, to } = bounds(p);
+  const end = to < today ? to : today;
+  const sums = Array<number>(7).fill(0), counts = Array<number>(7).fill(0);
+  for (let d = from; d <= end; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) counts[dayOfWeek(d)]!++;
+  for (const t of ts) if (t.date >= from && t.date <= end) sums[dayOfWeek(t.date)]! += t.amount_agorot;
+  const avg = sums.map((s, i) => (counts[i] ? s / counts[i]! : 0));
+  const top = avg.reduce((m, v, i) => (v > avg[m]! ? i : m), 0);
+  parts.push(
+    <h2 key="h-week">ממוצע לפי יום בשבוע</h2>,
+    <div className="card" key="week">
+      <SvgChart html={signedBars(WEEKDAYS, avg, top)} />
+      {avg[top]! > 0 && (
+        <Insight ico="📅" style={{ marginTop: 8 }}>
+          {"יום "}
+          <b>{WEEKDAYS[top]}</b>
+          {" הוא היום הרווחי ביותר: "}
+          {signed(Math.round(avg[top]!))}
+          {" בממוצע."}
+        </Insight>
       )}
-    </>
+    </div>,
   );
+  return <div>{parts}</div>;
 }
 
-function Categories({ ctx }: { ctx: BusinessCtx }) {
-  return (
-    <>
-      <CategorySide ctx={ctx} sign={-1} title="הוצאות" empty={`אין הוצאות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"} בתקופה זו`} />
-      <CategorySide ctx={ctx} sign={1} title="הכנסות" empty={`אין הכנסות ${ctx.view.scope === "all" ? "בעסק" : "במוצר"} בתקופה זו`} />
-    </>
-  );
-}
-
-const BODIES = { overview: Overview, trends: Trends, cats: Categories };
+const BODIES = { overview: Overview, trends: Trends, rhythm: Rhythm };
 
 /** The business dashboards: scope (the whole business or one of its products) and four tabs. */
 export function businessDashboard(ctx: BusinessCtx): ReactElement {

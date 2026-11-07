@@ -33,6 +33,7 @@ import {
 } from "../insights/model";
 import { bounds, contains, shift, title as periodTitle, type Period } from "../period";
 import { ConnectedMonthBar } from "./month";
+import { CumulativeChart } from "../components/CumulativeChart";
 
 const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
@@ -75,7 +76,7 @@ function Kpi({ label, value, sub }: { label: string; value: ReactNode; sub?: Rea
 const Note = ({ text }: { text: string }) => <span className="delta flat">{text}</span>;
 
 /** An SVG drawn from markup; taps on a part carrying data-i are reported with its index. */
-function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
+export function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
   return (
     <div
       className="chart"
@@ -100,7 +101,7 @@ function PeekChart(o: BarOpts) {
   return <Chart html={barChart({ ...o, peek })} onTap={(i) => setPeek(peek === i ? null : i)} />;
 }
 
-const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
+export const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
 
 /** One legend line: colour, name (cut with … when long), amount and share, each in its own column so the numbers line up. */
 function LegendRow({ color, name, value, total, state, onTap }: { color: string; name: string; value: number; total: number; state: "sel" | "dim" | ""; onTap?: () => void }) {
@@ -137,7 +138,7 @@ export function DonutCard({ items, total, title }: { items: { name: string; valu
   );
 }
 
-const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
+export const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
   <div className="insight" style={style}>
     <span className="ico">{ico}</span>
     <div>{children}</div>
@@ -936,19 +937,7 @@ function Rhythm({ ctx }: BodyProps) {
     parts.push(
       <h2 key="h-cum">הוצאה מצטברת במהלך החודש</h2>,
       <div className="card" key="cum">
-        <Chart html={lineChart(cum(shown), days.map((_, i) => String(i + 1)), "var(--expense)", ghost, 5)} />
-        {ghost ? (
-          <Legend>
-            <span>
-              {swatch("var(--expense)")}
-              החודש
-            </span>
-            <span>
-              {swatch("var(--muted)")}
-              {basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")}
-            </span>
-          </Legend>
-        ) : null}
+        <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cum(shown)} prev={ghost} color="var(--expense)" curLabel="החודש" prevLabel={basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")} />
       </div>,
     );
   } else {

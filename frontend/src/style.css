@@ -439,3 +439,5 @@ dialog { overscroll-behavior: contain; }
 .bizcol.sel { background: var(--bg); outline: 2px solid var(--brand); }
 .bizwrap { position: relative; }
 .biztip { position: absolute; top: 0; transform: translateX(50%); z-index: 2; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 6px 10px; font-size: .8rem; white-space: nowrap; }
+.cumread { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: .85rem; margin-top: 6px; }
+.cumread i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; }
