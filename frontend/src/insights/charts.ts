@@ -66,7 +66,7 @@ export function barChart(o: BarOpts): string {
   return out + "</svg>";
 }
 
-export function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2): string {
+export function lineChart(values: number[], labels: string[], color: string, ghost?: number[], labelEvery = 2, sel?: number): string {
   const W = 360, H = 90, padX = 10, top = 10;
   const all = [...values, ...(ghost ?? [])];
   const max = Math.max(0, ...all), min = Math.min(0, ...all), span = max - min || 1;
@@ -81,8 +81,14 @@ export function lineChart(values: number[], labels: string[], color: string, gho
     `<line x1="${padX}" x2="${W - padX}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>` +
     (ghost ? `<polyline fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="4 3" stroke-linejoin="round" points="${poly(ghost)}"/>` : "") +
     `<polyline fill="none" stroke="${color}" stroke-width="2.2" stroke-linejoin="round" points="${poly(values)}"/>` +
-    `<circle cx="${x(last)}" cy="${y(values[last])}" r="4" fill="${color}"/>` +
-    labels.map((l, i) => (i % labelEvery === 0 || i === labels.length - 1 ? `<text x="${x(i)}" y="${top + H + 14}" font-size="9" text-anchor="middle" fill="var(--muted)">${esc(l)}</text>` : "")).join("") +
+    (sel == null ? `<circle cx="${x(last)}" cy="${y(values[last])}" r="4" fill="${color}"/>` : "") +
+    (sel == null
+      ? ""
+      : `<line x1="${x(sel)}" x2="${x(sel)}" y1="${top}" y2="${top + H}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="2 2"/>` +
+        (ghost?.[sel] != null ? `<circle cx="${x(sel)}" cy="${y(ghost[sel])}" r="3.5" fill="var(--muted)"/>` : "") +
+        (values[sel] != null ? `<circle cx="${x(sel)}" cy="${y(values[sel])}" r="4.5" fill="${color}"/>` : "")) +
+    labels.map((l, i) => (i % labelEvery === 0 || i === labels.length - 1 ? `<text x="${x(i)}" y="${top + H + 14}" font-size="9" text-anchor="middle" fill="${i === sel ? "currentColor" : "var(--muted)"}" font-weight="${i === sel ? 700 : 400}">${esc(l)}</text>` : "")).join("") +
+    (sel == null ? "" : Array.from({ length: n }, (_, i) => `<rect data-i="${i}" x="${x(i) - (W - 2 * padX) / Math.max(1, n - 1) / 2}" y="0" width="${(W - 2 * padX) / Math.max(1, n - 1)}" height="${H + top + 18}" fill="transparent" style="cursor:pointer"/>`).join("")) +
     "</svg>"
   );
 }
@@ -122,14 +128,14 @@ export function donut(parts: { value: number; color: string }[], caption: { titl
     if (on && share >= 0.07) labels += `<text x="${(c + 0.64 * R * Math.cos(mid)).toFixed(1)}" y="${(cy + 0.64 * R * Math.sin(mid) + 3).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" style="pointer-events:none">${Math.round(share * 100)}%</text>`;
     if (i === sel && tip) {
       // The bubble sits above the picture, never on it; its tip points down toward the slice. The slice itself gets a same-coloured outline so a sliver stays visible.
-      const w = Math.min(136, 12 + tip.length * 5.2), h = 15;
+      const w = Math.min(136, 12 + tip.replace(/[\u2066-\u2069]/g, "").length * 5.2), h = 15;
       const px = c + R * Math.cos(mid);
       const x = Math.max(w / 2 + 2, Math.min(140 - w / 2 - 2, px)), tx = Math.max(x - w / 2 + 8, Math.min(x + w / 2 - 8, px));
-      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><text x="${x.toFixed(1)}" y="11.3" text-anchor="middle" font-size="8.5" font-weight="600" fill="#fff">${esc(tip)}</text></g>`;
+      bubble = `<g style="pointer-events:none"><path d="M${c},${cy} L${pt(a0, R)} A${R},${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1, R)}Z" fill="${p.color}" stroke="${p.color}" stroke-width="1.6" stroke-linejoin="round"/><rect x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}" rx="5" fill="#1f2a30"/><path d="M${(tx - 4).toFixed(1)},${1 + h} L${tx.toFixed(1)},${h + 5} L${(tx + 4).toFixed(1)},${1 + h}Z" fill="#1f2a30"/><foreignObject x="${(x - w / 2).toFixed(1)}" y="1" width="${w.toFixed(1)}" height="${h}"><div xmlns="http://www.w3.org/1999/xhtml" dir="rtl" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:600;line-height:1;color:#fff;white-space:nowrap">${esc(tip)}</div></foreignObject></g>`;
     }
     a0 = a1;
   });
   const title = caption.title.length > 22 ? `${caption.title.slice(0, 21)}…` : caption.title;
-  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
+  return `<svg viewBox="0 0 140 172" width="132" role="img">${paths}${labels}${bubble}<text x="70" y="153" text-anchor="middle" font-size="8.5" fill="var(--muted)" direction="rtl" style="unicode-bidi:plaintext">${esc(title)}</text><text x="70" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="currentColor">${esc(caption.total)}</text></svg>`;
 }
 

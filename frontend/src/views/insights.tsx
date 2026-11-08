@@ -33,6 +33,7 @@ import {
 } from "../insights/model";
 import { bounds, contains, shift, title as periodTitle, type Period } from "../period";
 import { ConnectedMonthBar } from "./month";
+import { CumulativeChart } from "../components/CumulativeChart";
 
 const DASHES: [Dash, string, string][] = [
   ["overview", "🏠", "סקירה"],
@@ -48,7 +49,7 @@ const swatch = (background: string) => <i style={{ background }} />;
 // ---- Small pieces --------------------------------------------------------------------------------
 
 /** "▲ 12%" against the comparison; red when it is a rise in spending, green when it is a fall. */
-function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
+export function Delta({ cur, base, higherIsBad }: { cur: number; base: number; higherIsBad: boolean }) {
   if (base === 0) return cur === 0 ? null : <span className="delta flat">חדש</span>;
   const pct = Math.round(((cur - base) / base) * 100);
   const flat = Math.abs(pct) < 3;
@@ -75,7 +76,7 @@ function Kpi({ label, value, sub }: { label: string; value: ReactNode; sub?: Rea
 const Note = ({ text }: { text: string }) => <span className="delta flat">{text}</span>;
 
 /** An SVG drawn from markup; taps on a part carrying data-i are reported with its index. */
-function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
+export function Chart({ html, onTap }: { html: string; onTap?: (i: number) => void }) {
   return (
     <div
       className="chart"
@@ -100,7 +101,7 @@ function PeekChart(o: BarOpts) {
   return <Chart html={barChart({ ...o, peek })} onTap={(i) => setPeek(peek === i ? null : i)} />;
 }
 
-const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
+export const Legend = ({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) => <div className={wrap ? "legend wrap" : "legend"}>{children}</div>;
 
 /** One legend line: colour, name (cut with … when long), amount and share, each in its own column so the numbers line up. */
 function LegendRow({ color, name, value, total, state, onTap }: { color: string; name: string; value: number; total: number; state: "sel" | "dim" | ""; onTap?: () => void }) {
@@ -121,10 +122,10 @@ function LegendRow({ color, name, value, total, state, onTap }: { color: string;
  * A card with a donut and its legend. Tapping a slice or a legend line greys out the other slices and shows its name and
  * amount in the middle; tapping it again puts it back.
  */
-function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
+export function DonutCard({ items, total, title }: { items: { name: string; value: number; color: string }[]; total: number; title: string }) {
   const [sel, setSel] = useState<number | null>(null);
   const pick = (i: number) => setSel(sel === i ? null : i);
-  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `${items[sel]!.name}: ${formatShekelsWhole(items[sel]!.value)}`);
+  const html = donut(items, { title, total: formatShekelsWhole(total) }, sel, sel == null ? "" : `\u2068${items[sel]!.name}\u2069: \u2066${formatShekelsWhole(items[sel]!.value)}\u2069`);
   return (
     <div className="card donutcard">
       <Chart html={html} onTap={pick} />
@@ -137,7 +138,7 @@ function DonutCard({ items, total, title }: { items: { name: string; value: numb
   );
 }
 
-const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
+export const Insight = ({ ico, children, style }: { ico: string; children: ReactNode; style?: React.CSSProperties }) => (
   <div className="insight" style={style}>
     <span className="ico">{ico}</span>
     <div>{children}</div>
@@ -178,7 +179,6 @@ function InsightsScreen({ ctx }: { ctx: Ctx }) {
           <CompareButton ctx={ctx} label={base.label} />
         </div>
       )}
-      {hasCompare && isPartial(ctx.period) && <div className="partialnote">התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה. לתמונה מלאה בחרו חודש שהסתיים.</div>}
       <div className={`dash dash-${dash}`}>
         <Body ctx={ctx} baseLabel={base.label} />
       </div>
@@ -321,7 +321,7 @@ function Overview({ ctx, baseLabel }: BodyProps) {
   }
 
   return (
-    <div>
+    <>
       <div className="kpis">
         <Kpi label="הוצאות" value={money(cur.expense, "expense")} sub={<Delta cur={cur.expense} base={bExp} higherIsBad />} />
         <Kpi label="הכנסות" value={money(cur.income, "income")} sub={<Delta cur={cur.income} base={bInc} higherIsBad={false} />} />
@@ -351,7 +351,7 @@ function Overview({ ctx, baseLabel }: BodyProps) {
           <span>הקשה על עמודה מציגה את הסכום מעליה</span>
         </Legend>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -428,10 +428,9 @@ export function SummaryCategories({ ctx }: { ctx: Ctx }) {
       />
     );
   return (
-    <div>
-      {ctx.ins.cat === undefined && isPartial(ctx.period) && <div className="partialnote">התקופה טרם הסתיימה: הסכומים חלקיים, ולכן ההשוואה למחזור מלא תראה נמוכה.</div>}
+    <>
       {body}
-    </div>
+    </>
   );
 }
 
@@ -623,7 +622,7 @@ function Trends({ ctx }: BodyProps) {
   const stackColors = [...shown.map((id) => catColor(ctx, id)), OTHER_COLOR];
 
   return (
-    <div>
+    <>
       <div className="kpis">
         <Kpi label="הוצאות בחודש (ממוצע)" value={money(Math.round(avgExp), "expense")} sub={<Note text={`${done.length} חודשים שהסתיימו`} />} />
         <Kpi label="חיסכון בחודש (ממוצע)" value={money(Math.round(avgSave), avgSave < 0 ? "expense" : "income")} sub={<Note text="הכנסות פחות הוצאות" />} />
@@ -666,7 +665,7 @@ function Trends({ ctx }: BodyProps) {
         </Legend>
       </div>
       <div className="muted small pad">הקשה על חודש בגרף מציגה את הסכום מעליו, בלי לשנות את התקופה הנבחרת.</div>
-    </div>
+    </>
   );
 }
 
@@ -717,7 +716,7 @@ function Changes({ ctx, baseLabel }: BodyProps) {
     );
   };
   return (
-    <div>
+    <>
       <div className="card" style={{ textAlign: "center" }}>
         <div className="muted small">{`סך ההוצאות ${baseLabel}`}</div>
         <div className="num" style={{ fontSize: "1.5rem", fontWeight: 800, color: net > 0 ? "var(--expense)" : "var(--income)" }}>{`${net > 0 ? "+" : "−"}${formatShekelsWhole(Math.abs(net))}`}</div>
@@ -728,7 +727,7 @@ function Changes({ ctx, baseLabel }: BodyProps) {
       <h2>מה הקטין את ההוצאות</h2>
       {down.length ? <div className="card rows">{down.map((i) => row(i, false))}</div> : <div className="empty">שום דבר לא ירד</div>}
       <div className="muted small pad">הקשה על שורה פותחת אותה בפירוט הקטגוריות.</div>
-    </div>
+    </>
   );
 }
 
@@ -805,7 +804,7 @@ function Fixed({ ctx }: BodyProps) {
   const pct = (v: number, of: number) => (of > 0 ? `${Math.round((v / of) * 100)}%` : "–");
   const varColor = "color-mix(in srgb, var(--brand) 35%, transparent)";
   return (
-    <div>
+    <>
       <div className="card">
         <div className="muted small">מתוך ההוצאות בתקופה</div>
         <div className="splitbar">
@@ -864,7 +863,7 @@ function Fixed({ ctx }: BodyProps) {
         </div>
       ) : null}
       {forecast}
-    </div>
+    </>
   );
 }
 
@@ -938,19 +937,7 @@ function Rhythm({ ctx }: BodyProps) {
     parts.push(
       <h2 key="h-cum">הוצאה מצטברת במהלך החודש</h2>,
       <div className="card" key="cum">
-        <Chart html={lineChart(cum(shown), days.map((_, i) => String(i + 1)), "var(--expense)", ghost, 5)} />
-        {ghost ? (
-          <Legend>
-            <span>
-              {swatch("var(--expense)")}
-              החודש
-            </span>
-            <span>
-              {swatch("var(--muted)")}
-              {basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")}
-            </span>
-          </Legend>
-        ) : null}
+        <CumulativeChart days={days.map((_, i) => String(i + 1))} cur={cum(shown)} prev={ghost} color="var(--expense)" curLabel="החודש" prevLabel={basePeriods(p, ctx.ins.cmp).label.replace(/^מול /, "")} />
       </div>,
     );
   } else {
