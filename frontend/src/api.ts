@@ -56,16 +56,19 @@ export interface Category {
   linked_to: number | null;
 }
 
-/** One business of the whole business; the general one holds costs shared by the others. */
-export interface Business {
+/** One product of the whole business; the general one holds costs shared by the others. */
+export interface Product {
   id: number;
   name: string;
   is_general: boolean;
 }
 
-/** Which transactions (tags) and categories count in which business, as [id, business id] pairs. */
-export interface BusinessData {
-  businesses: Business[];
+/**
+ * Which transactions (tags) and categories count in which product, as [id, product id] pairs.
+ * The server calls products "businesses" (API paths and JSON keys); only the names here changed.
+ */
+export interface ProductsWire {
+  businesses: Product[];
   links: { transactions: [number, number][]; categories: [number, number][]; required: number[] };
 }
 
@@ -259,21 +262,21 @@ export const api = {
   /** Also deletes sub-categories; their transactions move to `moveTo` (required if there are any). */
   deleteCategory: (id: number, moveTo?: number) =>
     request<number>(`/api/categories/${id}${moveTo != null ? `?move_to=${moveTo}` : ""}`, { method: "DELETE" }),
-  businesses: () => request<BusinessData>("/api/businesses"),
-  addBusiness: (name: string, isGeneral: boolean) =>
+  products: () => request<ProductsWire>("/api/businesses"),
+  addProduct: (name: string, isGeneral: boolean) =>
     request<number>("/api/businesses", { method: "POST", body: JSON.stringify({ name, is_general: isGeneral }) }),
-  renameBusiness: (id: number, name: string) =>
+  renameProduct: (id: number, name: string) =>
     request<void>(`/api/businesses/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
-  deleteBusiness: (id: number) => request<void>(`/api/businesses/${id}`, { method: "DELETE" }),
-  /** Make a category's transactions count in a business (null removes the link). */
-  linkCategoryBusiness: (category: number, business: number | null) =>
-    request<void>(`/api/categories/${category}/business`, { method: "PUT", body: JSON.stringify({ business_id: business }) }),
-  /** Require new transactions in a category to say which business they belong to (or none). */
-  requireCategoryBusiness: (category: number, required: boolean) =>
+  deleteProduct: (id: number) => request<void>(`/api/businesses/${id}`, { method: "DELETE" }),
+  /** Make a category's transactions count in a product (null removes the link). */
+  linkCategoryProduct: (category: number, product: number | null) =>
+    request<void>(`/api/categories/${category}/business`, { method: "PUT", body: JSON.stringify({ business_id: product }) }),
+  /** Require new transactions in a category to say which product they belong to (or none). */
+  requireCategoryProduct: (category: number, required: boolean) =>
     request<void>(`/api/categories/${category}/business-required`, { method: "PUT", body: JSON.stringify({ required }) }),
-  /** Tag transactions as a business's (null removes their tags). */
-  tagTransactions: (ids: number[], business: number | null) =>
-    request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: business }) }),
+  /** Tag transactions as a product's (null removes their tags). */
+  tagTransactions: (ids: number[], product: number | null) =>
+    request<void>("/api/businesses/tag", { method: "PUT", body: JSON.stringify({ ids, business_id: product }) }),
   exportSheets: () => request<{ transactions: number; tabs: number }>("/api/export/sheets", { method: "POST" }),
   updateTransaction: (id: number, t: TxInput) =>
     request<void>(`/api/transactions/${id}`, { method: "PUT", body: JSON.stringify(t) }),

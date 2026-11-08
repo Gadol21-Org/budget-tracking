@@ -130,7 +130,7 @@ export function SumitCard() {
             ? "החיבור ל-Sumit עדיין לא הוגדר בשרת."
             : `בדיקה אחרונה: ${when(data.last_poll_at)} · הבאה: ${when(data.next_poll_at)} · קריאות החודש: ${data.calls_this_month}/${data.monthly_limit}${data.last_error ? ` · שגיאה: ${data.last_error}` : ""}`}
       </div>
-      {data && data.held.length > 0 && <div className="note error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"הגדרת מוצרים ועסקים" והם ייובאו.`}</div>}
+      {data && data.held.length > 0 && <div className="note error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"הגדרת מוצרי Sumit" והם ייובאו.`}</div>}
       <div>
         {unseen.map((n, i) => (
           <div className="row" key={i}>
@@ -146,7 +146,7 @@ export function SumitCard() {
           בדיקת קבלות חדשות עכשיו
         </button>
         <button className="btn" onClick={() => data && openMapping(data, () => void refresh())}>
-          הגדרת מוצרים ועסקים
+          הגדרת מוצרי Sumit
         </button>
         {state.sumit.offerPush && (
           <button className="btn" onClick={() => void push()}>
@@ -172,7 +172,7 @@ function ProductRow({ p }: { p: SumitOverview["products"][number] }) {
     <div className="card">
       <div className="name">{p.name}</div>
       <div className="field">
-        <span>עסק</span>
+        <span>מוצר באפליקציה</span>
         <select
           value={biz}
           onChange={(e) => {
@@ -180,8 +180,8 @@ function ProductRow({ p }: { p: SumitOverview["products"][number] }) {
             save(e.target.value, pick);
           }}
         >
-          <option value="">ללא עסק</option>
-          {state.biz.businesses.map((b) => (
+          <option value="">ללא מוצר באפליקציה</option>
+          {state.products.products.map((b) => (
             <option key={b.id} value={String(b.id)}>
               {b.name}
             </option>
@@ -242,12 +242,12 @@ export function openMapping(o: SumitOverview, done: () => void, only?: string[])
         }}
       >
         <h2>קבלות מ-Sumit: מוצרים</h2>
-        <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "עסק וקטגוריה לכל מוצר"}</h3>
+        <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "מוצר באפליקציה וקטגוריה לכל מוצר Sumit"}</h3>
         {(!only || o.held.some((h) => h.needs_refund_category)) && <RefundCategory id={o.refund_category_id} />}
         {rows.length ? (
           rows.map((p) => <ProductRow key={p.name} p={p} />)
         ) : (
-          <div className="note muted">מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרים מעסקים או מקטגוריות שונים תתפצל לכמה תנועות.</div>
+          <div className="note muted">מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרי Sumit שמקושרים למוצרים או לקטגוריות שונים תתפצל לכמה תנועות.</div>
         )}
         <div className="actions">
           <button type="submit" className="btn primary">

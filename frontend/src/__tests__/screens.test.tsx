@@ -37,7 +37,7 @@ afterEach(() => {
 
 describe("a data refresh on a screen", () => {
   it("keeps the result of a Settings action (it used to vanish when the data reloaded)", async () => {
-    state.view = "settings";
+    state.view = "dataTransfer";
     app.render();
     fireEvent.click(await screen.findByRole("button", { name: "ייבוא מפעמונים" }));
     await waitFor(() => expect(screen.getByText(/יובאו 12 תנועות חדשות/)).toBeTruthy());
@@ -86,5 +86,16 @@ describe("the app shell", () => {
     state.offline = false;
     app.render();
     expect(screen.queryByText(/אין חיבור או שהשרת אינו זמין/)).toBeNull();
+  });
+});
+
+describe("the business section", () => {
+  it("opens on the overview, with a tray that has an exit item and the actions page", async () => {
+    state.view = "businessOverview";
+    app.render();
+    expect(await screen.findByRole("button", { name: "יציאה מהעסק" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "פעולות" }));
+    expect(state.view).toBe("actions");
+    expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
   });
 });

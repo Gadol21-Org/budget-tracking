@@ -43,6 +43,11 @@ pub async fn static_handler(uri: Uri) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
     let path = if path.is_empty() { "index.html" } else { path };
+    // A missing build asset (e.g. a stale hash) is a real 404, not the app page:
+    // otherwise the browser gets HTML where it expected JS/CSS.
+    if path.starts_with("assets/") {
+        return file_response(path).unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
+    }
     file_response(path)
         .or_else(|| file_response("index.html"))
         .unwrap_or_else(|| {

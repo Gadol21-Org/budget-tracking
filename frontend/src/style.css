@@ -10,6 +10,7 @@
   --income: #067647;
   --radius: 14px;
   --nav-h: 60px;
+  --nav-inset: max(0px, calc(env(safe-area-inset-bottom) - 20px)); /* extra bar height under the icons; less than the full inset so the bar sits close to the home indicator */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -34,12 +35,15 @@ body {
 button, input, select { font: inherit; color: inherit; }
 /* Native-app feel: controls and chrome are not selectable and don't flash on tap; typed text and notes stay selectable. */
 body { -webkit-tap-highlight-color: transparent; }
+/* A tap or click selects; it must not leave a focused/pressed look behind. Keyboard focus (:focus-visible) keeps its ring, and hover only applies where a real pointer can hover (touch browsers keep :hover stuck after a tap). */
+button:focus:not(:focus-visible), [role="button"]:focus:not(:focus-visible), select:focus { outline: none; }
+button:active, select:active { filter: none; }
 button, [role="button"], .nav, .fab, .daylabel, .stats .label { -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }
 .shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 /* #app is itself a <main>: it spans the window; the inner <main> is the content column. */
 #app { display: block; max-width: none; padding: 0; margin: 0; }
-.shell > main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px calc(var(--nav-h) + 96px); }
+.shell > main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 4px 16px calc(var(--nav-h) + 96px + var(--nav-inset)); }
 h1 { font-size: 1.4rem; margin: 0 0 12px; }
 h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 600; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
@@ -66,19 +70,19 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .bar > span { display: block; height: 100%; background: var(--brand); }
 .daylabel { margin: 16px 4px 6px; font-size: .85rem; color: var(--muted); font-weight: 600; }
 .del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; padding: 8px; border-radius: 8px; }
-.del:hover { color: var(--expense); }
+@media (hover: hover) { .del:hover { color: var(--expense); } }
 .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 
 .nav {
-  position: fixed; inset-inline: 0; bottom: 0; height: var(--nav-h);
+  position: fixed; inset-inline: 0; bottom: 0; height: calc(var(--nav-h) + var(--nav-inset));
   display: flex; background: var(--surface); border-top: 1px solid var(--line);
-  padding-bottom: env(safe-area-inset-bottom); z-index: 20;
+  padding-bottom: var(--nav-inset); z-index: 20;
 }
 .nav button { flex: 1; border: 0; background: none; cursor: pointer; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: .78rem; }
 .nav button .ico { font-size: 1.25rem; line-height: 1; }
 .nav button[aria-current="page"] { color: var(--brand); font-weight: 700; }
 .fab {
-  position: fixed; inset-inline-start: 16px; bottom: calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));
+  position: fixed; inset-inline-start: 16px; bottom: calc(var(--nav-h) + 16px + var(--nav-inset));
   width: 58px; height: 58px; border-radius: 50%; border: 0; cursor: pointer;
   background: var(--brand); color: var(--brand-contrast); font-size: 2rem; line-height: 1;
   box-shadow: 0 4px 14px rgba(0,0,0,.25); z-index: 20;
@@ -86,6 +90,8 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 
 dialog { border: 0; border-radius: var(--radius); padding: 0; width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); background: var(--surface); color: var(--text); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
+/* The dialog itself takes focus when it opens (so Escape and screen readers work); it must not draw a focus ring. */
+dialog:focus, dialog:focus-visible { outline: none; }
 /* The add/edit transaction dialog fills the screen like its own page; the page behind is not shown. */
 dialog.fullpage { padding-top: env(safe-area-inset-top); width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; margin: 0; border-radius: 0; overflow-y: auto; }
 dialog.fullpage::backdrop { background: var(--bg); }
@@ -164,7 +170,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 }
 
 .clickable { cursor: pointer; }
-.clickable:hover { background: var(--bg); }
+@media (hover: hover) { .clickable:hover { background: var(--bg); } }
 .clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .filterbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .filterbar .grow { flex: 1; min-width: 0; }
@@ -172,7 +178,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
 .filterbar .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filterbar .name { overflow-wrap: anywhere; }
 .periodbtn { border: 0; background: none; cursor: pointer; padding: 8px 12px; border-radius: 10px; }
-.periodbtn:hover { background: var(--surface); }
+@media (hover: hover) { .periodbtn:hover { background: var(--surface); } }
 .seg3 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg3 button { padding: 10px; border: 0; background: var(--bg); cursor: pointer; }
 .seg3 button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
@@ -198,7 +204,8 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
   box-shadow: 0 6px 20px rgb(0 0 0 / .15); }
 .menu[hidden] { display: none; }
 .menu button { border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
-.menu button:hover, .menu button:focus-visible { background: var(--bg); }
+.menu button:focus-visible { background: var(--bg); }
+@media (hover: hover) { .menu button:hover { background: var(--bg); } }
 
 body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 :root { --pull: 0px; --pull-p: 0; }
@@ -248,7 +255,8 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .combo-list::-webkit-scrollbar { width: 6px; }
 .combo-list::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
 .combo-list button { display: block; width: 100%; border: 0; background: none; font: inherit; color: var(--text); text-align: start; padding: 10px 12px; border-radius: 8px; cursor: pointer; }
-.combo-list button:hover, .combo-list button[aria-selected="true"] { background: var(--bg); }
+.combo-list button[aria-selected="true"] { background: var(--bg); }
+@media (hover: hover) { .combo-list button:hover { background: var(--bg); } }
 .combo-list button[aria-selected="true"] { font-weight: 700; }
 .combo-empty { padding: 10px 12px; color: var(--muted); }
 
@@ -259,7 +267,6 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 .chip[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); border-color: var(--brand); font-weight: 700; }
 .cmpbar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: .9rem; }
 .cmpbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: .88rem; }
-.partialnote { background: color-mix(in srgb, #f59e0b 12%, transparent); border-radius: 10px; padding: 8px 12px; font-size: .85rem; margin-bottom: 10px; }
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
 .kpi .l { font-size: .8rem; color: var(--muted); }
@@ -299,7 +306,7 @@ form.add label[hidden] { display: none; }
 
 /* "New version available": a bar above the nav that asks for a relaunch; never reloads by itself. */
 .update-banner {
-  position: fixed; bottom: calc(var(--nav-h) + 90px + env(safe-area-inset-bottom)); inset-inline: 12px; margin-inline: auto; max-width: 420px;
+  position: fixed; bottom: calc(var(--nav-h) + 90px + var(--nav-inset)); inset-inline: 12px; margin-inline: auto; max-width: 420px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   background: var(--surface); border: 1px solid var(--line); border-inline-start: 4px solid var(--brand); border-radius: var(--radius);
   padding: 10px 14px; font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 45;
@@ -308,7 +315,7 @@ form.add label[hidden] { display: none; }
 
 /* "Loading earlier months": floats over the screen (above the nav bar, clear of the month title) so the content does not jump; fades in only if the fetch takes a moment. */
 .loading-toast {
-  position: fixed; bottom: calc(var(--nav-h) + 24px + env(safe-area-inset-bottom)); inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px);
+  position: fixed; bottom: calc(var(--nav-h) + 24px + var(--nav-inset)); inset-inline: 0; margin-inline: auto; width: max-content; max-width: calc(100vw - 32px);
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px;
   color: var(--muted); font-size: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 40; pointer-events: none;
   opacity: 0; animation: toast-in .15s ease-out .2s forwards;
@@ -342,12 +349,12 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 /* Businesses */
 :root { --biz: #4f46e5; --biz-soft: rgba(79, 70, 229, .12); }
 @media (prefers-color-scheme: dark) { :root { --biz: #a5b4fc; --biz-soft: rgba(165, 180, 252, .16); } }
-.bizchip { display: inline-flex; align-items: center; background: var(--biz-soft); color: var(--biz); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
-.bizchip.auto { opacity: .8; font-weight: 600; }
+.productchip { display: inline-flex; align-items: center; background: var(--biz-soft); color: var(--biz); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
+.productchip.auto { opacity: .8; font-weight: 600; }
 /* A product of an imported receipt: the same badge as the business, in another colour. */
 :root { --prod: #b45309; --prod-soft: rgba(217, 119, 6, .14); }
 @media (prefers-color-scheme: dark) { :root { --prod: #fcd34d; --prod-soft: rgba(252, 211, 77, .16); } }
-.bizchip.prod { background: var(--prod-soft); color: var(--prod); }
+.productchip.sumitprod { background: var(--prod-soft); color: var(--prod); }
 .bizcard { border-color: var(--biz); }
 .bizcard .head { display: flex; align-items: center; gap: 8px; }
 .bizcard .bizname { color: var(--biz); font-weight: 700; }
@@ -357,7 +364,7 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .bizhero .sub { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: .85rem; }
 .bizdash .card { margin-bottom: 10px; }
 .bizdash .filterbar { display: flex; align-items: center; gap: 10px; }
-.seg4 { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; }
+.seg4 { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 12px 0; }
 .seg4 button { padding: 9px 4px; border: 0; background: var(--bg); cursor: pointer; font-size: .9rem; }
 .seg4 button[aria-pressed="true"] { background: var(--biz); color: #fff; font-weight: 700; }
 .biztable { width: 100%; border-collapse: collapse; font-size: .9rem; }
@@ -375,25 +382,21 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 .bizm { font-size: .72rem; }
 .bizlegend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .78rem; margin-top: 8px; }
 .bizlegend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 4px; }
-.bizmini { display: flex; align-items: flex-end; gap: 3px; height: 30px; width: 90px; direction: rtl; }
-.bizmini i { flex: 1; background: var(--biz); border-radius: 2px 2px 0 0; }
-.bizmini i.neg { background: #c2564b; }
-.bizamt { min-width: 76px; text-align: end; font-weight: 700; }
 .scopeitem { display: block; width: 100%; text-align: start; padding: 12px 8px; border: 0; border-bottom: 1px solid var(--line); background: none; cursor: pointer; }
 .scopeitem.ind { padding-inline-start: 24px; }
 .qchips { display: flex; flex-wrap: wrap; gap: 6px; }
 .qchip { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: .9rem; }
 .qchip[aria-pressed="true"] { background: var(--biz); border-color: var(--biz); color: #fff; font-weight: 700; }
-.bizpick { display: flex; flex-direction: column; gap: 6px; }
+.productpick { display: flex; flex-direction: column; gap: 6px; }
 .seg3b { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
 .seg3b button { padding: 8px; border: 0; background: var(--bg); cursor: pointer; font-size: .9rem; }
 .seg3b button[aria-pressed="true"] { background: var(--brand); color: var(--brand-contrast); font-weight: 700; }
-.selbar { position: sticky; bottom: calc(var(--nav-h) + 8px); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--biz); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; z-index: 5; }
+.selbar { position: sticky; bottom: calc(var(--nav-h) + 8px + var(--nav-inset)); display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--biz); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; z-index: 5; }
 .selbox { width: 22px; height: 22px; accent-color: var(--biz); flex: none; }
 .small { font-size: .82rem; }
 .linkbtn { align-self: flex-start; border: 0; background: none; color: var(--biz); cursor: pointer; padding: 4px 0; font-size: .9rem; }
-.bizchip.big { font-size: .9rem; padding: 3px 12px; }
-.bizpick [hidden] { display: none !important; }
+.productchip.big { font-size: .9rem; padding: 3px 12px; }
+.productpick [hidden] { display: none !important; }
 
 /* A modal dialog does not lock the page behind it: stop the page scrolling (and scroll chaining out of the dialog) while one is open. */
 html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }
@@ -430,3 +433,29 @@ dialog { overscroll-behavior: contain; }
 /* Summary banner: Sumit receipts that were imported or are waiting for a category. */
 .sumit-banner { margin: 10px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--brand-soft, var(--surface)); border: 1px solid var(--brand); color: var(--text); cursor: pointer; font-weight: 600; }
 .sumit-banner.warn { border-color: var(--expense, #c0392b); }
+.bizhub .bizmenu-title { font-size: 1rem; margin: 16px 0 6px; color: var(--muted); }
+.bizmenu { display: grid; gap: 8px; }
+.bizaction { display: flex; align-items: center; gap: 12px; margin: 0; }
+.bizaction .ico { font-size: 1.5rem; line-height: 1; }
+.bizaction .bizname { color: var(--biz); font-weight: 700; }
+@media (min-width: 700px) { .bizmenu { grid-template-columns: 1fr 1fr; } }
+.titlerow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.titlerow h1 { margin: 0; }
+.bizaction .grow { flex: 1; min-width: 0; }
+.bizcol { cursor: pointer; border-radius: 8px; }
+.bizcol.sel { background: var(--bg); outline: 2px solid var(--brand); }
+.bizwrap { position: relative; }
+.biztip { position: absolute; top: 0; transform: translateX(50%); z-index: 2; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 6px 10px; font-size: .8rem; white-space: nowrap; }
+.cumread { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: .85rem; margin-top: 6px; }
+.cumread i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-inline-end: 5px; }
+
+/* Settings: iOS-style grouped lists */
+.sgroup { background: var(--surface); border-radius: 12px; margin: 0 0 22px; overflow: hidden; }
+.srow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 14px; border: 0; background: none; color: var(--text); font: inherit; text-align: start; cursor: pointer; position: relative; }
+.srow + .srow::before { content: ""; position: absolute; top: 0; inset-inline: 56px 0; border-top: .5px solid var(--line); }
+.sicon { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-size: 17px; flex: none; box-shadow: inset 0 0 0 .5px #0002; }
+.slabel { flex: 1 1 auto; }
+.sval { color: var(--muted); font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: ltr; }
+.schev { color: var(--muted); opacity: .6; font-size: 1.2rem; }
+.sbtn { color: #007aff; }
+.sfoot { color: var(--muted); font-size: .8rem; margin: -14px 14px 20px; }

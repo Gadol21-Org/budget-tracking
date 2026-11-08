@@ -1,7 +1,9 @@
 import { type ReactElement, useState } from "react";
 import { api } from "../api";
-import { LinkCard } from "../components/LinkCard";
-import { go } from "../nav";
+import { BackButton } from "../components/BackButton";
+import { go, goBack } from "../nav";
+import { enabledCurrencies } from "../currencies";
+import { state } from "../state";
 import { load } from "../sync";
 import { openLog } from "./log";
 import { openPeople } from "./people";
@@ -11,7 +13,47 @@ export function settingsView(): ReactElement {
   return <Settings />;
 }
 
+export function dataTransferView(): ReactElement {
+  return <DataTransfer />;
+}
+
+type RowProps = { icon: string; color: [string, string]; label: string; value?: string; onClick: () => void };
+
+/** One row of the grouped list: a gradient icon, the name, the current value and a chevron (like iOS Settings). */
+function Row({ icon, color, label, value, onClick }: RowProps) {
+  return (
+    <button className="srow" onClick={onClick}>
+      <span className="sicon" style={{ background: `linear-gradient(180deg, ${color[0]}, ${color[1]})` }} aria-hidden="true">
+        {icon}
+      </span>
+      <span className="slabel">{label}</span>
+      {value && <span className="sval">{value}</span>}
+      <span className="schev" aria-hidden="true">‹</span>
+    </button>
+  );
+}
+
 function Settings() {
+  return (
+    <div>
+      <h1>הגדרות</h1>
+      <div className="sgroup">
+        <Row icon="▦" color={["#ffb340", "#ff8a00"]} label="קטגוריות" value={String(state.cats.length)} onClick={() => go("categories")} />
+        <Row icon="₪" color={["#5fe27f", "#22b84a"]} label="מטבעות" value={enabledCurrencies().join(" · ")} onClick={() => go("currencies")} />
+      </div>
+      <div className="sgroup">
+        <Row icon="⇅" color={["#5ab4ff", "#0a6cff"]} label="ייבוא וייצוא" onClick={() => go("dataTransfer")} />
+      </div>
+      <div className="sgroup">
+        <Row icon="↺" color={["#b4b4ba", "#7c7c82"]} label="היסטוריית שינויים" onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))} />
+        <Row icon="☺" color={["#cf7bf2", "#9b3fd0"]} label="שמות משתמשים" onClick={() => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"))} />
+      </div>
+      <SumitCard />
+    </div>
+  );
+}
+
+function DataTransfer() {
   const [out, setOut] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const run = (work: () => Promise<string>) => async () => {
@@ -42,35 +84,21 @@ function Settings() {
   });
   return (
     <div>
-      <h1>הגדרות</h1>
-      <div className="card">
-        <p className="muted">ייבוא מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות. ייצוא כותב עותק לגיליון Google.</p>
-        <div className="actions" style={{ justifyContent: "flex-start" }}>
-          <button className="btn" disabled={busy} onClick={importFromPaamonim}>
-            ייבוא מפעמונים
-          </button>
-          <button className="btn" disabled={busy} onClick={exportToSheets}>
-            ייצוא ל-Google Sheets
-          </button>
+      <div className="card filterbar">
+        <BackButton onClick={() => goBack("settings")} />
+        <div className="grow">
+          <div className="name">ייבוא וייצוא</div>
         </div>
-        <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>
       </div>
-      <LinkCard title="קטגוריות" text="הוספה ומחיקה של קטגוריות ותתי-קטגוריות." button="עריכת קטגוריות" onClick={() => go("categories")} />
-      <LinkCard title="עסקים" text="עסקים ותתי-עסקים לצפייה ברווח והפסד, בלי להוציא את התנועות מסיכום משק הבית." button="ניהול עסקים" onClick={() => go("businesses")} />
-      <LinkCard title="מטבעות" text="בחירת המטבעות שמוצגים בהוספת תנועה, וסדר הופעתם." button="ניהול מטבעות" onClick={() => go("currencies")} />
-      <SumitCard />
-      <LinkCard
-        title="היסטוריית שינויים"
-        text="כל הוספה, עריכה ומחיקה של תנועות, קטגוריות והוצאות חוזרות, עם הערכים לפני ואחרי. נשמרת שנה אחת."
-        button="צפייה בהיסטוריית שינויים"
-        onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))}
-      />
-      <LinkCard
-        title="שמות משתמשים"
-        text="מי ביצע כל שינוי נרשם בהיסטוריה לפי כתובת האימייל. אפשר לתת לכל כתובת שם תצוגה."
-        button="ניהול שמות"
-        onClick={() => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"))}
-      />
+      <div className="sgroup">
+        <button className="srow sbtn" disabled={busy} onClick={importFromPaamonim}>ייבוא מפעמונים</button>
+      </div>
+      <div className="sfoot">מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות.</div>
+      <div className="sgroup">
+        <button className="srow sbtn" disabled={busy} onClick={exportToSheets}>ייצוא ל-Google Sheets</button>
+      </div>
+      <div className="sfoot">כותב עותק לגיליון Google.</div>
+      <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>
     </div>
   );
 }
