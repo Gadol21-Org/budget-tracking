@@ -7,7 +7,7 @@ import { state } from "../state";
 import { load } from "../sync";
 import { openLog } from "./log";
 import { openPeople } from "./people";
-import { SumitCard } from "./sumit";
+import { SettingsRow as Row } from "../components/SettingsRow";
 
 export function settingsView(): ReactElement {
   return <Settings />;
@@ -17,20 +17,10 @@ export function dataTransferView(): ReactElement {
   return <DataTransfer />;
 }
 
-type RowProps = { icon: string; color: [string, string]; label: string; value?: string; onClick: () => void };
-
-/** One row of the grouped list: a gradient icon, the name, the current value and a chevron (like iOS Settings). */
-function Row({ icon, color, label, value, onClick }: RowProps) {
-  return (
-    <button className="srow" onClick={onClick}>
-      <span className="sicon" style={{ background: `linear-gradient(180deg, ${color[0]}, ${color[1]})` }} aria-hidden="true">
-        {icon}
-      </span>
-      <span className="slabel">{label}</span>
-      {value && <span className="sval">{value}</span>}
-      <span className="schev" aria-hidden="true">‹</span>
-    </button>
-  );
+/** What the Sumit row shows: receipts waiting for a category, new ones, or nothing. */
+function sumitValue(): string {
+  const { held, unread } = state.sumit;
+  return held ? `${held} ממתינות` : unread ? `${unread} חדשות` : "";
 }
 
 function Settings() {
@@ -42,13 +32,13 @@ function Settings() {
         <Row icon="₪" color={["#5fe27f", "#22b84a"]} label="מטבעות" value={enabledCurrencies().join(" · ")} onClick={() => go("currencies")} />
       </div>
       <div className="sgroup">
+        <Row icon="🧾" color={["#2dd4bf", "#0f766e"]} label="קבלות מ-Sumit" value={sumitValue()} onClick={() => go("sumit")} />
         <Row icon="⇅" color={["#5ab4ff", "#0a6cff"]} label="ייבוא וייצוא" onClick={() => go("dataTransfer")} />
       </div>
       <div className="sgroup">
         <Row icon="↺" color={["#b4b4ba", "#7c7c82"]} label="היסטוריית שינויים" onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))} />
         <Row icon="☺" color={["#cf7bf2", "#9b3fd0"]} label="שמות משתמשים" onClick={() => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"))} />
       </div>
-      <SumitCard />
     </div>
   );
 }

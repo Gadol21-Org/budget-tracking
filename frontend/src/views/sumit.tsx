@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type SumitOverview } from "../api";
 import { CategoryPicker, type CategoryChoice } from "../components/CategoryPicker";
+import { BackButton } from "../components/BackButton";
 import { clickableProps } from "../components/clickable";
 import { openReactDialog } from "../components/openReactDialog";
-import { go } from "../nav";
+import { SettingsRow } from "../components/SettingsRow";
+import { go, goBack } from "../nav";
 import { render } from "../render";
 import { state } from "../state";
 import { load } from "../sync";
@@ -67,8 +69,8 @@ export function PushOffer() {
   );
 }
 
-/** Settings card: check Sumit for new receipts now, see receipts not yet seen, and open the mapping. */
-export function SumitCard() {
+/** Settings page: check Sumit for new receipts now, see receipts not yet seen, and open the mapping. */
+export function SumitPage() {
   const [data, setData] = useState<SumitOverview | undefined>(state.sumitData);
   const [failed, setFailed] = useState(false);
   const [out, setOut] = useState<{ text: string; error: boolean } | null>(null);
@@ -117,44 +119,52 @@ export function SumitCard() {
   };
   const unseen = data?.notices.filter((n) => !n.read).slice(0, 5) ?? [];
   const products = data ? [...new Set(data.held.flatMap((h) => h.products))].join(", ") : "";
+  const status = !data
+    ? failed
+      ? "טעינת הנתונים נכשלה"
+      : "טוען…"
+    : !data.configured
+      ? "החיבור ל-Sumit עדיין לא הוגדר בשרת."
+      : `בדיקה אחרונה: ${when(data.last_poll_at)} · הבאה: ${when(data.next_poll_at)} · קריאות החודש: ${data.calls_this_month}/${data.monthly_limit}${data.last_error ? ` · שגיאה: ${data.last_error}` : ""}`;
   return (
-    <div className="card">
-      <h2>קבלות מ-Sumit</h2>
-      <p className="muted">קבלות חדשות נמשכות אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00) ונרשמות כהכנסה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין לחצן רענון אוטומטי.</p>
-      <div className="note muted">
-        {!data
-          ? failed
-            ? "טעינת הנתונים נכשלה"
-            : "טוען…"
-          : !data.configured
-            ? "החיבור ל-Sumit עדיין לא הוגדר בשרת."
-            : `בדיקה אחרונה: ${when(data.last_poll_at)} · הבאה: ${when(data.next_poll_at)} · קריאות החודש: ${data.calls_this_month}/${data.monthly_limit}${data.last_error ? ` · שגיאה: ${data.last_error}` : ""}`}
+    <div>
+      <div className="card filterbar">
+        <BackButton onClick={() => goBack("settings")} />
+        <div className="grow">
+          <div className="name">קבלות מ-Sumit</div>
+        </div>
       </div>
-      {data && data.held.length > 0 && <div className="note error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"הגדרת מוצרי Sumit" והם ייובאו.`}</div>}
-      <div>
-        {unseen.map((n, i) => (
-          <div className="row" key={i}>
-            <div className="grow">
-              <div className="name">{`● ${n.title}`}</div>
-              <div className="muted">{`${when(n.at)} · ${n.body}`}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="actions" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
-        <button className="btn primary" disabled={busy || !data?.configured} onClick={() => void check()}>
+      <div className="sfoot top">קבלות וזיכויים חדשים נמשכים אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00). קבלה נרשמת כהכנסה וזיכוי כהוצאה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין רענון אוטומטי.</div>
+      {data && data.held.length > 0 && (
+        <div className="sgroup">
+          <div className="snote error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"מוצרי Sumit" והם ייובאו.`}</div>
+        </div>
+      )}
+      <div className="sgroup">
+        <SettingsRow icon="⚙" color={["#b4b4ba", "#7c7c82"]} label="מוצרי Sumit" value={data?.products.length ? String(data.products.length) : ""} onClick={() => data && openMapping(data, () => void refresh())} />
+        <button className="srow sbtn" disabled={busy || !data?.configured} onClick={() => void check()}>
           בדיקת קבלות חדשות עכשיו
         </button>
-        <button className="btn" onClick={() => data && openMapping(data, () => void refresh())}>
-          הגדרת מוצרי Sumit
-        </button>
         {state.sumit.offerPush && (
-          <button className="btn" onClick={() => void push()}>
+          <button className="srow sbtn" onClick={() => void push()}>
             הפעלת התראות במכשיר
           </button>
         )}
       </div>
+      <div className="sfoot">{status}</div>
       {out && <div className={out.error ? "note error" : "note muted"}>{out.text}</div>}
+      {unseen.length > 0 && (
+        <div className="sgroup">
+          {unseen.map((n, i) => (
+            <div className="srow notice" key={i}>
+              <div className="slabel">
+                <div className="name">{`● ${n.title}`}</div>
+                <div className="muted">{`${when(n.at)} · ${n.body}`}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -258,4 +268,8 @@ export function openMapping(o: SumitOverview, done: () => void, only?: string[])
     ),
     "fullpage",
   );
+}
+
+export function sumitView() {
+  return <SumitPage />;
 }
