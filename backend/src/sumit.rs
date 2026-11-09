@@ -1104,6 +1104,9 @@ pub async fn run_scheduler(db: std::sync::Arc<dyn Storage>, cfg: Config) {
             }
         }
         poll_and_notify(db.as_ref(), &api, &cfg).await.ok();
+        // Imported receipts are ordinary transactions waiting for Paamonim: send them now,
+        // not at the next edit someone happens to make.
+        crate::api::mirror_in_background(&db);
     }
 }
 
@@ -1319,6 +1322,12 @@ mod tests {
         assert_eq!(txs.len(), 2);
         assert_eq!(txs.iter().map(|t| t.amount_agorot).sum::<i64>(), 11_800);
         assert!(txs.iter().all(|t| t.note.contains("[sumit:77]")));
+        // They wait for Paamonim like any new transaction (the poll then starts the mirror).
+        assert_eq!(
+            db.pending_mirrors().await.unwrap().len(),
+            txs.len(),
+            "imported receipts are queued for Paamonim"
+        );
         assert_eq!(db.business_links().await.unwrap().transactions.len(), 1);
         let notices: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
         assert_eq!(notices.len(), 1);
