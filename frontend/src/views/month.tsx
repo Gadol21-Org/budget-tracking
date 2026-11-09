@@ -9,7 +9,7 @@ import { goBack, showSide } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { DrillCrumbs, SummaryCategories } from "./insights";
-import { categoryName } from "../categories";
+import { categoryName, isIncomeTx } from "../categories";
 import { inPeriod } from "../selectors";
 import { PushOffer, SumitBanner } from "./sumit";
 
@@ -88,8 +88,9 @@ function MonthScreen() {
     );
   }
   const txs = inPeriod();
-  const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
-  const expense = txs.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
+  // By category, not by sign: a refund is a negative income and lowers the income.
+  const income = txs.filter((t) => isIncomeTx(state.cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
+  const expense = txs.filter((t) => !isIncomeTx(state.cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
   const balance = income + expense;
   return (
     <div>

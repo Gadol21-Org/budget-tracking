@@ -123,7 +123,7 @@ export function SumitPage() {
     setOut({ text: "בודק…", error: false });
     try {
       const r = await api.sumitPoll();
-      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "אין קבלות חדשות." });
+      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות` : "", r.refunds ? `${r.refunds} זיכויים` : ""].filter(Boolean).join(" ו-") ? `נמצאו ${[r.new_receipts ? `${r.new_receipts} קבלות חדשות` : "", r.refunds ? `${r.refunds} זיכויים` : ""].filter(Boolean).join(" ו-")} (${r.transactions} תנועות הכנסה).` : "אין קבלות חדשות." });
       await load();
     } catch (e) {
       setOut({ error: true, text: `שגיאה: ${e instanceof Error ? e.message : e}` });
