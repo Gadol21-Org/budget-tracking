@@ -466,12 +466,12 @@ dialog { overscroll-behavior: contain; }
 .snote { padding: 12px 14px; font-size: .9rem; }
 .snote.error { color: var(--expense, #c0392b); }
 .srow.notice { padding-block: 10px; cursor: default; }
-.sumit-products { padding: 0; overflow: hidden; }
-.sumit-product { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 4px 12px; cursor: pointer; border: 0; }
-.sumit-product + .sumit-product { border-top: .5px solid var(--line); }
-.sumit-product .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sumit-product { padding-block: 0; }
+.sumit-product .name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sumit-product .schev { margin-inline-start: -4px; }
 .sp-tag { flex: none; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 1px 8px; font-size: .72rem; font-weight: 700; line-height: 1.5; }
 .sp-tag.ok { background: rgba(47, 158, 107, .15); color: #2f9e6b; }
 .sp-tag.warn { background: rgba(217, 119, 6, .16); color: #b45309; }
 .sp-tag.prod { background: var(--biz-soft); color: var(--biz); }
 .sp-tag.off { color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+.sumit-product + .sumit-product::before { inset-inline: 14px 0; }

@@ -248,7 +248,7 @@ function ProductLine({ p, onOpen }: { p: SumitProduct; onOpen: () => void }) {
   const prod = p.business_id != null ? productName(state.products, p.business_id) : "";
   const cat = p.category_id != null ? catName(p.category_id) : "";
   return (
-    <div className="row sumit-product" {...clickableProps(onOpen)}>
+    <div className="srow sumit-product" {...clickableProps(onOpen)}>
       <div className="name grow">{p.name}</div>
       <span className={cat ? "sp-tag ok" : "sp-tag warn"}>{cat || "ללא קטגוריה"}</span>
       <span className={prod ? "sp-tag prod" : "sp-tag off"}>{prod || "ללא מוצר"}</span>
@@ -309,7 +309,7 @@ function ProductMapping({ initial, only, close, done }: { initial: SumitProduct[
       <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "מוצר באפליקציה וקטגוריה לכל מוצר Sumit"}</h3>
       {rows.length > 8 && <input type="search" id="sumit-product-search" placeholder="חיפוש מוצר…" value={q} onChange={(e) => setQ(e.target.value)} />}
       {shown.length ? (
-        <div className="card sumit-products">
+        <div className="sgroup">
           {shown.map((p) => (
             <ProductLine key={p.name} p={p} onOpen={() => setOpen(p.name)} />
           ))}
