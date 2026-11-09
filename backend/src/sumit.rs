@@ -993,6 +993,10 @@ async fn persist_lists(
 /// Try the held receipts again with the current mapping. Makes no Sumit calls. Returns how
 /// many were imported.
 pub async fn retry_held(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize> {
+    crate::oplog::as_sync(retry_held_inner(db, now)).await
+}
+
+async fn retry_held_inner(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize> {
     let mut state: State = load(db, STATE_KEY).await?;
     if state.held.is_empty() {
         return Ok(0);
@@ -1071,7 +1075,7 @@ pub async fn poll_and_notify(
     api: &dyn SumitApi,
     cfg: &Config,
 ) -> Result<PollSummary> {
-    match poll_once(db, api, cfg, Utc::now()).await {
+    match crate::oplog::as_sync(poll_once(db, api, cfg, Utc::now())).await {
         Ok(s) => {
             tracing::info!(
                 "sumit: {} new receipts, {} transactions, {} calls",
