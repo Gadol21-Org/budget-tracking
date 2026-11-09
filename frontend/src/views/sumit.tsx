@@ -158,7 +158,7 @@ export function SumitPage() {
           <div className="name">קבלות מ-Sumit</div>
         </div>
       </div>
-      <div className="sfoot top">קבלות חדשות נמשכות אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00) ונרשמות כהכנסה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין רענון אוטומטי.</div>
+      <div className="sfoot top">קבלות חדשות נמשכות אוטומטית פעם ביום (19:00) ונרשמות כהכנסה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין רענון אוטומטי.</div>
       {data && data.held.length > 0 && (
         <div className="sgroup">
           <div className="snote error">{`${data.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"}). הגדירו ב"מוצרי Sumit" והקבלות ייובאו.`}</div>

@@ -85,7 +85,9 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
         })
         .collect();
     let now = Utc::now();
-    let hours = cfg.as_ref().map_or(vec![7, 13, 19], |c| c.hours.clone());
+    let hours = cfg
+        .as_ref()
+        .map_or(vec![sumit::DEFAULT_HOUR], |c| c.hours.clone());
     let mut notices: Vec<Notice> = sumit::load(db.as_ref(), sumit::NOTICES_KEY)
         .await
         .map_err(internal)?;

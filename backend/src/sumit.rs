@@ -1,7 +1,7 @@
 //! New receipts from Sumit (sumit.co.il) become income transactions.
 //!
 //! Sumit's API allows only about 250 calls a month, so the poller is frugal:
-//! * it runs at fixed Israel-time slots (default 07:00, 13:00 and 19:00, never later than 22:30),
+//! * it runs at fixed Israel-time slots (default once a day at 19:00, never later than 22:30),
 //!   never at start-up and never in a retry loop: a failed poll waits for the next slot;
 //! * a poll is one `documents/list` call (plus one `getdetails` call per *new* receipt, to learn
 //!   its products), filtered by date and by receipt types, and everything already seen is skipped;
@@ -15,7 +15,7 @@
 //! `[sumit:<id>]` marker kept in the note of the imported transactions.
 //!
 //! Config (environment; the API key is a secret and is never logged or committed):
-//! `SUMIT_API_KEY`, `SUMIT_COMPANY_ID`, optional `SUMIT_BASE_URL`, `SUMIT_POLL_HOURS` ("7,13,19"),
+//! `SUMIT_API_KEY`, `SUMIT_COMPANY_ID`, optional `SUMIT_BASE_URL`, `SUMIT_POLL_HOURS` ("19"; several: "7,13,19"),
 //! `SUMIT_MONTHLY_CALL_LIMIT`, `SUMIT_START_DATE` (first poll looks back to this day).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +37,8 @@ pub const PRODUCTS_KEY: &str = "sumit_product_map";
 
 const DEFAULT_BASE: &str = "https://api.sumit.co.il";
 const DEFAULT_LIMIT: u32 = 240;
+/// When the daily poll runs (Israel time) unless `SUMIT_POLL_HOURS` says otherwise.
+pub const DEFAULT_HOUR: u32 = 19;
 /// Receipt-like document types: InvoiceAndReceipt (1), Receipt (2), DonationReceipt (4).
 const RECEIPT_TYPES: [i64; 3] = [1, 2, 4];
 const MAX_PAGES: usize = 3;
@@ -76,7 +78,7 @@ impl Config {
             .context("SUMIT_COMPANY_ID must be a number")?;
         let hours = match env_nonempty("SUMIT_POLL_HOURS") {
             Some(h) => parse_hours(&h)?,
-            None => vec![7, 13, 19],
+            None => vec![DEFAULT_HOUR],
         };
         Ok(Some(Config {
             base_url: env_nonempty("SUMIT_BASE_URL").unwrap_or_else(|| DEFAULT_BASE.into()),
