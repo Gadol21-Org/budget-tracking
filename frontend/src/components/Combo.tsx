@@ -147,13 +147,11 @@ export function Combo({ items, value, onChange, placeholder, disabled = false, c
           type="button"
           className="combo-clear"
           aria-label="נקה בחירה"
-          // mousedown, so the field keeps focus; then reopen the list so the user can search again.
+          // mousedown, so the field's focus is left alone; the list stays shut until the user taps the field.
           onMouseDown={(e) => {
             e.preventDefault();
             onChange("");
             setTyped(null);
-            inputRef.current?.focus();
-            setOpen(true);
           }}
         >
           ×

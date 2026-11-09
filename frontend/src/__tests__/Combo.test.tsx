@@ -68,14 +68,14 @@ describe("Combo", () => {
     expect(input.value).toBe("מסעדות");
   });
 
-  it("clears the pick with the X button and reopens the full list", () => {
+  it("clears the pick with the X button without opening the list", () => {
     render(<Host />);
     const input = screen.getByPlaceholderText("חיפוש…") as HTMLInputElement;
     fireEvent.focus(input);
     fireEvent.mouseDown(screen.getByRole("option", { name: "מזון" }));
     fireEvent.mouseDown(screen.getByLabelText("נקה בחירה"));
     expect(input.value).toBe("");
-    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(input.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("never shows its list while disabled", () => {
