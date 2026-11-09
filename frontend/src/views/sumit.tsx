@@ -166,26 +166,24 @@ export function SumitPage() {
       )}
       <div className="sgroup">
         <SettingsRow icon="⚙" color={["#b4b4ba", "#7c7c82"]} label="מוצרי Sumit" value={data?.products.length ? String(data.products.length) : ""} onClick={() => data && openMapping(data, () => void refresh())} />
-        <button className="srow sbtn" disabled={busy || !data?.configured} onClick={() => void check()}>
-          בדיקת קבלות חדשות עכשיו
-        </button>
-        {state.sumit.offerPush && (
-          <button className="srow sbtn" onClick={() => void push()}>
-            הפעלת התראות במכשיר
-          </button>
-        )}
+        <SettingsRow label="בדיקת קבלות חדשות עכשיו" action disabled={busy || !data?.configured} onClick={() => void check()} />
+        {state.sumit.offerPush && <SettingsRow label="הפעלת התראות במכשיר" action onClick={() => void push()} />}
       </div>
       <div className="sfoot">{status}</div>
       {out && <div className={out.error ? "note error" : "note muted"}>{out.text}</div>}
       {unseen.length > 0 && (
         <div className="sgroup">
           {unseen.map((n, i) => (
-            <div className="srow notice" key={i}>
-              <div className="slabel">
-                <div className="name">{`● ${n.title}`}</div>
-                <div className="muted">{`${when(n.at)} · ${n.body}`}</div>
-              </div>
-            </div>
+            <SettingsRow
+              key={i}
+              multiline
+              label={
+                <>
+                  <div className="name">{`● ${n.title}`}</div>
+                  <div className="muted">{`${when(n.at)} · ${n.body}`}</div>
+                </>
+              }
+            />
           ))}
         </div>
       )}
@@ -248,12 +246,16 @@ function ProductLine({ p, onOpen }: { p: SumitProduct; onOpen: () => void }) {
   const prod = p.business_id != null ? productName(state.products, p.business_id) : "";
   const cat = p.category_id != null ? catName(p.category_id) : "";
   return (
-    <div className="srow sumit-product" {...clickableProps(onOpen)}>
-      <div className="name grow">{p.name}</div>
-      <span className={cat ? "sp-tag ok" : "sp-tag warn"}>{cat || "ללא קטגוריה"}</span>
-      <span className={prod ? "sp-tag prod" : "sp-tag off"}>{prod || "ללא מוצר"}</span>
-      <span className="schev" aria-hidden="true">‹</span>
-    </div>
+    <SettingsRow
+      label={p.name}
+      onClick={onOpen}
+      tags={
+        <>
+          <span className={cat ? "sp-tag ok" : "sp-tag warn"}>{cat || "ללא קטגוריה"}</span>
+          <span className={prod ? "sp-tag prod" : "sp-tag off"}>{prod || "ללא מוצר"}</span>
+        </>
+      }
+    />
   );
 }
 
