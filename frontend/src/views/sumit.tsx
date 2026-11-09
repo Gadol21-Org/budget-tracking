@@ -45,9 +45,28 @@ export function SumitBanner() {
   );
 }
 
-/** Offers to turn on notifications for new Sumit receipts, only while the server does not hold this device yet. */
+const DISMISSED_KEY = "budget.sumit.pushOfferDismissed";
+
+/** The offer on the summary was closed on this device (it stays available in the Sumit settings page). */
+function offerDismissed(): boolean {
+  try {
+    return localStorage.getItem(DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Offers to turn on notifications for new Sumit receipts, only while the server does not hold this device yet. The X hides it on this device; the same option is in the Sumit settings page. */
 export function PushOffer() {
-  if (!state.sumit.offerPush) return null;
+  if (!state.sumit.offerPush || offerDismissed()) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(DISMISSED_KEY, "1");
+    } catch {
+      /* private mode: it just comes back next time */
+    }
+    render();
+  };
   const ask = async () => {
     try {
       await enablePush(state.sumit.pushKey!);
@@ -58,7 +77,10 @@ export function PushOffer() {
     render();
   };
   return (
-    <div className="sumit-banner" role="status">
+    <div className="sumit-banner offer" role="status">
+      <button className="dismiss" aria-label="סגירה" title="סגירה (אפשר להפעיל בהגדרות)" onClick={dismiss}>
+        ×
+      </button>
       <div>לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?</div>
       <div className="actions" style={{ justifyContent: "flex-start", marginTop: 8 }}>
         <button className="btn primary" onClick={() => void ask()}>
