@@ -12,7 +12,7 @@ const ITEMS = [
 
 function Host({ disabled = false }: { disabled?: boolean }) {
   const [value, setValue] = useState("");
-  return <Combo items={ITEMS} value={value} onChange={setValue} placeholder="חיפוש…" disabled={disabled} />;
+  return <Combo items={ITEMS} value={value} onChange={setValue} placeholder="חיפוש…" disabled={disabled} clearable />;
 }
 
 afterEach(cleanup);
@@ -55,6 +55,27 @@ describe("Combo", () => {
     fireEvent.change(input, { target: { value: "תח" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(input.value).toBe("תחבורה");
+  });
+
+  it("moves through matches with the arrow keys and picks the highlighted one on Enter", () => {
+    render(<Host />);
+    const input = screen.getByPlaceholderText("חיפוש…") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "מ" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("מסעדות");
+  });
+
+  it("clears the pick with the X button and reopens the full list", () => {
+    render(<Host />);
+    const input = screen.getByPlaceholderText("חיפוש…") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.mouseDown(screen.getByRole("option", { name: "מזון" }));
+    fireEvent.mouseDown(screen.getByLabelText("נקה בחירה"));
+    expect(input.value).toBe("");
+    expect(screen.getAllByRole("option")).toHaveLength(3);
   });
 
   it("never shows its list while disabled", () => {

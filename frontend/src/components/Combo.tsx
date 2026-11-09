@@ -12,18 +12,22 @@ interface Props {
   onChange: (value: string) => void;
   placeholder: string;
   disabled?: boolean;
+  /** Show an X that empties the pick (for optional or re-pickable fields). */
+  clearable?: boolean;
 }
 
 /**
  * A text field with a drop-down list that narrows as you type. Picking an item calls `onChange`;
  * leaving the field with text that matches nothing puts the picked label back.
  */
-export function Combo({ items, value, onChange, placeholder, disabled = false }: Props) {
+export function Combo({ items, value, onChange, placeholder, disabled = false, clearable = false }: Props) {
   const [openState, setOpen] = useState(false);
   // A disabled field never shows its list.
   const open = openState && !disabled;
   /** What was typed since the list opened; null shows the picked label. */
   const [typed, setTyped] = useState<string | null>(null);
+  /** The list row highlighted with the arrow keys; -1 for none (Enter then takes the first match). */
+  const [active, setActive] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -37,6 +41,7 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
   const close = useCallback(() => {
     setOpen(false);
     setTyped(null);
+    setActive(-1);
   }, []);
   const justPicked = () => Date.now() - pickedAt.current <= 500;
 
@@ -47,11 +52,17 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
     inputRef.current?.blur();
   };
 
+  // Keep the highlighted row in view while arrowing through a long list.
+  useEffect(() => {
+    if (active >= 0) listRef.current?.querySelectorAll("button")[active]?.scrollIntoView?.({ block: "nearest" });
+  }, [active]);
+
   // Only a tap elsewhere closes the list: dismissing the phone keyboard also blurs the field and must not,
   // and neither must scrolling (a scroll gesture fires pointerdown but no click).
   useEffect(() => {
     if (!open) return;
-    const outside = (e: Event) => rootRef.current?.contains(e.target as Node) || close();
+    // (A target that has left the page, like the X that just emptied the field, is not a tap elsewhere.)
+    const outside = (e: Event) => rootRef.current?.contains(e.target as Node) || !(e.target as Node).isConnected || close();
     document.addEventListener("click", outside, true);
     return () => document.removeEventListener("click", outside, true);
   }, [open, close]);
@@ -108,7 +119,7 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
           setOpen(true);
         }}
         onClick={(e) => (justPicked() ? e.currentTarget.blur() : setOpen(true))}
-        onChange={(e) => (setTyped(e.target.value), setOpen(true))}
+        onChange={(e) => (setTyped(e.target.value), setActive(-1), setOpen(true))}
         onKeyDown={(e) => {
           if (e.key === "Tab" && open) close();
           if (e.key === "Escape" && open) {
@@ -116,18 +127,43 @@ export function Combo({ items, value, onChange, placeholder, disabled = false }:
             e.preventDefault();
             close();
           }
-          if (e.key === "Enter" && open) {
-            // Enter takes the first match instead of submitting the form.
+          if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !disabled) {
             e.preventDefault();
-            if (shown[0]) pick(shown[0].value);
+            if (!open) return setOpen(true);
+            if (!shown.length) return;
+            const step = e.key === "ArrowDown" ? 1 : -1;
+            setActive(active < 0 ? (step > 0 ? 0 : shown.length - 1) : (active + step + shown.length) % shown.length);
+          }
+          if (e.key === "Enter" && open) {
+            // Enter takes the highlighted match (else the first) instead of submitting the form.
+            e.preventDefault();
+            const item = shown[active] ?? shown[0];
+            if (item) pick(item.value);
           }
         }}
       />
+      {clearable && value && !disabled && (
+        <button
+          type="button"
+          className="combo-clear"
+          aria-label="נקה בחירה"
+          // mousedown, so the field keeps focus; then reopen the list so the user can search again.
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onChange("");
+            setTyped(null);
+            inputRef.current?.focus();
+            setOpen(true);
+          }}
+        >
+          ×
+        </button>
+      )}
       <div className="combo-list" role="listbox" hidden={!open} ref={listRef}>
         {shown.length ? (
-          shown.map((i) => (
+          shown.map((i, n) => (
             // mousedown, so the pick lands before the input's blur closes the list.
-            <button key={i.value} type="button" role="option" aria-selected={i.value === value} onMouseDown={(e) => (e.preventDefault(), pick(i.value))}>
+            <button key={i.value} type="button" role="option" aria-selected={i.value === value} data-active={n === active || undefined} onMouseDown={(e) => (e.preventDefault(), pick(i.value))}>
               {i.label}
             </button>
           ))

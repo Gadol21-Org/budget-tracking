@@ -33,10 +33,11 @@ export function CategoryPicker({ cats, value, onChange, tops }: Props) {
   return (
     <>
       <Field label="קטגוריה">
-        <Combo items={topItems} value={value.top} placeholder="חיפוש קטגוריה…" onChange={(top) => onChange({ top, sub: "" })} />
+        <Combo clearable items={topItems} value={value.top} placeholder="חיפוש קטגוריה…" onChange={(top) => onChange({ top, sub: "" })} />
       </Field>
       <Field label="תת-קטגוריה">
         <Combo
+          clearable
           items={subItems}
           value={value.sub}
           disabled={noSubs}
