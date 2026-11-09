@@ -432,6 +432,8 @@ dialog { overscroll-behavior: contain; }
 
 /* Summary banner: Sumit receipts that were imported or are waiting for a category. */
 .sumit-banner { margin: 10px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--brand-soft, var(--surface)); border: 1px solid var(--brand); color: var(--text); cursor: pointer; font-weight: 600; }
+.sumit-banner.offer { position: relative; padding-inline-end: 40px; cursor: default; }
+.sumit-banner .dismiss { position: absolute; top: 4px; inset-inline-end: 6px; width: 30px; height: 30px; border: 0; background: none; color: var(--muted); font-size: 1.4rem; line-height: 1; cursor: pointer; border-radius: 50%; }
 .sumit-banner.warn { border-color: var(--expense, #c0392b); }
 .bizhub .bizmenu-title { font-size: 1rem; margin: 16px 0 6px; color: var(--muted); }
 .bizmenu { display: grid; gap: 8px; }
@@ -459,3 +461,8 @@ dialog { overscroll-behavior: contain; }
 .schev { color: var(--muted); opacity: .6; font-size: 1.2rem; }
 .sbtn { color: #007aff; }
 .sfoot { color: var(--muted); font-size: .8rem; margin: -14px 14px 20px; }
+
+.sfoot.top { margin: 4px 14px 14px; }
+.snote { padding: 12px 14px; font-size: .9rem; }
+.snote.error { color: var(--expense, #c0392b); }
+.srow.notice { padding-block: 10px; cursor: default; }

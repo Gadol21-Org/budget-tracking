@@ -92,7 +92,10 @@ function LogLines({ e }: { e: LogEntry }) {
 }
 
 /** The display name given to an email, else the email itself. */
-export const userLabel = (email: string) => state.logUsers.find((u) => u.email === email)?.name || email;
+export const userLabel = (email: string) => (email === SYNC_ACTOR ? "Sumit Sync" : state.logUsers.find((u) => u.email === email)?.name || email);
+
+/** The author the server records for changes made by the Sumit sync (not a person). */
+const SYNC_ACTOR = "sumit-sync";
 
 function LogEntryRow({ e }: { e: LogEntry }) {
   const [ico, label] = LOG_KINDS[e.kind] ?? ["•", e.kind];
@@ -107,7 +110,7 @@ function LogEntryRow({ e }: { e: LogEntry }) {
           {label}
           {what ? <span className="muted">{` · ${what}`}</span> : null}
         </div>
-        {e.user_email ? <div className="logline muted">{`👤 ${userLabel(e.user_email)}`}</div> : null}
+        {e.user_email ? <div className="logline muted">{`${e.user_email === SYNC_ACTOR ? "🏢" : "👤"} ${userLabel(e.user_email)}`}</div> : null}
         <LogLines e={e} />
       </div>
       <span className="muted logtime">{time}</span>
