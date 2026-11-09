@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type SumitOverview } from "../api";
+import { api, type Category, type SumitOverview } from "../api";
 import { CategoryPicker, type CategoryChoice } from "../components/CategoryPicker";
 import { BackButton } from "../components/BackButton";
 import { clickableProps } from "../components/clickable";
@@ -7,6 +7,8 @@ import { openReactDialog } from "../components/openReactDialog";
 import { SettingsRow } from "../components/SettingsRow";
 import { go, goBack } from "../nav";
 import { render } from "../render";
+import { productName } from "../business";
+import { catName } from "../selectors";
 import { state } from "../state";
 import { load } from "../sync";
 
@@ -191,18 +193,27 @@ export function SumitPage() {
   );
 }
 
-/** Business and income category of one product; every change is saved at once. */
-function ProductRow({ p }: { p: SumitOverview["products"][number] }) {
+type SumitProduct = SumitOverview["products"][number];
+
+/** The category the receipts go to: the sub-category, or the category itself when it has none. Empty until a usable one is picked. */
+function targetOf(income: Category[], c: CategoryChoice): string {
+  return c.sub || (c.top && !income.some((k) => String(k.parent_id) === c.top) ? c.top : "");
+}
+
+/** Product and income category of one Sumit product; every change is saved at once and reported to the list. */
+function ProductEditor({ p, onSaved }: { p: SumitProduct; onSaved: (p: SumitProduct) => void }) {
   const income = state.cats.filter((c) => c.is_income);
   const own = income.find((c) => c.id === p.category_id);
   const [biz, setBiz] = useState(p.business_id != null ? String(p.business_id) : "");
   const [pick, setPick] = useState<CategoryChoice>(own ? (own.parent_id != null ? { top: String(own.parent_id), sub: String(own.id) } : { top: String(own.id), sub: "" }) : { top: "", sub: "" });
-  /** The category the receipts go to: the sub-category, or the category itself when it has none. Empty until a usable one is picked. */
-  const target = (c: CategoryChoice) => c.sub || (c.top && !income.some((k) => String(k.parent_id) === c.top) ? c.top : "");
-  const save = (b: string, c: CategoryChoice) => void api.sumitProduct(p.name, b ? Number(b) : null, target(c) ? Number(target(c)) : null);
+  const save = (b: string, c: CategoryChoice) => {
+    const cat = targetOf(income, c);
+    const next = { name: p.name, business_id: b ? Number(b) : null, category_id: cat ? Number(cat) : null };
+    void api.sumitProduct(p.name, next.business_id, next.category_id);
+    onSaved(next);
+  };
   return (
-    <div className="card">
-      <div className="name">{p.name}</div>
+    <>
       <div className="field">
         <span>מוצר באפליקציה</span>
         <select
@@ -228,6 +239,20 @@ function ProductRow({ p }: { p: SumitOverview["products"][number] }) {
           save(biz, c);
         }}
       />
+    </>
+  );
+}
+
+/** One line per Sumit product: its name and what is set (app product, income category). */
+function ProductLine({ p, onOpen }: { p: SumitProduct; onOpen: () => void }) {
+  const prod = p.business_id != null ? productName(state.products, p.business_id) : "";
+  const cat = p.category_id != null ? catName(p.category_id) : "";
+  return (
+    <div className="row sumit-product" {...clickableProps(onOpen)}>
+      <div className="name grow">{p.name}</div>
+      <span className={cat ? "sp-tag ok" : "sp-tag warn"}>{cat || "ללא קטגוריה"}</span>
+      <span className={prod ? "sp-tag prod" : "sp-tag off"}>{prod || "ללא מוצר"}</span>
+      <span className="schev" aria-hidden="true">‹</span>
     </div>
   );
 }
@@ -257,39 +282,81 @@ function RefundCategory({ id }: { id: number | null }) {
   );
 }
 
-/** The business and income category of each product (or only of `only`, the products of receipts waiting for one). */
-export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
+/** The products of Sumit receipts: a compact searchable list (those still lacking a category first); tapping one opens its editor. */
+function ProductMapping({ initial, only, close, done, refund }: { initial: SumitProduct[]; only?: string[]; close: () => void; done: () => void; refund?: { id: number | null } }) {
+  const [rows, setRows] = useState(initial);
+  const [open, setOpen] = useState<string | null>(null);
+  const [q, setQ] = useState("");
   const wanted = only && new Set(only.map((n) => n.trim().toLowerCase()));
-  const rows = o.products.filter((p) => !wanted || wanted.has(p.name.trim().toLowerCase()));
-  openReactDialog(
-    (close) => (
+  const shown = rows
+    .filter((p) => (!wanted || wanted.has(p.name.trim().toLowerCase())) && p.name.toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((a, b) => Number(a.category_id != null) - Number(b.category_id != null) || a.name.localeCompare(b.name));
+  const editing = rows.find((p) => p.name === open);
+  if (editing)
+    return (
       <form
         className="add"
         method="dialog"
         style={{ justifyContent: "flex-start" }}
         onSubmit={(e) => {
           e.preventDefault();
-          close();
-          done();
+          setOpen(null);
         }}
       >
-        <h2>קבלות מ-Sumit: מוצרים</h2>
-        <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "מוצר באפליקציה וקטגוריה לכל מוצר Sumit"}</h3>
-        {(!only || o.held.some((h) => h.needs_refund_category)) && <RefundCategory id={o.refund_category_id} />}
-        {rows.length ? (
-          rows.map((p) => <ProductRow key={p.name} p={p} />)
-        ) : (
-          <div className="note muted">מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרי Sumit שמקושרים למוצרים או לקטגוריות שונים תתפצל לכמה תנועות.</div>
-        )}
+        <div className="card filterbar">
+          <BackButton onClick={() => setOpen(null)} />
+          <div className="grow">
+            <div className="name">{editing.name}</div>
+          </div>
+        </div>
+        <div className="card">
+          <ProductEditor p={editing} onSaved={(n) => setRows((r) => r.map((x) => (x.name === n.name ? n : x)))} />
+        </div>
         <div className="actions">
           <button type="submit" className="btn primary">
-            סגירה
+            חזרה לרשימה
           </button>
         </div>
       </form>
-    ),
-    "fullpage",
+    );
+  return (
+    <form
+      className="add"
+      method="dialog"
+      style={{ justifyContent: "flex-start" }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        close();
+        done();
+      }}
+    >
+      <h2>קבלות מ-Sumit: מוצרים</h2>
+      <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "מוצר באפליקציה וקטגוריה לכל מוצר Sumit"}</h3>
+      {refund && <RefundCategory id={refund.id} />}
+      {rows.length > 8 && <input type="search" id="sumit-product-search" placeholder="חיפוש מוצר…" value={q} onChange={(e) => setQ(e.target.value)} />}
+      {shown.length ? (
+        <div className="card sumit-products">
+          {shown.map((p) => (
+            <ProductLine key={p.name} p={p} onOpen={() => setOpen(p.name)} />
+          ))}
+        </div>
+      ) : rows.length ? (
+        <div className="note muted">לא נמצא מוצר בשם הזה.</div>
+      ) : (
+        <div className="note muted">מוצרים יופיעו כאן אחרי הבדיקה הראשונה. כל מוצר צריך קטגוריית הכנסה (תת-קטגוריה) משלו, אחרת הקבלה ממתינה. קבלה עם מוצרי Sumit שמקושרים למוצרים או לקטגוריות שונים תתפצל לכמה תנועות.</div>
+      )}
+      <div className="actions">
+        <button type="submit" className="btn primary">
+          סגירה
+        </button>
+      </div>
+    </form>
   );
+}
+
+/** The product and income category of each Sumit product (or only of `only`, the products of receipts waiting for one). */
+export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
+  openReactDialog((close) => <ProductMapping initial={o.products} only={only} close={close} done={done} refund={!only || o.held.some((h) => h.needs_refund_category) ? { id: o.refund_category_id } : undefined} />, "fullpage");
 }
 
 export function sumitView() {
