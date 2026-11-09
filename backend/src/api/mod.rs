@@ -11,6 +11,8 @@ pub(crate) use mirroring::{mirroring_enabled, run_mirror};
 
 use self::error::{internal, ApiError};
 use self::mirroring::trigger_mirror;
+/// For the Sumit poll, which creates transactions outside any request.
+pub(crate) use self::mirroring::trigger_mirror as mirror_in_background;
 use crate::assets;
 use crate::oplog;
 use crate::recurring;

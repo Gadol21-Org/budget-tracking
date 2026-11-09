@@ -163,9 +163,10 @@ pub(crate) async fn set_product(
             .await
             .map_err(internal)?;
     }
-    sumit::retry_held(db.as_ref(), Utc::now())
-        .await
-        .map_err(internal)?;
+    let retried = sumit::retry_held(db.as_ref(), Utc::now()).await;
+    // Held receipts that became importable are new transactions: send them to Paamonim now.
+    super::trigger_mirror(&db);
+    retried.map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -188,8 +189,10 @@ pub(crate) async fn poll_now(State(db): State<Db>) -> Result<Json<sumit::PollSum
     let cfg = config()?
         .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "Sumit is not configured".into()))?;
     let api = sumit::HttpApi::new(cfg.clone());
-    sumit::poll_and_notify(db.as_ref(), &api, &cfg)
-        .await
+    let polled = sumit::poll_and_notify(db.as_ref(), &api, &cfg).await;
+    // What was imported (even before an error stopped the poll) goes to Paamonim now.
+    super::trigger_mirror(&db);
+    polled
         .map(Json)
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("{e:#}")))
 }
