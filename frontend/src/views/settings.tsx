@@ -81,11 +81,11 @@ function DataTransfer() {
         </div>
       </div>
       <div className="sgroup">
-        <button className="srow sbtn" disabled={busy} onClick={importFromPaamonim}>ייבוא מפעמונים</button>
+        <Row label="ייבוא מפעמונים" action disabled={busy} onClick={importFromPaamonim} />
       </div>
       <div className="sfoot">מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות.</div>
       <div className="sgroup">
-        <button className="srow sbtn" disabled={busy} onClick={exportToSheets}>ייצוא ל-Google Sheets</button>
+        <Row label="ייצוא ל-Google Sheets" action disabled={busy} onClick={exportToSheets} />
       </div>
       <div className="sfoot">כותב עותק לגיליון Google.</div>
       <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>
