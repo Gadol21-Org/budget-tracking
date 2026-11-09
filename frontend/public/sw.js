@@ -62,8 +62,22 @@ self.addEventListener("push", (e) => {
       .then((o) => o.notices.filter((n) => !n.read))
       .catch(() => [])
       .then((unread) => {
-        const n = unread[0];
-        return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { body: n ? n.body : "", tag: "sumit-receipt", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" });
+        const opts = { tag: "sumit-receipt", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
+        if (unread.length <= 1) {
+          const n = unread[0];
+          return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { ...opts, body: n ? n.body : "" });
+        }
+        // Several at once: one notification that says what came in, with a line for each.
+        const held = unread.filter((n) => n.title.includes("ממתי")).length;
+        const refunds = unread.filter((n) => !n.title.includes("ממתי") && n.title.includes("זיכוי")).length;
+        const receipts = unread.length - held - refunds;
+        const parts = [];
+        if (receipts) parts.push(receipts === 1 ? "קבלה חדשה" : `${receipts} קבלות חדשות`);
+        if (refunds) parts.push(refunds === 1 ? "זיכוי" : `${refunds} זיכויים`);
+        if (held) parts.push(`${held} ממתינים לסיווג`);
+        const lines = unread.slice(0, 5).map((n) => n.title);
+        if (unread.length > 5) lines.push(`ועוד ${unread.length - 5}`);
+        return self.registration.showNotification(parts.join(", "), { ...opts, body: lines.join("\n") });
       }),
   );
 });
