@@ -39,6 +39,9 @@ function rememberedProduct(cat: number | null): number | null {
 /** The category a choice stands for, for the product rules: the sub-category, else the category. */
 const choiceCategory = (c: CategoryChoice) => (c.sub ? Number(c.sub) : c.top ? Number(c.top) : null);
 
+/** The number pad of an iPhone or iPad has no minus key, so a refund is ticked there instead of typed (an iPad can pass for a Mac). */
+const IOS_KEYPAD = typeof navigator !== "undefined" && (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
 /**
  * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
  * the series from that occurrence's month on; earlier months are left as they were.
@@ -328,7 +331,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
           />
         </Field>
       </div>
-      {isIncome && (
+      {isIncome && (IOS_KEYPAD || amount.trim().startsWith("-")) && (
         <div className="repeat-row">
           <label className="repeat-hit">
             <input type="checkbox" checked={amount.trim().startsWith("-")} onChange={(e) => setAmount(e.target.checked ? `-${amount.trim()}` : amount.trim().replace(/^-+/, ""))} />
