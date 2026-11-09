@@ -161,10 +161,6 @@ pub(crate) fn router(db: Db) -> Router {
             axum::routing::put(sumit::set_product),
         )
         .route(
-            "/api/sumit/refund-category",
-            axum::routing::put(sumit::set_refund_category),
-        )
-        .route(
             "/api/sumit/notices/read",
             axum::routing::post(sumit::mark_read),
         )

@@ -22,8 +22,6 @@ pub(crate) struct HeldReceipt {
     customer: String,
     total: f64,
     products: Vec<String>,
-    /// A refund that waits for the refund category.
-    needs_refund_category: bool,
 }
 
 #[derive(Serialize)]
@@ -36,8 +34,6 @@ pub(crate) struct Overview {
     calls_this_month: u32,
     monthly_limit: u32,
     products: Vec<Product>,
-    /// Expense category refunds are booked on.
-    refund_category_id: Option<i64>,
     notices: Vec<Notice>,
     /// Receipts waiting for a product to be given an income sub-category: (number, customer, total).
     held: Vec<HeldReceipt>,
@@ -85,13 +81,7 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
             id: h.doc.id,
             customer: h.doc.customer.clone(),
             total: h.doc.total,
-            products: h
-                .need
-                .iter()
-                .filter(|n| !n.is_empty() && *n != sumit::REFUND_NEED)
-                .cloned()
-                .collect(),
-            needs_refund_category: h.need.iter().any(|n| n == sumit::REFUND_NEED),
+            products: h.need.iter().filter(|n| !n.is_empty()).cloned().collect(),
         })
         .collect();
     let now = Utc::now();
@@ -112,10 +102,6 @@ pub(crate) async fn overview(State(db): State<Db>) -> Result<Json<Overview>, Api
             .map_err(internal)?,
         monthly_limit: cfg.as_ref().map_or(0, |c| c.monthly_limit),
         products,
-        refund_category_id: sumit::load::<sumit::RefundRule>(db.as_ref(), sumit::REFUND_KEY)
-            .await
-            .map_err(internal)?
-            .category_id,
         held: state_held,
         notices,
         push_public_key: push::public_key(),
@@ -175,41 +161,6 @@ pub(crate) async fn set_product(
             .await
             .map_err(internal)?;
     }
-    sumit::retry_held(db.as_ref(), Utc::now())
-        .await
-        .map_err(internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-pub(crate) struct RefundChoice {
-    category_id: Option<i64>,
-}
-
-/// Choose the expense category refunds are booked on (null clears it). Refunds that waited for
-/// it are imported at once.
-pub(crate) async fn set_refund_category(
-    State(db): State<Db>,
-    Json(b): Json<RefundChoice>,
-) -> Result<StatusCode, ApiError> {
-    if let Some(id) = b.category_id {
-        let cats = db.list_categories().await.map_err(internal)?;
-        if !sumit::is_usable_expense_category(&cats, id) {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "choose an expense category that has no sub-categories".into(),
-            ));
-        }
-    }
-    sumit::save(
-        db.as_ref(),
-        sumit::REFUND_KEY,
-        &sumit::RefundRule {
-            category_id: b.category_id,
-        },
-    )
-    .await
-    .map_err(internal)?;
     sumit::retry_held(db.as_ref(), Utc::now())
         .await
         .map_err(internal)?;

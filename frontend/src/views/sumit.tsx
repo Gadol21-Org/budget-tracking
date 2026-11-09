@@ -33,7 +33,7 @@ export async function enablePush(key: string): Promise<string> {
 export function SumitBanner() {
   const { held, unread } = state.sumit;
   if (!held && !unread) return null;
-  const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} עדכונים חדשים מ-Sumit (קבלות וזיכויים)`;
+  const text = held ? `${held} קבלות מ-Sumit ממתינות לסיווג: הקישו כדי להגדיר קטגוריה` : `${unread} קבלות חדשות מ-Sumit`;
   const open = () => {
     const o = state.sumitData;
     // Held receipts: open the classification of just their products; new ones: the settings card that lists them.
@@ -123,7 +123,7 @@ export function SumitPage() {
     setOut({ text: "בודק…", error: false });
     try {
       const r = await api.sumitPoll();
-      setOut({ error: false, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : r.new_receipts || r.refunds ? [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "", r.refunds ? `יובאו ${r.refunds} זיכויים (תנועות שליליות).` : ""].filter(Boolean).join(" ") : "אין קבלות חדשות." });
+      setOut({ error: r.refund_errors > 0, text: r.baseline ? "נקבעה נקודת התחלה: הקבלות הקיימות לא יובאו, רק קבלות חדשות מעכשיו." : [r.new_receipts ? `נמצאו ${r.new_receipts} קבלות חדשות (${r.transactions} תנועות הכנסה).` : "", r.refunds ? `${r.refunds} זיכויים עודכנו.` : "", r.refund_errors ? `${r.refund_errors} זיכויים לא עודכנו, ראו בהתראות.` : ""].filter(Boolean).join(" ") || "אין קבלות חדשות." });
       await load();
     } catch (e) {
       setOut({ error: true, text: `שגיאה: ${e instanceof Error ? e.message : e}` });
@@ -158,10 +158,10 @@ export function SumitPage() {
           <div className="name">קבלות מ-Sumit</div>
         </div>
       </div>
-      <div className="sfoot top">קבלות וזיכויים חדשים נמשכים אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00). קבלה נרשמת כהכנסה וזיכוי כהוצאה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין רענון אוטומטי.</div>
+      <div className="sfoot top">קבלות חדשות נמשכות אוטומטית שלוש פעמים ביום (07:00, 13:00, 19:00) ונרשמות כהכנסה. לכל בדיקה יש מכסה חודשית בצד של Sumit, לכן אין רענון אוטומטי.</div>
       {data && data.held.length > 0 && (
         <div className="sgroup">
-          <div className="snote error">{`${data.held.length} פריטים ממתינים: חסרה ${[data.held.some((h) => h.products.length || !h.needs_refund_category) && `תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"})`, data.held.some((h) => h.needs_refund_category) && "קטגוריית זיכויים"].filter(Boolean).join(" ו")}. הגדירו ב"מוצרי Sumit" והם ייובאו.`}</div>
+          <div className="snote error">{`${data.held.length} קבלות ממתינות: חסרה תת-קטגוריית הכנסה (${products || "ללא פירוט מוצרים"}). הגדירו ב"מוצרי Sumit" והקבלות ייובאו.`}</div>
         </div>
       )}
       <div className="sgroup">
@@ -259,33 +259,8 @@ function ProductLine({ p, onOpen }: { p: SumitProduct; onOpen: () => void }) {
   );
 }
 
-/** The expense category refunds are booked on; saved at once. */
-function RefundCategory({ id }: { id: number | null }) {
-  const expense = state.cats.filter((c) => !c.is_income);
-  const own = expense.find((c) => c.id === id);
-  const [pick, setPick] = useState<CategoryChoice>(own ? (own.parent_id != null ? { top: String(own.parent_id), sub: String(own.id) } : { top: String(own.id), sub: "" }) : { top: "", sub: "" });
-  const save = (c: CategoryChoice) => {
-    const t = c.sub || (c.top && !expense.some((k) => String(k.parent_id) === c.top) ? c.top : "");
-    void api.sumitRefundCategory(t ? Number(t) : null);
-  };
-  return (
-    <div className="card">
-      <div className="name">זיכויים</div>
-      <div className="muted">זיכוי מ-Sumit נרשם כהוצאה בקטגוריה הזו, עם העסק והמוצר של המוצר שזוכה.</div>
-      <CategoryPicker
-        cats={expense}
-        value={pick}
-        onChange={(c) => {
-          setPick(c);
-          save(c);
-        }}
-      />
-    </div>
-  );
-}
-
 /** The products of Sumit receipts: a compact searchable list (those still lacking a category first); tapping one opens its editor. */
-function ProductMapping({ initial, only, close, done, refund }: { initial: SumitProduct[]; only?: string[]; close: () => void; done: () => void; refund?: { id: number | null } }) {
+function ProductMapping({ initial, only, close, done }: { initial: SumitProduct[]; only?: string[]; close: () => void; done: () => void }) {
   const [rows, setRows] = useState(initial);
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -334,7 +309,6 @@ function ProductMapping({ initial, only, close, done, refund }: { initial: Sumit
     >
       <h2>קבלות מ-Sumit: מוצרים</h2>
       <h3>{only ? "הקבלה ממתינה: בחרו קטגוריית הכנסה למוצר" : "מוצר באפליקציה וקטגוריה לכל מוצר Sumit"}</h3>
-      {refund && <RefundCategory id={refund.id} />}
       {rows.length > 8 && <input type="search" id="sumit-product-search" placeholder="חיפוש מוצר…" value={q} onChange={(e) => setQ(e.target.value)} />}
       {shown.length ? (
         <div className="sgroup">
@@ -358,7 +332,7 @@ function ProductMapping({ initial, only, close, done, refund }: { initial: Sumit
 
 /** The product and income category of each Sumit product (or only of `only`, the products of receipts waiting for one). */
 export function openMapping(o: SumitOverview, done: () => void, only?: string[]) {
-  openReactDialog((close) => <ProductMapping initial={o.products} only={only} close={close} done={done} refund={!only || o.held.some((h) => h.needs_refund_category) ? { id: o.refund_category_id } : undefined} />, "fullpage");
+  openReactDialog((close) => <ProductMapping initial={o.products} only={only} close={close} done={done} />, "fullpage");
 }
 
 export function sumitView() {
