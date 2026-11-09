@@ -15,6 +15,7 @@ import { trackScreen } from "./analytics";
 import { peopleView } from "./views/people";
 import { categoriesView } from "./views/categories";
 import { dataTransferView, settingsView } from "./views/settings";
+import { sumitView } from "./views/sumit";
 import { ensureHistory, neededFrom } from "./sync";
 import { openTransactionDialog } from "./dialogs/transaction";
 
@@ -49,7 +50,7 @@ const TABS: [View | "business", string][] = [
 ];
 
 const BUSINESS_SCREENS: View[] = ["actions", "businessOverview", "products"];
-const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people", "dataTransfer"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people", "dataTransfer", "sumit"];
 
 function openTab(view: View | "business") {
   if (view === "business") return openBusinessDashboard();
@@ -141,6 +142,7 @@ const screens: Record<View, () => ReactElement> = {
   currencies: () => currenciesView({ back: () => goBack("settings") }),
   people: peopleView,
   dataTransfer: dataTransferView,
+  sumit: sumitView,
 };
 
 function App() {

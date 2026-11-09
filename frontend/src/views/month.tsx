@@ -11,6 +11,7 @@ import { insightsCtx, render } from "../render";
 import { DrillCrumbs, SummaryCategories } from "./insights";
 import { categoryName } from "../categories";
 import { inPeriod } from "../selectors";
+import { PushOffer, SumitBanner } from "./sumit";
 
 /** The period switcher wired to the app's period. */
 export function ConnectedMonthBar() {
@@ -93,6 +94,8 @@ function MonthScreen() {
   return (
     <div>
       <ConnectedMonthBar />
+      <SumitBanner />
+      <PushOffer />
       <div className="stats">
         <Stat label="הכנסות" agorot={income} cls="income" kind="income" />
         <Stat label="הוצאות" agorot={-expense} cls="expense" kind="expense" />

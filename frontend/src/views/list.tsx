@@ -1,6 +1,7 @@
 import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
 import { productName, productOf } from "../business";
+import { splitSumitNote } from "../sumitNote";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
@@ -44,6 +45,7 @@ export function TransactionRow({ t }: { t: Transaction }) {
   const product = productOf(state.products, state.cats, t);
   const own = t.id > 0 && state.products.tx.has(t.id);
   const fx = fxOf(t);
+  const note = splitSumitNote(t.note);
   return (
     <div className={t.upcoming ? "row upcoming" : "row"}>
       <div className="grow">
@@ -56,8 +58,13 @@ export function TransactionRow({ t }: { t: Transaction }) {
             {productName(state.products, product)}
           </span>
         )}
+        {note.products.map((p) => (
+          <span className="productchip sumitprod" key={p} title="מוצר בקבלה מ-Sumit">
+            {p}
+          </span>
+        ))}
         <FxLine t={t} />
-        {t.note ? <div className="muted">{t.note}</div> : null}
+        {note.text ? <div className="muted">{note.text}</div> : null}
       </div>
       <SyncMark t={t} />
       {fx?.rate === 0 ? (
