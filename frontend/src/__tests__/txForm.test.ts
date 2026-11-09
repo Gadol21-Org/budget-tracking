@@ -25,6 +25,13 @@ describe("buildTxBody", () => {
     expect(buildTxBody({ ...base, isIncome: true }).amount_agorot).toBe(1250);
   });
 
+  it("sends a minus on an income as a refund (negative income), and ignores it on an expense", () => {
+    expect(buildTxBody({ ...base, isIncome: true, amountText: "-100" }).amount_agorot).toBe(-10000);
+    expect(buildTxBody({ ...base, amountText: "-100" }).amount_agorot).toBe(-10000);
+    const f = buildTxBody({ ...base, isIncome: true, amountText: "-25", currency: "USD", origMinor: 2500 });
+    expect(f.orig_minor).toBe(-2500);
+  });
+
   it("reports a missing amount before a missing category", () => {
     const noCat = () => {
       throw new Error("יש לבחור קטגוריה");
@@ -84,5 +91,7 @@ describe("startAmountText", () => {
     expect(startAmountText(tx, { currency: "USD", orig_minor: -2500 }, undefined)).toBe("25");
     expect(startAmountText(tx, undefined, { currency: "JPY", orig_minor: -3000 })).toBe("3000");
     expect(startAmountText(undefined, undefined, undefined)).toBe("");
+    // A refund keeps its minus.
+    expect(startAmountText({ ...tx, amount_agorot: -4550 }, undefined, undefined, true)).toBe("-45.5");
   });
 });

@@ -9,6 +9,7 @@ import { dequeue } from "../offline";
 import { render } from "../render";
 import { catName, catPath, dayTitle, fxOf, inFilter, inPeriod } from "../selectors";
 import { state } from "../state";
+import { isIncomeTx } from "../categories";
 import { IN_FLIGHT, load } from "../sync";
 import { fmtDate } from "../ui";
 import { ConnectedMonthBar } from "./month";
@@ -70,7 +71,7 @@ export function TransactionRow({ t }: { t: Transaction }) {
       {fx?.rate === 0 ? (
         <span className={`num ${fx.orig_minor < 0 ? "expense" : "income"}`}>{formatMinor(Math.abs(fx.orig_minor), fx.currency)}</span>
       ) : (
-        <Money agorot={t.amount_agorot} cls={t.amount_agorot < 0 ? "expense" : "income"} />
+        <Money agorot={t.amount_agorot} cls={isIncomeTx(state.cats, t) ? "income" : "expense"} />
       )}
       {t.sync_state === "queued" ? null : (
         <button className="del" title="עריכה" onClick={() => openTransactionDialog(t)}>

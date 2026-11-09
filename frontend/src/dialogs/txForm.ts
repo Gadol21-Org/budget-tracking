@@ -8,10 +8,12 @@ export function ruleFxOf(existing: Transaction | undefined, segment: RecurringSe
 }
 
 /** What the amount field starts with: the original foreign amount if there is one, else the shekels. */
-export function startAmountText(existing: Transaction | undefined, startFx: Pick<Fx, "currency" | "orig_minor"> | undefined, ruleFx: { currency: Currency; orig_minor: number } | undefined): string {
+export function startAmountText(existing: Transaction | undefined, startFx: Pick<Fx, "currency" | "orig_minor"> | undefined, ruleFx: { currency: Currency; orig_minor: number } | undefined, refund = false): string {
+  // A refund (a negative income) keeps its minus, which is how it is told from an income.
+  const minus = refund ? "-" : "";
   const foreign = startFx ?? ruleFx;
-  if (foreign) return String(Math.abs(foreign.orig_minor) / 10 ** decimals(foreign.currency));
-  return existing ? String(Math.abs(existing.amount_agorot) / 100) : "";
+  if (foreign) return minus + String(Math.abs(foreign.orig_minor) / 10 ** decimals(foreign.currency));
+  return existing ? minus + String(Math.abs(existing.amount_agorot) / 100) : "";
 }
 
 export interface BodyInput {
@@ -39,9 +41,11 @@ export interface BodyInput {
 
 /** The line as the server takes it, for a single transaction and for one month of a series. */
 export function buildTxBody(i: BodyInput): TxInput {
-  const abs = Math.abs(parseAgorot(i.amountText));
+  const typed = parseAgorot(i.amountText);
+  const abs = Math.abs(typed);
   if (abs === 0) throw new Error("יש להזין סכום");
-  const sign = i.isIncome ? 1 : -1;
+  // A minus on an income is a refund: a negative income. On an expense the minus means nothing.
+  const sign = i.isIncome ? (typed < 0 ? -1 : 1) : -1;
   const body: TxInput = { date: i.date, amount_agorot: sign * abs, category_id: i.categoryId(), payment_method_id: i.paymentMethodId, note: i.note };
   if (i.currency !== "ILS") {
     // Foreign: send the original amount; the server converts it at the rate for the day unless

@@ -1,5 +1,6 @@
 import { type MouseEvent, type ReactElement, type ReactNode, useEffect, useRef, useState } from "react";
 import { type Transaction } from "../api";
+import { isIncomeTx, sideAmount } from "../categories";
 import { Money } from "../components/Money";
 import { clickableProps } from "../components/clickable";
 import { openReactDialog } from "../components/openReactDialog";
@@ -308,7 +309,7 @@ function Overview({ ctx, baseLabel }: BodyProps) {
       </Insight>,
     );
   }
-  const biggest = ctx.txs.filter((t) => t.amount_agorot < 0 && contains(ctx.period, t.date)).sort((a, b) => a.amount_agorot - b.amount_agorot)[0];
+  const biggest = ctx.txs.filter((t) => !isIncomeTx(ctx.cats, t) && t.amount_agorot < 0 && contains(ctx.period, t.date)).sort((a, b) => a.amount_agorot - b.amount_agorot)[0];
   if (biggest) {
     const c = ctx.cats.find((x) => x.id === biggest.category_id);
     lines.push(
@@ -558,7 +559,7 @@ function SubDetail({ ctx }: { ctx: Ctx }) {
   const bases = basePeriods(ctx.period, ctx.ins.cmp).periods.map((p) => value(aggregate(ctx, p, side)));
   const was = bases.reduce((a, b) => a + b, 0) / bases.length;
   const trend = trendCard(ctx, value, catColor(ctx, id));
-  const txs = ctx.txs.filter((t) => t.category_id === sub && S.pick(t) && contains(ctx.period, t.date)).sort((a, b) => Math.abs(b.amount_agorot) - Math.abs(a.amount_agorot)).slice(0, 8);
+  const txs = ctx.txs.filter((t) => t.category_id === sub && S.pick(t, ctx.cats) && contains(ctx.period, t.date)).sort((a, b) => Math.abs(b.amount_agorot) - Math.abs(a.amount_agorot)).slice(0, 8);
   return (
     <div className="dash dash-cats">
       <div className="kpis">
@@ -580,7 +581,7 @@ function SubDetail({ ctx }: { ctx: Ctx }) {
                 <div className="name">{t.note || catName(ctx, sub)}</div>
                 <div className="muted small">{`${t.upcoming ? "⏳ " : ""}${new Date(`${t.date}T00:00:00`).toLocaleDateString("he-IL", { day: "numeric", month: "long" })}`}</div>
               </div>
-              {money(Math.abs(t.amount_agorot), S.cls)}
+              {money(sideAmount(ctx.cats, t), S.cls)}
             </div>
           ))}
         </div>
@@ -746,12 +747,12 @@ const dayMonth = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString
 
 function Fixed({ ctx }: BodyProps) {
   const inP = ctx.txs.filter((t) => contains(ctx.period, t.date));
-  const expenses = inP.filter((t) => t.amount_agorot < 0);
+  const expenses = inP.filter((t) => !isIncomeTx(ctx.cats, t));
   const fixedTx = expenses.filter(isFixed);
   const fixedSum = -fixedTx.reduce((s, t) => s + t.amount_agorot, 0);
   const total = -expenses.reduce((s, t) => s + t.amount_agorot, 0);
   const variable = total - fixedSum;
-  const income = inP.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
+  const income = inP.filter((t) => isIncomeTx(ctx.cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
   const free = income - fixedSum;
 
   // Each charge is listed once: what already went through (one row per repeating series) here,
@@ -951,7 +952,7 @@ function Rhythm({ ctx }: BodyProps) {
   // Average spending per weekday over the days of the period that have passed.
   const sums = Array<number>(7).fill(0), counts = Array<number>(7).fill(0);
   for (let d = from; d <= end; d = new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10)) counts[dayOfWeek(d)]!++;
-  for (const t of ctx.txs) if (t.amount_agorot < 0 && !isFixed(t) && t.date >= from && t.date <= end) sums[dayOfWeek(t.date)]! += -t.amount_agorot;
+  for (const t of ctx.txs) if (!isIncomeTx(ctx.cats, t) && !isFixed(t) && t.date >= from && t.date <= end) sums[dayOfWeek(t.date)]! += -t.amount_agorot;
   const avg = sums.map((s, i) => (counts[i] ? s / counts[i]! : 0));
   const peakDay = avg.reduce((m, v, i) => (v > avg[m]! ? i : m), 0);
   parts.push(

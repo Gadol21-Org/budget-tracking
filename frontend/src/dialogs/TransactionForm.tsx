@@ -11,6 +11,7 @@ import { LRM, pickerCurrencies } from "../currencies";
 import { enqueue, isNetworkError, requestPersistence } from "../offline";
 import { monthsBetween } from "../period";
 import { catById, showPeriodFor } from "../selectors";
+import { isIncomeTx } from "../categories";
 import { state } from "../state";
 import { load } from "../sync";
 import { fmtDate } from "../ui";
@@ -66,10 +67,10 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
     const kids = kindCats(income).filter((k) => String(k.parent_id) === c.top);
     return { top: c.top, sub: kids.some((k) => String(k.id) === c.sub) ? c.sub : "" };
   }
-  const startIncome = existing ? existing.amount_agorot > 0 : startAsIncome;
+  const startIncome = existing ? isIncomeTx(state.cats, existing) : startAsIncome;
   const [isIncome, setIsIncome] = useState(startIncome);
   const [currency, setCurrency] = useState<Currency>(startFx?.currency ?? ruleFx?.currency ?? "ILS");
-  const [amount, setAmount] = useState(startAmountText(existing, startFx, ruleFx));
+  const [amount, setAmount] = useState(startAmountText(existing, startFx, ruleFx, existing !== undefined && existing.amount_agorot < 0 && startIncome));
   const [date, setDate] = useState(existing?.date ?? today());
   const [note, setNote] = useState(existing?.note ?? "");
   const [choice, setChoice] = useState<CategoryChoice>(() => {
@@ -287,6 +288,8 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
 
   const switchKind = (income: boolean) => {
     setIsIncome(income);
+    // The minus of a refund means nothing on an expense.
+    if (!income) setAmount(amount.trim().replace(/^-+/, ""));
     setChoice(reconcile(income, choice));
   };
 
@@ -325,6 +328,14 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
           />
         </Field>
       </div>
+      {isIncome && (
+        <div className="repeat-row">
+          <label className="repeat-hit">
+            <input type="checkbox" checked={amount.trim().startsWith("-")} onChange={(e) => setAmount(e.target.checked ? `-${amount.trim()}` : amount.trim().replace(/^-+/, ""))} />
+          </label>
+          <span>זיכוי (הכנסה שלילית: מקטין את ההכנסות)</span>
+        </div>
+      )}
       {foreign && (
         <div className="fxbox">
           {!repeat && (

@@ -37,11 +37,11 @@ pub const PRODUCTS_KEY: &str = "sumit_product_map";
 
 const DEFAULT_BASE: &str = "https://api.sumit.co.il";
 const DEFAULT_LIMIT: u32 = 240;
-/// Receipt-like document types: InvoiceAndReceipt (1), Receipt (2), DonationReceipt (4).
 /// Credit documents (refunds): credit invoice (5), credit receipt (6), credit invoice-receipt
-/// (7) and donation-receipt credit (14).
+/// (7) and donation-receipt credit (14). Sumit does not say which receipt one undoes.
 const CREDIT_TYPES: [i64; 4] = [5, 6, 7, 14];
-/// Everything a poll asks Sumit for.
+/// Everything a poll asks Sumit for: receipts (InvoiceAndReceipt 1, Receipt 2, DonationReceipt 4)
+/// and the credits.
 const DOC_TYPES: [i64; 7] = [1, 2, 4, 5, 6, 7, 14];
 const MAX_PAGES: usize = 3;
 const MAX_SEEN: usize = 1500;
@@ -181,10 +181,6 @@ pub trait SumitApi: Send + Sync {
     /// One page (index `page`) of receipts dated `from` through `to`.
     async fn list(&self, from: NaiveDate, to: NaiveDate, page: usize) -> Result<ListPage>;
     async fn items(&self, doc_id: i64) -> Result<Vec<DocItem>>;
-    /// The number of the receipt a credit document was made from, read from its PDF (Sumit's
-    /// data does not say). `Ok(None)`: the PDF has no such number or cannot be read; `Err`: it
-    /// could not be fetched (worth trying again).
-    async fn credit_origin(&self, doc_id: i64) -> Result<Option<i64>>;
     /// Names of all the products (income items) of the account, in one call.
     async fn products(&self) -> Result<Vec<String>>;
 }
@@ -297,20 +293,6 @@ pub fn parse_products(v: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The receipt number in the "created from" line of a credit document's PDF text. The text may
-/// come out in reading order or reversed, so both spellings of the words are accepted.
-pub fn origin_from_text(text: &str) -> Option<i64> {
-    let line = text.lines().find(|l| {
-        (l.contains("נוצר") || l.contains("רצונ")) && (l.contains("מתוך") || l.contains("ךותמ"))
-    })?;
-    let digits: String = line
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
-}
-
 pub fn parse_items(v: &Value) -> Vec<DocItem> {
     v["Data"]["Items"]
         .as_array()
@@ -364,48 +346,6 @@ impl SumitApi for HttpApi {
             )
             .await?;
         Ok(parse_items(&v))
-    }
-
-    async fn credit_origin(&self, doc_id: i64) -> Result<Option<i64>> {
-        let v = self
-            .call(
-                "/accounting/documents/getdetails/",
-                json!({"DocumentID": doc_id}),
-            )
-            .await?;
-        let Some(url) = v["Data"]["DocumentDownloadURL"].as_str() else {
-            return Ok(None);
-        };
-        // The link is made by Sumit and needs no credentials; follow only Sumit's own hosts.
-        let parsed = reqwest::Url::parse(url).context("bad PDF link")?;
-        let host = parsed.host_str().unwrap_or("");
-        if parsed.scheme() != "https" || !(host == "sumit.co.il" || host.ends_with(".sumit.co.il"))
-        {
-            return Ok(None);
-        }
-        let resp = self
-            .http
-            .get(parsed)
-            .send()
-            .await
-            .map_err(|e| anyhow!("fetching the credit PDF failed: {}", e.without_url()))?;
-        if !resp.status().is_success() {
-            bail!("fetching the credit PDF failed: HTTP {}", resp.status());
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| anyhow!("fetching the credit PDF failed: {}", e.without_url()))?;
-        if bytes.len() > 5_000_000 {
-            return Ok(None);
-        }
-        // The PDF reader can panic on odd files: keep that off the poll.
-        let text =
-            tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&bytes).ok())
-                .await
-                .ok()
-                .flatten();
-        Ok(text.as_deref().and_then(origin_from_text))
     }
 
     async fn products(&self) -> Result<Vec<String>> {
@@ -655,7 +595,8 @@ pub struct Imported {
     pub record: Option<ReceiptRecord>,
 }
 
-/// Create the income transaction(s) of one receipt. Does nothing if a transaction carrying the
+/// Create the income transaction(s) of one receipt. A refund (credit document) is the same
+/// with negative amounts, on its products' income categories: a negative income. Does nothing if a transaction carrying the
 /// receipt's marker already exists (a crash between import and bookkeeping).
 pub async fn import_receipt(
     db: &dyn Storage,
@@ -677,9 +618,11 @@ pub async fn import_receipt(
             record: None,
         });
     }
-    let total = to_agorot(doc.total);
+    let credit = is_credit(doc);
+    let sign: i64 = if credit { -1 } else { 1 };
+    let total = to_agorot(doc.total.abs());
     if total <= 0 {
-        bail!("receipt {} has no positive amount", doc.id);
+        bail!("receipt {} has no amount", doc.id);
     }
     let known = db.list_businesses().await?;
     let cats = db.list_categories().await?;
@@ -705,12 +648,19 @@ pub async fn import_receipt(
         return Err(NeedsCategory(missing).into());
     }
     let biz_of = |name: &str| rule_of(name).0;
-    let priced: Vec<(Group, f64)> = items.iter().map(|i| (rule_of(&i.name), i.total)).collect();
+    let priced: Vec<(Group, f64)> = items
+        .iter()
+        .map(|i| (rule_of(&i.name), i.total.abs()))
+        .collect();
     let parts = split_total(total, &priced, (None, None));
     let date = doc.date.format("%Y-%m-%d").to_string();
     let mut tx_ids = Vec::new();
     for ((b, cat), amount) in &parts {
-        let mut note = format!("קבלה {}", doc.number.unwrap_or(doc.id));
+        let mut note = format!(
+            "{} {}",
+            if credit { "זיכוי" } else { "קבלה" },
+            doc.number.unwrap_or(doc.id)
+        );
         if !doc.customer.is_empty() {
             note.push_str(&format!(" – {}", doc.customer));
         }
@@ -727,7 +677,7 @@ pub async fn import_receipt(
         let id = db
             .create_transaction(&NewTransaction {
                 date: date.clone(),
-                amount_agorot: *amount,
+                amount_agorot: *amount * sign,
                 category_id: *cat,
                 payment_method_id: None,
                 note,
@@ -743,7 +693,7 @@ pub async fn import_receipt(
         number: doc.number,
         date,
         customer: doc.customer.clone(),
-        total_agorot: total,
+        total_agorot: total * sign,
         items: items
             .iter()
             .map(|i| RecordItem {
@@ -807,10 +757,8 @@ pub struct PollSummary {
     /// Receipts newly put on hold for want of a usable category.
     pub held: usize,
     pub new_receipts: usize,
-    /// Credit documents applied to their receipts.
+    /// Credit documents imported as negative income.
     pub refunds: usize,
-    /// Credit documents that could not be applied (the notice says why).
-    pub refund_errors: usize,
     pub transactions: usize,
     pub calls: u32,
 }
@@ -939,27 +887,7 @@ async fn run_poll(
         };
         state.failures.remove(&doc.id);
         let id = doc.id;
-        if is_credit(&doc) {
-            let origin = {
-                spend_call(db, cfg.monthly_limit, now).await?;
-                summary.calls += 1;
-                match api.credit_origin(doc.id).await {
-                    Ok(o) => o,
-                    Err(e) => {
-                        failed = Some(e.context(format!("PDF of credit {}", doc.id)));
-                        break;
-                    }
-                }
-            };
-            let ok = settle_credit(db, state, doc, &items, origin, now, &mut notices).await?;
-            state.watermark = state.watermark.max(Some(id));
-            if ok {
-                summary.refunds += 1;
-            } else {
-                summary.refund_errors += 1;
-            }
-            continue;
-        }
+        let credit = is_credit(&doc);
         let done = settle_doc(db, state, doc, items, now, &mut recs, &mut notices).await?;
         // Looked at (imported or held): the next poll starts after it.
         state.watermark = state.watermark.max(Some(id));
@@ -967,7 +895,11 @@ async fn run_poll(
             summary.held += 1;
         }
         if let Some(n) = done {
-            summary.new_receipts += 1;
+            if credit {
+                summary.refunds += 1;
+            } else {
+                summary.new_receipts += 1;
+            }
             summary.transactions += n;
         }
     }
@@ -976,207 +908,6 @@ async fn run_poll(
         Some(e) => Err(e),
         None => Ok(summary),
     }
-}
-
-/// A credit document could not be applied to its receipt.
-#[derive(Debug)]
-pub struct RefundFailed(pub String);
-
-impl std::fmt::Display for RefundFailed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RefundFailed {}
-
-/// Take a credit document off the receipt it was made from. A credit for the whole receipt
-/// removes its transaction(s); a smaller one lowers the amount (and says so in the note).
-/// Nothing is changed unless every part fits. Returns the transactions that were lowered
-/// (removed ones are not listed).
-pub async fn apply_refund(
-    db: &dyn Storage,
-    doc: &DocSummary,
-    items: &[DocItem],
-    map: &BTreeMap<String, ProductRule>,
-    origin: Option<i64>,
-) -> Result<(Vec<i64>, usize)> {
-    let mark = marker(doc.id);
-    let all = db.list_transactions().await?;
-    let done: Vec<i64> = all
-        .iter()
-        .filter(|t| t.note.contains(&mark))
-        .map(|t| t.id)
-        .collect();
-    if !done.is_empty() {
-        return Ok((done, 0));
-    }
-    let fail = |m: String| -> anyhow::Error { RefundFailed(m).into() };
-    let n = origin.ok_or_else(|| {
-        fail("לא נמצא ב-PDF של הזיכוי מספר הקבלה שממנה נוצר, ולכן אי אפשר לעדכן את התנועה".into())
-    })?;
-    let prefix = format!("קבלה {n}");
-    let of_receipt: Vec<&crate::storage::Transaction> = all
-        .iter()
-        .filter(|t| {
-            t.note.contains("[sumit:")
-                && t.note
-                    .strip_prefix(&prefix)
-                    .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_digit()))
-        })
-        .collect();
-    // The receipt's own marker is the first one in the note (credits add theirs after it).
-    let receipt_ids: BTreeSet<&str> = of_receipt
-        .iter()
-        .filter_map(|t| {
-            t.note
-                .split_once("[sumit:")
-                .and_then(|(_, r)| r.split_once(']'))
-                .map(|(id, _)| id)
-        })
-        .collect();
-    if of_receipt.is_empty() {
-        return Err(fail(format!(
-            "הקבלה {n} לא יובאה לאפליקציה (אולי קדמה להתחלת הסנכרון), ולכן אי אפשר לעדכן אותה"
-        )));
-    }
-    if receipt_ids.len() > 1 {
-        return Err(fail(format!("יותר מקבלה אחת עם המספר {n}")));
-    }
-    let amount = to_agorot(doc.total.abs());
-    if amount <= 0 {
-        return Err(fail("בזיכוי אין סכום".into()));
-    }
-    // Which transaction of the receipt each part of the credit comes off.
-    let parts: Vec<(&crate::storage::Transaction, i64)> = if of_receipt.len() == 1 {
-        vec![(of_receipt[0], amount)]
-    } else {
-        let tags: BTreeMap<i64, i64> = db
-            .business_links()
-            .await?
-            .transactions
-            .into_iter()
-            .collect();
-        let rule = |name: &str| {
-            let r = map.get(&product_key(name)).copied().unwrap_or_default();
-            (r.business_id, r.category_id)
-        };
-        let priced: Vec<(Group, f64)> = items
-            .iter()
-            .map(|i| (rule(&i.name), i.total.abs()))
-            .collect();
-        let mut out = Vec::new();
-        for ((b, c), amt) in split_total(amount, &priced, (None, None)) {
-            let tx = of_receipt
-                .iter()
-                .find(|t| t.category_id == c && c.is_some() && tags.get(&t.id).copied() == b)
-                .ok_or_else(|| {
-                    fail("הקבלה מפוצלת בין כמה תנועות ואי אפשר לדעת מאיזו מהן לנכות את הזיכוי (חסרה הגדרת מוצר)".into())
-                })?;
-            out.push((*tx, amt));
-        }
-        out
-    };
-    for (t, amt) in &parts {
-        if *amt > t.amount_agorot {
-            return Err(fail(format!(
-                "הזיכוי (₪{:.2}) גדול מהסכום שנשאר בתנועה (₪{:.2})",
-                *amt as f64 / 100.0,
-                t.amount_agorot as f64 / 100.0
-            )));
-        }
-    }
-    let (mut lowered, mut removed) = (Vec::new(), 0);
-    for (t, amt) in parts {
-        let left = t.amount_agorot - amt;
-        if left == 0 {
-            db.delete_transaction(t.id).await?;
-            removed += 1;
-            continue;
-        }
-        let note = format!(
-            "{} · זיכוי {} (₪{:.2}) {}",
-            t.note.trim_end(),
-            doc.number.unwrap_or(doc.id),
-            amt as f64 / 100.0,
-            mark
-        );
-        db.update_transaction(
-            t.id,
-            &NewTransaction {
-                date: t.date.clone(),
-                amount_agorot: left,
-                category_id: t.category_id,
-                payment_method_id: t.payment_method_id,
-                note,
-            },
-        )
-        .await?;
-        lowered.push(t.id);
-    }
-    Ok((lowered, removed))
-}
-
-/// Apply one credit document and record a notice either way. A credit that cannot be applied is
-/// marked as seen (so it is not tried over and over) and the notice says why. Returns whether
-/// it was applied.
-async fn settle_credit(
-    db: &dyn Storage,
-    state: &mut State,
-    doc: DocSummary,
-    items: &[DocItem],
-    origin: Option<i64>,
-    now: DateTime<Utc>,
-    notices: &mut Vec<Notice>,
-) -> Result<bool> {
-    let map = product_map(db).await?;
-    let num = doc.number.unwrap_or(doc.id);
-    let who = if doc.customer.is_empty() {
-        String::new()
-    } else {
-        format!("{} · ", doc.customer)
-    };
-    let (title, body, tx_ids, ok) = match apply_refund(db, &doc, items, &map, origin).await {
-        Ok((tx_ids, removed)) => (
-            format!("זיכוי {num}: ₪{:.2}", doc.total.abs()),
-            format!(
-                "{who}{}",
-                match (origin, removed) {
-                    (Some(n), 0) => format!("הסכום של קבלה {n} הופחת"),
-                    (Some(n), _) => format!("קבלה {n} זוכתה במלואה והתנועה נמחקה"),
-                    (None, _) => "הזיכוי כבר הופעל".to_string(),
-                }
-            ),
-            tx_ids,
-            true,
-        ),
-        Err(e) => match e.downcast::<RefundFailed>() {
-            Ok(RefundFailed(why)) => {
-                tracing::warn!("sumit: credit {num} not applied: {why}");
-                (
-                    format!("זיכוי {num} (₪{:.2}) לא עודכן", doc.total.abs()),
-                    format!("{who}{why}. יש לעדכן את התנועה ידנית."),
-                    Vec::new(),
-                    false,
-                )
-            }
-            Err(e) => return Err(e),
-        },
-    };
-    state.seen.push(doc.id);
-    let d = doc.date.to_string();
-    if state.last_date.as_deref().is_none_or(|l| l < d.as_str()) {
-        state.last_date = Some(d);
-    }
-    notices.push(Notice {
-        id: doc.id,
-        at: now.to_rfc3339(),
-        title,
-        body,
-        tx_ids,
-        read: false,
-    });
-    Ok(ok)
 }
 
 /// Import one receipt whose details are known, or hold it if it has nowhere valid to go.
@@ -1214,7 +945,11 @@ async fn settle_doc(
             notices.push(Notice {
                 id: doc.id,
                 at: now.to_rfc3339(),
-                title: format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total),
+                title: if is_credit(&doc) {
+                    format!("התקבל זיכוי: ₪{:.2}", doc.total.abs())
+                } else {
+                    format!("התקבלה קבלה חדשה: ₪{:.2}", doc.total)
+                },
                 body: notice_body(&doc, &items, unmapped),
                 tx_ids: imported.tx_ids,
                 read: false,
@@ -1232,7 +967,15 @@ async fn settle_doc(
                     notices.push(Notice {
                         id: doc.id,
                         at: now.to_rfc3339(),
-                        title: format!("קבלה ממתינה לסיווג: ₪{:.2}", doc.total),
+                        title: format!(
+                            "{} לסיווג: ₪{:.2}",
+                            if is_credit(&doc) {
+                                "זיכוי ממתין"
+                            } else {
+                                "קבלה ממתינה"
+                            },
+                            doc.total.abs()
+                        ),
                         body: format!(
                             "{}הגדירו תת-קטגוריית הכנסה {} ב\"קבלות מ-Sumit\" והקבלה תיובא",
                             if doc.customer.is_empty() {
@@ -1372,12 +1115,13 @@ pub async fn poll_and_notify(
     match crate::oplog::as_sync(poll_once(db, api, cfg, Utc::now())).await {
         Ok(s) => {
             tracing::info!(
-                "sumit: {} new receipts, {} transactions, {} calls",
+                "sumit: {} new receipts, {} refunds, {} transactions, {} calls",
                 s.new_receipts,
+                s.refunds,
                 s.transactions,
                 s.calls
             );
-            if s.new_receipts > 0 || s.held > 0 || s.refunds > 0 || s.refund_errors > 0 {
+            if s.new_receipts > 0 || s.held > 0 || s.refunds > 0 {
                 crate::push::notify_all(db).await;
             }
             Ok(s)
@@ -1499,8 +1243,6 @@ mod tests {
         docs: Vec<DocSummary>,
         lists: Mutex<u32>,
         details: Mutex<u32>,
-        /// The receipt number every credit says it was made from.
-        origin: Option<i64>,
     }
 
     #[async_trait]
@@ -1526,9 +1268,6 @@ mod tests {
                     total: 20.0,
                 },
             ])
-        }
-        async fn credit_origin(&self, _: i64) -> Result<Option<i64>> {
-            Ok(self.origin)
         }
         async fn products(&self) -> Result<Vec<String>> {
             Ok(vec!["שמלה".into(), "משלוח".into(), "צבע".into()])
@@ -1571,7 +1310,6 @@ mod tests {
             docs: vec![doc],
             lists: Mutex::new(0),
             details: Mutex::new(0),
-            origin: Some(1001),
         };
         let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
         assert_eq!((s.new_receipts, s.transactions, s.calls), (1, 2, 2));
@@ -1716,7 +1454,6 @@ mod tests {
             docs: vec![doc],
             lists: Mutex::new(0),
             details: Mutex::new(0),
-            origin: Some(1001),
         };
         let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
         assert_eq!((s.new_receipts, s.transactions), (0, 0));
@@ -1770,7 +1507,6 @@ mod tests {
             docs: vec![old.clone()],
             lists: Mutex::new(0),
             details: Mutex::new(0),
-            origin: Some(1001),
         };
         let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
         assert!(s.baseline);
@@ -1806,39 +1542,8 @@ mod tests {
         assert_eq!(st.watermark, Some(11));
     }
 
-    #[test]
-    fn the_origin_is_read_from_the_pdf_text() {
-        // As a reader hands it over: reversed (right-to-left) or in reading order.
-        assert_eq!(
-            origin_from_text("חתום 4000 זיכוי הלבק/ןובשח \n 40002 / הלבק/ןובשח :ךותמ ה/רצונ\n"),
-            Some(40002)
-        );
-        assert_eq!(
-            origin_from_text("נוצר/ה מתוך: חשבון/קבלה 40002 /\nעמוד 1 מתוך 1"),
-            Some(40002)
-        );
-        // "page 1 of 1" is not it, and neither is a PDF without the line.
-        assert_eq!(origin_from_text("עמוד 1 מתוך 1"), None);
-        assert_eq!(origin_from_text(""), None);
-    }
-
-    fn credit(id: i64, total: f64) -> DocSummary {
-        DocSummary {
-            id,
-            number: Some(4000 + id),
-            date: NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
-            customer: "דנה".into(),
-            total,
-            doc_type: 6,
-        }
-    }
-
-    /// Receipt 1001 (₪118) imported as two transactions (₪94.40 on a business, ₪23.60 not),
-    /// then `credits` polled. Returns the db and the poll summaries.
-    async fn refund_scenario(
-        credits: Vec<DocSummary>,
-        origin: Option<i64>,
-    ) -> (crate::mysql::MySqlStorage, PollSummary) {
+    #[tokio::test]
+    async fn a_refund_is_a_negative_income_on_the_products_category() {
         let db = crate::testdb::fresh().await;
         let biz = db.insert_business("שמלות", false).await.unwrap();
         armed(&db).await;
@@ -1853,103 +1558,59 @@ mod tests {
         )
         .await
         .unwrap();
-        let now: DateTime<Utc> = "2026-11-04T11:00:00Z".parse().unwrap();
-        let receipt = DocSummary {
-            id: 77,
-            number: Some(1001),
-            date: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+        let now: DateTime<Utc> = "2026-11-05T11:00:00Z".parse().unwrap();
+        let doc = DocSummary {
+            id: 90,
+            number: Some(4000),
+            date: NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
             customer: "דנה".into(),
-            total: 118.0,
-            doc_type: 2,
+            total: -59.0,
+            doc_type: 6,
         };
         let api = Fake {
-            docs: vec![receipt.clone()],
+            docs: vec![doc],
             lists: Mutex::new(0),
             details: Mutex::new(0),
-            origin,
         };
-        poll_once(&db, &api, &cfg_big(), now).await.unwrap();
-        let mut docs = vec![receipt];
-        docs.extend(credits);
-        let api = Fake {
-            docs,
-            lists: Mutex::new(0),
-            details: Mutex::new(0),
-            origin,
-        };
-        let s = poll_once(&db, &api, &cfg_big(), now).await.unwrap();
-        (db, s)
-    }
-
-    fn cfg_big() -> Config {
-        Config {
-            monthly_limit: 100,
-            ..cfg()
-        }
-    }
-
-    async fn amounts(db: &dyn Storage) -> Vec<i64> {
-        let mut v: Vec<i64> = db
-            .list_transactions()
-            .await
-            .unwrap()
-            .iter()
-            .map(|t| t.amount_agorot)
-            .collect();
-        v.sort_unstable();
-        v
-    }
-
-    #[tokio::test]
-    async fn a_smaller_refund_lowers_the_receipt() {
-        let (db, s) = refund_scenario(vec![credit(78, -59.0)], Some(1001)).await;
-        assert_eq!((s.refunds, s.refund_errors), (1, 0));
-        // Half of each part comes off, and the note says which credit did it.
-        assert_eq!(amounts(&db).await, vec![1_180, 4_720]);
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.new_receipts, s.transactions), (1, 0, 2));
         let txs = db.list_transactions().await.unwrap();
+        assert_eq!(txs.len(), 2);
+        // Negative, on the income category, split like a receipt, with the business tag kept.
         assert!(txs
             .iter()
-            .all(|t| t.note.contains("[sumit:77]") && t.note.contains("[sumit:78]")));
-        assert!(txs.iter().all(|t| t.amount_agorot > 0));
+            .all(|t| t.amount_agorot < 0 && t.category_id == Some(cat)));
+        assert_eq!(txs.iter().map(|t| t.amount_agorot).sum::<i64>(), -5_900);
+        assert!(txs
+            .iter()
+            .all(|t| t.note.starts_with("זיכוי 4000") && t.note.contains("[sumit:90]")));
+        assert_eq!(db.business_links().await.unwrap().transactions.len(), 1);
         let n: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
-        assert!(n.last().unwrap().title.contains("זיכוי 4078"));
+        assert!(n[0].title.contains("זיכוי"));
     }
 
     #[tokio::test]
-    async fn a_second_refund_still_finds_the_receipt() {
-        let (db, s) = refund_scenario(vec![credit(78, -59.0), credit(79, -11.8)], Some(1001)).await;
-        assert_eq!((s.refunds, s.refund_errors), (2, 0));
-        assert_eq!(amounts(&db).await, vec![944, 3_776]);
-    }
-
-    #[tokio::test]
-    async fn a_full_refund_removes_the_receipt() {
-        let (db, s) = refund_scenario(vec![credit(78, -118.0)], Some(1001)).await;
-        assert_eq!((s.refunds, s.refund_errors), (1, 0));
+    async fn a_refund_of_an_unmapped_product_is_held_like_a_receipt() {
+        let db = crate::testdb::fresh().await;
+        armed(&db).await;
+        let now: DateTime<Utc> = "2026-11-05T11:00:00Z".parse().unwrap();
+        let doc = DocSummary {
+            id: 91,
+            number: Some(4001),
+            date: NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
+            customer: String::new(),
+            total: -50.0,
+            doc_type: 6,
+        };
+        let api = Fake {
+            docs: vec![doc],
+            lists: Mutex::new(0),
+            details: Mutex::new(0),
+        };
+        let s = poll_once(&db, &api, &cfg(), now).await.unwrap();
+        assert_eq!((s.refunds, s.held), (0, 1));
         assert!(db.list_transactions().await.unwrap().is_empty());
         let n: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
-        assert!(n.last().unwrap().body.contains("זוכתה במלואה"));
-    }
-
-    #[tokio::test]
-    async fn a_refund_that_cannot_be_applied_changes_nothing_and_says_so() {
-        // The PDF has no receipt number.
-        let (db, s) = refund_scenario(vec![credit(78, -59.0)], None).await;
-        assert_eq!((s.refunds, s.refund_errors), (0, 1));
-        assert_eq!(amounts(&db).await, vec![2_360, 9_440]);
-        let n: Vec<Notice> = load(&db, NOTICES_KEY).await.unwrap();
-        let last = n.last().unwrap();
-        assert!(last.title.contains("לא עודכן") && last.body.contains("PDF"));
-        // It is not retried by the next poll.
-        let st: State = load(&db, STATE_KEY).await.unwrap();
-        assert!(st.seen.contains(&78));
-        // A receipt that was never imported.
-        let (db, s) = refund_scenario(vec![credit(78, -59.0)], Some(555)).await;
-        assert_eq!((s.refunds, s.refund_errors), (0, 1));
-        assert_eq!(amounts(&db).await, vec![2_360, 9_440]);
-        // More than the receipt was worth.
-        let (db, s) = refund_scenario(vec![credit(78, -500.0)], Some(1001)).await;
-        assert_eq!((s.refunds, s.refund_errors), (0, 1));
-        assert_eq!(amounts(&db).await, vec![2_360, 9_440]);
+        assert!(n[0].title.contains("זיכוי ממתין"));
     }
 }
