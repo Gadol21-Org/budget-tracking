@@ -74,14 +74,14 @@ export function TransactionRow({ t }: { t: Transaction }) {
         <Money agorot={t.amount_agorot} cls={isIncomeTx(state.cats, t) ? "income" : "expense"} />
       )}
       {t.sync_state === "queued" ? null : (
-        <button className="del" title="עריכה" onClick={() => openTransactionDialog(t)}>
+        <button className="del txact" title="עריכה" onClick={() => openTransactionDialog(t)}>
           ✎
         </button>
       )}
       {/* An upcoming line has no row of its own to delete; stopping it is in its edit dialog. */}
       {t.upcoming ? null : (
         <button
-          className="del"
+          className="del txact"
           title="מחיקה"
           onClick={async () => {
             if (!confirm("למחוק את התנועה?")) return;
