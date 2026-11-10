@@ -99,3 +99,24 @@ describe("the business section", () => {
     expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
   });
 });
+
+describe("the transactions list divider", () => {
+  it("sits between days after today and today-or-earlier, even when the later days are not pending", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-10T10:00:00Z"));
+    const mk = (id: number, date: string, upcoming?: boolean) => ({ id, date, amount_agorot: -1000, category_id: null, payment_method_id: null, note: `n${id}`, sync_state: "synced", upcoming });
+    state.txs = [mk(1, "2026-11-17"), mk(2, "2026-11-12"), mk(3, "2026-11-10"), mk(4, "2026-11-05"), mk(5, "2026-11-11", true)];
+    state.period = { kind: "month", month: "2026-11" };
+    state.filter = undefined;
+    state.view = "list";
+    Element.prototype.scrollIntoView = () => {};
+    app.render();
+    const divider = document.querySelector(".upcoming-divider")!;
+    expect(divider).toBeTruthy();
+    const anchor = document.getElementById("now-anchor")!;
+    expect(anchor.contains(divider)).toBe(true);
+    expect(anchor.textContent).toContain("n3");
+    expect(anchor.textContent).not.toContain("n2");
+    vi.useRealTimers();
+  });
+});
