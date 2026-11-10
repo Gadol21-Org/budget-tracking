@@ -381,7 +381,7 @@ export function TransactionForm({ existing, startAsIncome, close }: { existing?:
         />
       </Field>
       <Field label="הערה">
-        <input type="text" placeholder="אופציונלי" maxLength={35} value={note} onChange={(e) => setNote(e.target.value)} />
+        <input type="text" placeholder="אופציונלי" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
       <div style={{ display: productHidden ? "none" : "" }}>
         <ProductChips products={state.products} value={productValue} onChange={setProductValue} required={mustPickProduct} givenName={givenName} collapsed />
