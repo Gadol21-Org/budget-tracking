@@ -103,6 +103,11 @@ const PRODUCT_FILTERS = [
   ["none", "ללא מוצר"],
 ] as const;
 
+/** Today's date (YYYY-MM-DD) in the app's timezone, not UTC. */
+export function todayInJerusalem(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+}
+
 export function listView(): ReactElement {
   return <ListScreen />;
 }
@@ -112,8 +117,9 @@ function ListScreen() {
     .filter(inFilter)
     .filter((t) => state.productFilter === "all" || (productOf(state.products, state.cats, t) != null) === (state.productFilter === "product"));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
-  // The first day (newest first) with something that really happened: the list opens here, with later, upcoming days above it.
-  const nowDay = days.find((d) => txs.some((t) => t.date === d && !t.upcoming));
+  // The first day (newest first) that is today or earlier: the list opens here, with days after today (upcoming) above it.
+  const today = todayInJerusalem();
+  const nowDay = days.find((d) => d <= today);
   const total = txs.reduce((s, t) => s + t.amount_agorot, 0);
   return (
     <div>
