@@ -100,24 +100,24 @@ pub(crate) fn router(db: Db) -> Router {
             get(transactions::get_currency_settings).put(transactions::put_currency_settings),
         )
         .route(
-            "/api/transactions/:id/refresh-rate",
+            "/api/transactions/{id}/refresh-rate",
             axum::routing::post(transactions::refresh_rate),
         )
         .route(
-            "/api/transactions/:id",
+            "/api/transactions/{id}",
             delete(transactions::delete_transaction).put(transactions::update_transaction),
         )
         .route(
             "/api/categories",
             get(categories::list_categories).post(categories::create_category),
         )
-        .route("/api/categories/:id", delete(categories::delete_category))
+        .route("/api/categories/{id}", delete(categories::delete_category))
         .route(
-            "/api/categories/:id/link",
+            "/api/categories/{id}/link",
             axum::routing::put(categories::link_category),
         )
         .route(
-            "/api/categories/:id/move",
+            "/api/categories/{id}/move",
             axum::routing::post(categories::move_category),
         )
         .route(
@@ -129,12 +129,12 @@ pub(crate) fn router(db: Db) -> Router {
             get(repeating::recurring_occurrences),
         )
         .route(
-            "/api/recurring/:series_id/months/:month",
+            "/api/recurring/{series_id}/months/{month}",
             axum::routing::post(repeating::settle_recurring_month)
                 .delete(repeating::skip_recurring_month),
         )
         .route(
-            "/api/recurring/:series_id",
+            "/api/recurring/{series_id}",
             axum::routing::put(repeating::change_recurring).delete(repeating::cancel_recurring),
         )
         .route(
@@ -142,7 +142,7 @@ pub(crate) fn router(db: Db) -> Router {
             get(businesses::get_businesses).post(businesses::create_business),
         )
         .route(
-            "/api/businesses/:id",
+            "/api/businesses/{id}",
             delete(businesses::delete_business).put(businesses::rename_business),
         )
         .route(
@@ -150,11 +150,11 @@ pub(crate) fn router(db: Db) -> Router {
             axum::routing::put(businesses::tag_transactions),
         )
         .route(
-            "/api/categories/:id/business",
+            "/api/categories/{id}/business",
             axum::routing::put(businesses::link_category_business),
         )
         .route(
-            "/api/categories/:id/business-required",
+            "/api/categories/{id}/business-required",
             axum::routing::put(businesses::require_category_business),
         )
         .route("/api/sumit", get(sumit::overview))
@@ -186,7 +186,7 @@ pub(crate) fn router(db: Db) -> Router {
         )
         .route("/api/mirror/status", get(mirroring::mirror_status))
         .route(
-            "/api/mirror/paamonim/retry/:id",
+            "/api/mirror/paamonim/retry/{id}",
             axum::routing::post(mirroring::retry_mirror),
         )
         .with_state(db)
