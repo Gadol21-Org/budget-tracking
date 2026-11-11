@@ -177,6 +177,7 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
         .route("/api/sumit/poll", axum::routing::post(sumit::poll_now))
         .route("/api/push", axum::routing::post(sumit::subscribe))
         .route("/api/push/check", axum::routing::post(sumit::push_check))
+        .route("/api/push/events", get(sumit::push_events))
         .route("/api/email/status", get(email::status))
         .route("/api/email/cost", get(email::ai_cost))
         .route("/api/email/suggestions", get(email::list))

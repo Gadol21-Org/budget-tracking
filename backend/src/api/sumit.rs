@@ -227,3 +227,8 @@ pub(crate) async fn push_check(
         .map_err(internal)?;
     Ok(Json(Registered { registered }))
 }
+
+/// The numbered list of recent pushes, for the service worker: it shows the ones it has not shown yet.
+pub(crate) async fn push_events(State(db): State<Db>) -> Result<Json<Vec<push::Event>>, ApiError> {
+    Ok(Json(push::events(db.as_ref()).await.map_err(internal)?))
+}

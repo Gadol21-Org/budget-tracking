@@ -209,16 +209,12 @@ impl Service {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
         self.expire_auto().await;
-        // The push says nothing about who sent it: only while the last push was the email one is the latest batch news.
-        let latest = if crate::push::last_source(self.db.as_ref()).await.as_deref() == Some("email") {
-            self.db
-                .get_setting(LATEST_KEY)
-                .await?
-                .and_then(|v| serde_json::from_str(&v).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let latest = self
+            .db
+            .get_setting(LATEST_KEY)
+            .await?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
         Ok(Status {
             configured: self.cfg.is_some(),
             ai_configured: self.cfg.as_ref().is_some_and(|c| c.ai_key.is_some()),

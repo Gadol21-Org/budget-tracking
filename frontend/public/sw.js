@@ -12,7 +12,7 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== "push-seen").map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -104,13 +104,36 @@ const receiptNote = (unread, opts) => {
   return self.registration.showNotification(parts.join(", "), { ...opts, body: lines.join("\n") });
 };
 
+// The last numbered push this device showed (kept in the cache, since the worker is stopped between pushes).
+const SEEN = "push-seen";
+const SEEN_URL = "/__push-seen";
+const lastSeen = () =>
+  caches
+    .open(SEEN)
+    .then((c) => c.match(SEEN_URL))
+    .then((r) => (r ? r.text() : null))
+    .then((s) => (s == null ? null : Number(s)))
+    .catch(() => null);
+const saveSeen = (seq) => caches.open(SEEN).then((c) => c.put(SEEN_URL, new Response(String(seq)))).catch(() => {});
+
 self.addEventListener("push", (e) => {
   // Each kind has its own tag: a newer email notification replaces an older email one, but never a Sumit one (and the other way round).
   const base = { dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
   e.waitUntil(
-    getJson("/api/email/status", (o) => o.latest || []).then(async (mail) => {
-      if (mail.length) return emailNote(mail, { ...base, tag: "email-suggestion" });
-      return receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), { ...base, tag: "sumit-receipt" });
+    Promise.all([getJson("/api/push/events", (o) => o), lastSeen()]).then(async ([events, seen]) => {
+      // The server numbers its pushes: show what this device has not shown yet (the newest one when it has no record).
+      const newest = events.length ? events[events.length - 1].seq : 0;
+      const fresh = events.filter((ev) => ev.seq > (seen ?? newest - 1));
+      const sources = new Set((fresh.length ? fresh : events.slice(-1)).map((ev) => ev.source));
+      // The server is older than this worker, or the list is empty: it is the Sumit poll, as before.
+      if (!sources.size) sources.add("sumit");
+      await saveSeen(newest);
+      if (sources.has("email")) {
+        const mail = await getJson("/api/email/status", (o) => o.latest || []);
+        if (mail.length) await emailNote(mail, { ...base, tag: "email-suggestion" });
+        else sources.add("sumit");
+      }
+      if (sources.has("sumit")) await receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), { ...base, tag: "sumit-receipt" });
     }),
   );
 });

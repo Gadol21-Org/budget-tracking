@@ -2,7 +2,7 @@
 //! notification even when the app is closed.
 //!
 //! The push carries no payload (so no message encryption is needed): the service worker, on
-//! waking, asks `/api/email/status` what a mail just brought (served while the last push was the email one), or else `/api/sumit` for the unread notices, and shows that. Only the push endpoint URLs
+//! waking, asks `/api/email/status` what a mail just brought and `/api/sumit` for the unread notices, and shows what it has not shown yet (`/api/push/events` numbers the pushes). Only the push endpoint URLs
 //! are stored. Pushes are signed with VAPID keys from the environment:
 //! `VAPID_PRIVATE_KEY_PEM_B64` (base64 of a PKCS#8 P-256 PEM), `VAPID_PUBLIC_KEY` (the matching
 //! uncompressed point, base64url, which the browser needs to subscribe) and optionally
@@ -129,17 +129,44 @@ fn vapid_header(endpoint: &str, pem: &str, public: &str) -> Result<String> {
     Ok(format!("vapid t={jwt}, k={public}"))
 }
 
-const SOURCE_KEY: &str = "push_last_source";
+const EVENTS_KEY: &str = "push_events";
+const KEEP_EVENTS: usize = 10;
 
-/// Who sent the last push (`email` or `sumit`): a push carries no data, so the app asks, and this tells it which news to show.
-pub async fn last_source(db: &dyn Storage) -> Option<String> {
-    db.get_setting(SOURCE_KEY).await.ok().flatten()
+/// One push that was sent: a running number and who sent it (`email` or `sumit`).
+#[derive(Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub struct Event {
+    pub seq: u64,
+    pub source: String,
+}
+
+/// The most recent pushes, oldest first. A push carries no data, so the phone asks for this and shows what it has not shown yet.
+pub async fn events(db: &dyn Storage) -> Result<Vec<Event>> {
+    crate::sumit::load(db, EVENTS_KEY).await
+}
+
+async fn record(db: &dyn Storage, source: &str) {
+    let result = async {
+        let mut all = events(db).await?;
+        let seq = all.last().map_or(1, |e| e.seq + 1);
+        all.push(Event {
+            seq,
+            source: source.to_string(),
+        });
+        if all.len() > KEEP_EVENTS {
+            all.remove(0);
+        }
+        crate::sumit::save(db, EVENTS_KEY, &all).await
+    }
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("push: recording the event failed: {e:#}");
+    }
 }
 
 /// Wake every subscribed device. Dead subscriptions (404/410) are dropped; any other failure is
 /// only logged. Never fails the caller.
 pub async fn notify_all(db: &dyn Storage, source: &str) {
-    let _ = db.set_setting(SOURCE_KEY, source).await;
+    record(db, source).await;
     let (Some(public), Some(pem)) = (public_key(), private_pem()) else {
         return;
     };
@@ -206,6 +233,18 @@ mod tests {
         let jwt = h.trim_start_matches("vapid t=").split(',').next().unwrap();
         assert_eq!(jwt.split('.').count(), 3);
         assert!(vapid_header("https://x/y", "not a key", "K").is_err());
+    }
+
+    #[tokio::test]
+    async fn every_push_is_numbered_and_only_the_latest_are_kept() {
+        let db = crate::testdb::fresh().await;
+        for i in 0..12 {
+            record(&db, if i % 2 == 0 { "email" } else { "sumit" }).await;
+        }
+        let all = events(&db).await.unwrap();
+        assert_eq!(all.len(), KEEP_EVENTS);
+        assert_eq!((all[0].seq, all[0].source.as_str()), (3, "email"));
+        assert_eq!((all[9].seq, all[9].source.as_str()), (12, "sumit"));
     }
 
     #[tokio::test]
