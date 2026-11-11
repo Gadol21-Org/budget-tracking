@@ -105,12 +105,12 @@ const receiptNote = (unread, opts) => {
 };
 
 self.addEventListener("push", (e) => {
-  // Both kinds share one tag, so a newer notification replaces the one on the phone instead of piling up.
-  const opts = { tag: "budget-new", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
+  // Each kind has its own tag: a newer email notification replaces an older email one, but never a Sumit one (and the other way round).
+  const base = { dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
   e.waitUntil(
     getJson("/api/email/status", (o) => o.latest || []).then(async (mail) => {
-      if (mail.length) return emailNote(mail, opts);
-      return receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), opts);
+      if (mail.length) return emailNote(mail, { ...base, tag: "email-suggestion" });
+      return receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), { ...base, tag: "sumit-receipt" });
     }),
   );
 });
