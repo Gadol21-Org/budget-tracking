@@ -54,7 +54,8 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// A push carries no data: ask the server what is new (Sumit receipts, charges found in email) and show it as one notification.
+// A push carries no data and does not say who sent it: ask the server what is new. Charges found in email arrive the moment
+// the mail does, so a fresh one means this push is theirs; otherwise it is the Sumit poll, with the receipts not yet looked at.
 const SYMBOL = { ILS: "₪", USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
 const priceOf = (l) => {
   const places = l.currency === "JPY" ? 0 : 2;
@@ -67,8 +68,30 @@ const getJson = (url, pick) =>
     .then(pick)
     .catch(() => []);
 
-// What each source has to say: a heading for the title and a line for each item.
-const receiptParts = (unread) => {
+const emailNote = (mail, opts) => {
+  const added = mail.filter((l) => l.auto);
+  const review = mail.filter((l) => !l.auto);
+  let title = "חיוב חדש מדוא״ל";
+  let body;
+  if (added.length && review.length) {
+    title = "חיובים חדשים מדוא״ל";
+    body = `נוספו:\n${added.map(mailLine).join("\n")}\nממתינות לבדיקה:\n${review.map(mailLine).join("\n")}`;
+  } else if (added.length) {
+    title = "תנועה נוספה מדוא״ל";
+    body = added.map(mailLine).join("\n");
+  } else {
+    body = review.map(mailLine).join("\n");
+  }
+  // The click opens the email list.
+  return self.registration.showNotification(title, { ...opts, body, data: { email: true } });
+};
+
+const receiptNote = (unread, opts) => {
+  if (unread.length <= 1) {
+    const n = unread[0];
+    return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { ...opts, body: n ? n.body : "" });
+  }
+  // Several at once: one notification that says what came in, with a line for each.
   const held = unread.filter((n) => n.title.includes("ממתי")).length;
   const refunds = unread.filter((n) => !n.title.includes("ממתי") && n.title.includes("זיכוי")).length;
   const receipts = unread.length - held - refunds;
@@ -76,31 +99,18 @@ const receiptParts = (unread) => {
   if (receipts) parts.push(receipts === 1 ? "קבלה חדשה" : `${receipts} קבלות חדשות`);
   if (refunds) parts.push(refunds === 1 ? "זיכוי" : `${refunds} זיכויים`);
   if (held) parts.push(`${held} ממתינים לסיווג`);
-  return parts;
-};
-const mailParts = (added, review) => {
-  const parts = [];
-  if (added.length) parts.push(added.length === 1 ? "תנועה נוספה מדוא״ל" : `${added.length} תנועות נוספו מדוא״ל`);
-  if (review.length) parts.push(review.length === 1 ? "חיוב מדוא״ל ממתין לבדיקה" : `${review.length} חיובים מדוא״ל ממתינים לבדיקה`);
-  return parts;
+  const lines = unread.slice(0, 5).map((n) => n.title);
+  if (unread.length > 5) lines.push(`ועוד ${unread.length - 5}`);
+  return self.registration.showNotification(parts.join(", "), { ...opts, body: lines.join("\n") });
 };
 
 self.addEventListener("push", (e) => {
+  // Both kinds share one tag, so a newer notification replaces the one on the phone instead of piling up.
+  const opts = { tag: "budget-new", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
   e.waitUntil(
-    Promise.all([getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), getJson("/api/email/status", (o) => o.latest || [])]).then(([unread, mail]) => {
-      const opts = { tag: "budget-new", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
-      const added = mail.filter((l) => l.auto);
-      const review = mail.filter((l) => !l.auto);
-      // Only email: the click opens the email list; with receipts as well it opens the app.
-      opts.data = { email: mail.length > 0 && unread.length === 0 };
-      if (!unread.length && !mail.length) return self.registration.showNotification("התקבלה קבלה חדשה", opts);
-      if (unread.length === 1 && !mail.length) return self.registration.showNotification(unread[0].title, { ...opts, body: unread[0].body });
-      // One notification that says what came in, with a line for each (at most 5 of each kind).
-      const lines = unread.slice(0, 5).map((n) => n.title);
-      if (unread.length > 5) lines.push(`ועוד ${unread.length - 5}`);
-      if (added.length) lines.push(...(unread.length || review.length ? ["נוספו מדוא״ל:"] : []), ...added.map(mailLine));
-      if (review.length) lines.push(...(unread.length || added.length ? ["ממתינות לבדיקה:"] : []), ...review.map(mailLine));
-      return self.registration.showNotification([...receiptParts(unread), ...mailParts(added, review)].join(", "), { ...opts, body: lines.join("\n") });
+    getJson("/api/email/status", (o) => o.latest || []).then(async (mail) => {
+      if (mail.length) return emailNote(mail, opts);
+      return receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), opts);
     }),
   );
 });

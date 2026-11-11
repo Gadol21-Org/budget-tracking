@@ -2,7 +2,7 @@
 //! notification even when the app is closed.
 //!
 //! The push carries no payload (so no message encryption is needed): the service worker, on
-//! waking, asks `/api/sumit` for the unread notices and `/api/email/status` for what the latest mail brought, and shows both as one notification. Only the push endpoint URLs
+//! waking, asks `/api/email/status` what a mail just brought (served for two minutes), or else `/api/sumit` for the unread notices, and shows that. Only the push endpoint URLs
 //! are stored. Pushes are signed with VAPID keys from the environment:
 //! `VAPID_PRIVATE_KEY_PEM_B64` (base64 of a PKCS#8 P-256 PEM), `VAPID_PUBLIC_KEY` (the matching
 //! uncompressed point, base64url, which the browser needs to subscribe) and optionally

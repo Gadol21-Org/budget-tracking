@@ -37,8 +37,8 @@ const LAST_RECEIVED_KEY: &str = "email_last_received";
 const LAST_ERROR_KEY: &str = "email_last_error";
 const LATEST_KEY: &str = "email_latest_batch";
 const LATEST_AT_KEY: &str = "email_latest_at";
-/// The push text is built right after the push, so a batch older than this is no longer news.
-const LATEST_FRESH_MINUTES: i64 = 15;
+/// The push text is built right after the push, so a batch older than this is no longer news (and a later Sumit push is not taken for an email one).
+const LATEST_FRESH_MINUTES: i64 = 2;
 /// Mail added without asking stays listed this many days, then goes (with its stored email).
 const AUTO_KEEP_DAYS: i64 = 30;
 const AI_DAY_KEY: &str = "email_ai_day";
