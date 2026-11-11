@@ -2,6 +2,7 @@ import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
 import { productName, productOf } from "../business";
 import { splitSumitNote } from "../sumitNote";
+import { Icon } from "../components/Icon";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
@@ -74,14 +75,14 @@ export function TransactionRow({ t }: { t: Transaction }) {
         <Money agorot={t.amount_agorot} cls={isIncomeTx(state.cats, t) ? "income" : "expense"} />
       )}
       {t.sync_state === "queued" ? null : (
-        <button className="del" title="עריכה" onClick={() => openTransactionDialog(t)}>
-          ✎
+        <button className="del txact" title="עריכה" onClick={() => openTransactionDialog(t)}>
+          <Icon name="hoverPen" size={20} />
         </button>
       )}
       {/* An upcoming line has no row of its own to delete; stopping it is in its edit dialog. */}
       {t.upcoming ? null : (
         <button
-          className="del"
+          className="del txact"
           title="מחיקה"
           onClick={async () => {
             if (!confirm("למחוק את התנועה?")) return;
@@ -90,7 +91,7 @@ export function TransactionRow({ t }: { t: Transaction }) {
             await load();
           }}
         >
-          ✕
+          <Icon name="hoverTrash" size={20} />
         </button>
       )}
     </div>
