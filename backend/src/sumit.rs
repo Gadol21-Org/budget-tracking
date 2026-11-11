@@ -1055,7 +1055,7 @@ async fn retry_held_inner(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize>
     persist_lists(db, &mut recs, &mut notices).await?;
     save(db, STATE_KEY, &state).await?;
     if done > 0 {
-        crate::push::notify_all(db).await;
+        crate::push::notify_all(db, "sumit").await;
     }
     Ok(done)
 }
@@ -1127,7 +1127,7 @@ pub async fn poll_and_notify(
                 s.calls
             );
             if s.new_receipts > 0 || s.held > 0 || s.refunds > 0 {
-                crate::push::notify_all(db).await;
+                crate::push::notify_all(db, "sumit").await;
             }
             Ok(s)
         }

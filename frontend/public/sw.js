@@ -54,8 +54,8 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// A push carries no data and does not say who sent it: ask the server what is new. Charges found in email arrive the moment
-// the mail does, so a fresh one means this push is theirs; otherwise it is the Sumit poll, with the receipts not yet looked at.
+// A push carries no data and does not say who sent it: ask the server what is new. The email status lists the latest charges
+// only while the last push was the email one; otherwise this is the Sumit poll, with the receipts not yet looked at.
 const SYMBOL = { ILS: "₪", USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
 const priceOf = (l) => {
   const places = l.currency === "JPY" ? 0 : 2;

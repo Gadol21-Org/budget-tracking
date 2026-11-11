@@ -2,7 +2,7 @@
 //! notification even when the app is closed.
 //!
 //! The push carries no payload (so no message encryption is needed): the service worker, on
-//! waking, asks `/api/email/status` what a mail just brought (served for two minutes), or else `/api/sumit` for the unread notices, and shows that. Only the push endpoint URLs
+//! waking, asks `/api/email/status` what a mail just brought (served while the last push was the email one), or else `/api/sumit` for the unread notices, and shows that. Only the push endpoint URLs
 //! are stored. Pushes are signed with VAPID keys from the environment:
 //! `VAPID_PRIVATE_KEY_PEM_B64` (base64 of a PKCS#8 P-256 PEM), `VAPID_PUBLIC_KEY` (the matching
 //! uncompressed point, base64url, which the browser needs to subscribe) and optionally
@@ -129,9 +129,17 @@ fn vapid_header(endpoint: &str, pem: &str, public: &str) -> Result<String> {
     Ok(format!("vapid t={jwt}, k={public}"))
 }
 
+const SOURCE_KEY: &str = "push_last_source";
+
+/// Who sent the last push (`email` or `sumit`): a push carries no data, so the app asks, and this tells it which news to show.
+pub async fn last_source(db: &dyn Storage) -> Option<String> {
+    db.get_setting(SOURCE_KEY).await.ok().flatten()
+}
+
 /// Wake every subscribed device. Dead subscriptions (404/410) are dropped; any other failure is
 /// only logged. Never fails the caller.
-pub async fn notify_all(db: &dyn Storage) {
+pub async fn notify_all(db: &dyn Storage, source: &str) {
+    let _ = db.set_setting(SOURCE_KEY, source).await;
     let (Some(public), Some(pem)) = (public_key(), private_pem()) else {
         return;
     };

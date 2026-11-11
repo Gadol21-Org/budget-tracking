@@ -36,9 +36,6 @@ use inbound::Mail;
 const LAST_RECEIVED_KEY: &str = "email_last_received";
 const LAST_ERROR_KEY: &str = "email_last_error";
 const LATEST_KEY: &str = "email_latest_batch";
-const LATEST_AT_KEY: &str = "email_latest_at";
-/// The push text is built right after the push, so a batch older than this is no longer news (and a later Sumit push is not taken for an email one).
-const LATEST_FRESH_MINUTES: i64 = 2;
 /// Mail added without asking stays listed this many days, then goes (with its stored email).
 const AUTO_KEEP_DAYS: i64 = 30;
 const AI_DAY_KEY: &str = "email_ai_day";
@@ -212,16 +209,8 @@ impl Service {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
         self.expire_auto().await;
-        let fresh = self
-            .db
-            .get_setting(LATEST_AT_KEY)
-            .await?
-            .and_then(|v| chrono::DateTime::parse_from_rfc3339(&v).ok())
-            .is_some_and(|at| {
-                Utc::now() - at.with_timezone(&Utc)
-                    < chrono::Duration::minutes(LATEST_FRESH_MINUTES)
-            });
-        let latest = if fresh {
+        // The push says nothing about who sent it: only while the last push was the email one is the latest batch news.
+        let latest = if crate::push::last_source(self.db.as_ref()).await.as_deref() == Some("email") {
             self.db
                 .get_setting(LATEST_KEY)
                 .await?
@@ -272,12 +261,8 @@ impl Service {
         items.truncate(5);
         if let Ok(json) = serde_json::to_string(&items) {
             let _ = self.db.set_setting(LATEST_KEY, &json).await;
-            let _ = self
-                .db
-                .set_setting(LATEST_AT_KEY, &Utc::now().to_rfc3339())
-                .await;
         }
-        crate::push::notify_all(self.db.as_ref()).await;
+        crate::push::notify_all(self.db.as_ref(), "email").await;
     }
 
     /// Record one paid AI call in the operation log (kind `ai_email`), with what it cost.
