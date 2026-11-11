@@ -44,13 +44,13 @@ The Worker cannot sign in to Access, so make exactly one path public, like `/ass
 2. **Filter:** Settings > Filters and Blocked Addresses > Create a new filter, for example `from:(your-card-issuer.example) OR subject:(receipt OR קבלה OR חשבונית)` > Create filter > tick **Forward it to** and choose the address. A filter forwards mail that arrives after it is created, not old mail.
 
 ### 6. Phone notifications (optional)
-A new suggestion can notify your phone, even when the app is closed. Make a key pair once. These commands work the same on macOS and Linux (`base64 -w0` does not exist on macOS, so the output is joined with `tr`):
+A charge found in email can notify your phone, even when the app is closed. Make a key pair once. These commands work the same on macOS and Linux (`base64 -w0` does not exist on macOS, so the output is joined with `tr`):
 ```
 openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out vapid.pem
 echo "VAPID_PRIVATE_KEY_PEM_B64=$(base64 < vapid.pem | tr -d '\n')"
 echo "VAPID_PUBLIC_KEY=$(openssl ec -in vapid.pem -pubout -outform DER 2>/dev/null | tail -c 65 | base64 | tr -d '\n=' | tr '+/' '-_')"
 ```
-Put both lines in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, then press "התראה על הצעות חדשות" in Settings on each device. On iPhone the app must be added to the home screen first. The push carries no text: the app asks the server how many suggestions wait. These are the same variables the Sumit receipts feature uses, so one key pair serves both.
+Put both lines in `.env` (and `VAPID_SUBJECT=mailto:you@example.com`), restart, then, on each device, press "הפעלה" on the offer that appears on the summary screen, or "הפעלת התראות במכשיר" on the "חיובים מדוא״ל" page. On iPhone the app must be added to the home screen first. The push carries no text: the app asks the server what is new. These are the same variables the Sumit receipts feature uses, and there is one notification per push, so receipts and email charges arrive together in one notification and one key pair serves both.
 
 **Staging uses its own key.** Run the commands again for a second pair (do not reuse the production one) and save them as GitHub repository secrets `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY` (the values printed after the `=`). The staging workflow passes them to the staging container only; without them push is off on staging. Production never reads these secrets.
 

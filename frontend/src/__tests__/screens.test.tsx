@@ -22,6 +22,7 @@ vi.mock("../api", async (orig) => ({
     rejectSuggestion: vi.fn(async () => {}),
     deleteEmailRule: vi.fn(async () => {}),
     discardSuggestion: vi.fn(async () => {}),
+    sumit: vi.fn(async () => ({ configured: false, last_poll_at: null, last_error: null, next_poll_at: null, calls_this_month: 0, monthly_limit: 0, products: [], notices: [], held: [], push_public_key: null })),
   },
 }));
 
@@ -139,6 +140,21 @@ describe("the email inbox", () => {
     expect(screen.getByRole("button", { name: "הסרה" })).toBeTruthy();
   });
 
+  it("is a row in settings, and its page offers reading the waiting mail and the notifications like the Sumit page", async () => {
+    state.email = { configured: true, ai_configured: true, last_received: null, last_error: null, pending: 2, queued: 3, latest: [], push_public_key: "k" } as never;
+    state.view = "settings";
+    app.render();
+    expect(await screen.findByText("2 ממתינות")).toBeTruthy();
+    state.sumit.offerPush = true;
+    state.suggestions = [];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByRole("button", { name: "קריאת 3 הודעות ממתינות" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הפעלת התראות במכשיר" })).toBeTruthy();
+    state.sumit.offerPush = false;
+    state.email = null;
+  });
+
   it("offers manual entry for a message that could not be read", async () => {
     state.suggestions = [{ ...suggestion, id: 8, status: "error", error: "no answer" }];
     state.view = "emailInbox";
@@ -215,5 +231,26 @@ describe("the business section", () => {
     fireEvent.click(screen.getByRole("button", { name: "פעולות" }));
     expect(state.view).toBe("actions");
     expect(screen.getByText("ניהול מוצרים")).toBeTruthy();
+  });
+});
+
+describe("the transactions list divider", () => {
+  it("sits between days after today and today-or-earlier, even when the later days are not pending", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-10T10:00:00Z"));
+    const mk = (id: number, date: string, upcoming?: boolean) => ({ id, date, amount_agorot: -1000, category_id: null, payment_method_id: null, note: `n${id}`, sync_state: "synced", upcoming });
+    state.txs = [mk(1, "2026-11-17"), mk(2, "2026-11-12"), mk(3, "2026-11-10"), mk(4, "2026-11-05"), mk(5, "2026-11-11", true)];
+    state.period = { kind: "month", month: "2026-11" };
+    state.filter = undefined;
+    state.view = "list";
+    Element.prototype.scrollIntoView = () => {};
+    app.render();
+    const divider = document.querySelector(".upcoming-divider")!;
+    expect(divider).toBeTruthy();
+    const anchor = document.getElementById("now-anchor")!;
+    expect(anchor.contains(divider)).toBe(true);
+    expect(anchor.textContent).toContain("n3");
+    expect(anchor.textContent).not.toContain("n2");
+    vi.useRealTimers();
   });
 });

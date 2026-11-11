@@ -10,8 +10,9 @@ import { state } from "../state";
 import { insightsCtx, render } from "../render";
 import { openEmailInbox } from "./emailInbox";
 import { DrillCrumbs, SummaryCategories } from "./insights";
-import { categoryName } from "../categories";
+import { categoryName, isIncomeTx } from "../categories";
 import { inPeriod } from "../selectors";
+import { PushOffer, SumitBanner } from "./sumit";
 
 /** The period switcher wired to the app's period. */
 export function ConnectedMonthBar() {
@@ -42,18 +43,13 @@ export function openPeriodDialog() {
 
 const sign = (n: number) => (n < 0 ? "expense" : "income");
 
-/** Transactions found in emails wait for a decision. */
+/** On the summary: charges found in emails that wait for a check (same banner as the Sumit receipts). */
 function EmailBanner() {
   const n = state.email?.pending ?? 0;
   if (!n) return null;
   return (
-    <div className="card clickable email-banner" style={{ marginTop: 10 }} {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
-      <div className="head">
-        <div className="grow">
-          <div className="bizname">{n === 1 ? "חיוב אחד מדוא״ל ממתין לבדיקה" : `${n} חיובים מדוא״ל ממתינים לבדיקה`}</div>
-        </div>
-        <span className="muted">›</span>
-      </div>
+    <div className="sumit-banner warn" {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
+      {n === 1 ? "חיוב אחד מדוא״ל ממתין לבדיקה" : `${n} חיובים מדוא״ל ממתינים לבדיקה`}
     </div>
   );
 }
@@ -104,12 +100,15 @@ function MonthScreen() {
     );
   }
   const txs = inPeriod();
-  const income = txs.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
-  const expense = txs.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
+  // By category, not by sign: a refund is a negative income and lowers the income.
+  const income = txs.filter((t) => isIncomeTx(state.cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
+  const expense = txs.filter((t) => !isIncomeTx(state.cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
   const balance = income + expense;
   return (
     <div>
       <ConnectedMonthBar />
+      <SumitBanner />
+      <PushOffer />
       <div className="stats">
         <Stat label="הכנסות" agorot={income} cls="income" kind="income" />
         <Stat label="הוצאות" agorot={-expense} cls="expense" kind="expense" />

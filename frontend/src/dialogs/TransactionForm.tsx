@@ -11,6 +11,7 @@ import { LRM, pickerCurrencies } from "../currencies";
 import { enqueue, isNetworkError, requestPersistence } from "../offline";
 import { monthsBetween } from "../period";
 import { catById, showPeriodFor } from "../selectors";
+import { isIncomeTx } from "../categories";
 import { state } from "../state";
 import { load } from "../sync";
 import { fmtDate } from "../ui";
@@ -51,6 +52,9 @@ export interface Prefill {
   note: string;
 }
 
+/** The number pad of an iPhone or iPad has no minus key, so a refund is ticked there instead of typed (an iPad can pass for a Mac). */
+const IOS_KEYPAD = typeof navigator !== "undefined" && (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
 /**
  * Add or edit a transaction. An `existing` generated occurrence of a repeating transaction edits
  * the series from that occurrence's month on; earlier months are left as they were.
@@ -79,10 +83,10 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
     const kids = kindCats(income).filter((k) => String(k.parent_id) === c.top);
     return { top: c.top, sub: kids.some((k) => String(k.id) === c.sub) ? c.sub : "" };
   }
-  const startIncome = existing ? existing.amount_agorot > 0 : prefill ? prefill.amount_minor > 0 : startAsIncome;
+  const startIncome = existing ? isIncomeTx(state.cats, existing) : prefill ? prefill.amount_minor > 0 : startAsIncome;
   const [isIncome, setIsIncome] = useState(startIncome);
   const [currency, setCurrency] = useState<Currency>(startFx?.currency ?? ruleFx?.currency ?? prefill?.currency ?? "ILS");
-  const [amount, setAmount] = useState(prefill ? String(Math.abs(prefill.amount_minor) / 10 ** decimals(prefill.currency)) : startAmountText(existing, startFx, ruleFx));
+  const [amount, setAmount] = useState(prefill ? String(Math.abs(prefill.amount_minor) / 10 ** decimals(prefill.currency)) : startAmountText(existing, startFx, ruleFx, existing !== undefined && existing.amount_agorot < 0 && startIncome));
   const [date, setDate] = useState(existing?.date ?? prefill?.date ?? today());
   const [note, setNote] = useState(existing?.note ?? prefill?.note ?? "");
   const [choice, setChoice] = useState<CategoryChoice>(() => {
@@ -309,6 +313,8 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
 
   const switchKind = (income: boolean) => {
     setIsIncome(income);
+    // The minus of a refund means nothing on an expense.
+    if (!income) setAmount(amount.trim().replace(/^-+/, ""));
     setChoice(reconcile(income, choice));
   };
 
@@ -347,6 +353,14 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
           />
         </Field>
       </div>
+      {isIncome && (IOS_KEYPAD || amount.trim().startsWith("-")) && (
+        <div className="repeat-row">
+          <label className="repeat-hit">
+            <input type="checkbox" checked={amount.trim().startsWith("-")} onChange={(e) => setAmount(e.target.checked ? `-${amount.trim()}` : amount.trim().replace(/^-+/, ""))} />
+          </label>
+          <span>זיכוי (הכנסה שלילית: מקטין את ההכנסות)</span>
+        </div>
+      )}
       {foreign && (
         <div className="fxbox">
           {!repeat && (
@@ -389,7 +403,7 @@ export function TransactionForm({ existing, startAsIncome, prefill, close }: { e
         />
       </Field>
       <Field label="הערה">
-        <input type="text" placeholder="אופציונלי" maxLength={35} value={note} onChange={(e) => setNote(e.target.value)} />
+        <input type="text" placeholder="אופציונלי" value={note} onChange={(e) => setNote(e.target.value)} />
       </Field>
       <div style={{ display: productHidden ? "none" : "" }}>
         <ProductChips products={state.products} value={productValue} onChange={setProductValue} required={mustPickProduct} givenName={givenName} collapsed />

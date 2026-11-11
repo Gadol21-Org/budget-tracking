@@ -1,6 +1,6 @@
 import { bounds, contains, shift, title as periodTitle, type Period } from "../period";
 import { type Category, type Transaction } from "../api";
-import { categoryName, categoryPath } from "../categories";
+import { categoryName, categoryPath, isIncomeTx, sideAmount } from "../categories";
 
 // The figures behind the dashboards: periods and comparisons, totals per category, colours. No DOM.
 
@@ -87,9 +87,9 @@ export interface Group {
  * What the categories dashboard knows about a side. To narrow a side further (say, income by who earned it),
  * extend `pick`: every category figure goes through it.
  */
-export const SIDES: Record<Side, { title: string; total: string; empty: string; cls: "expense" | "income"; higherIsBad: boolean; pick: (t: Transaction) => boolean }> = {
-  expense: { title: "הוצאות", total: "מההוצאות בתקופה", empty: "אין הוצאות בתקופה זו", cls: "expense", higherIsBad: true, pick: (t) => t.amount_agorot < 0 },
-  income: { title: "הכנסות", total: "מההכנסות בתקופה", empty: "אין הכנסות בתקופה זו", cls: "income", higherIsBad: false, pick: (t) => t.amount_agorot > 0 },
+export const SIDES: Record<Side, { title: string; total: string; empty: string; cls: "expense" | "income"; higherIsBad: boolean; pick: (t: Transaction, cats: Category[]) => boolean }> = {
+  expense: { title: "הוצאות", total: "מההוצאות בתקופה", empty: "אין הוצאות בתקופה זו", cls: "expense", higherIsBad: true, pick: (t, cats) => !isIncomeTx(cats, t) },
+  income: { title: "הכנסות", total: "מההכנסות בתקופה", empty: "אין הכנסות בתקופה זו", cls: "income", higherIsBad: false, pick: (t, cats) => isIncomeTx(cats, t) },
 };
 export const sideOf = (ctx: Pick<Ctx, "ins">): Side => ctx.ins.side ?? "expense";
 
@@ -107,10 +107,11 @@ export function aggregate(ctx: Pick<Ctx, "txs" | "cats">, p: Period, side: Side 
   const pick = SIDES[side].pick;
   for (const t of ctx.txs) {
     if (!contains(p, t.date)) continue;
-    const v = Math.abs(t.amount_agorot);
-    if (t.amount_agorot > 0) agg.income += v;
+    // On its own side: a refund (negative income) lowers the income.
+    const v = sideAmount(ctx.cats, t);
+    if (isIncomeTx(ctx.cats, t)) agg.income += v;
     else agg.expense += v;
-    if (!pick(t)) continue;
+    if (!pick(t, ctx.cats)) continue;
     agg.sideTotal += v;
     const own = ctx.cats.find((c) => c.id === t.category_id);
     const top = own?.parent_id ?? t.category_id;
@@ -160,7 +161,7 @@ export const dayOfWeek = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay
 /** Variable (non-repeating) spending per day of a month, in agorot; index 0 = the 1st. */
 export function dayTotals(ctx: Ctx, month: string): number[] {
   const out = Array<number>(daysInMonth(month)).fill(0);
-  for (const t of ctx.txs) if (t.amount_agorot < 0 && !isFixed(t) && t.date.startsWith(month)) out[Number(t.date.slice(8)) - 1] += -t.amount_agorot;
+  for (const t of ctx.txs) if (!isIncomeTx(ctx.cats, t) && !isFixed(t) && t.date.startsWith(month)) out[Number(t.date.slice(8)) - 1] += -t.amount_agorot;
   return out;
 }
 

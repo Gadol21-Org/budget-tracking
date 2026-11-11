@@ -61,10 +61,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
-# Optional staging-only push keys (VAPID_*), written by the workflow from staging secrets.
-# They are never the production ones.
+# Optional staging-only settings (Sumit test account, VAPID push keys, email), written by the workflow
+# from staging secrets. They are never the production ones.
 extra_env=()
-[ -f "$HOME/budget-staging/email.env" ] && extra_env=(--env-file "$HOME/budget-staging/email.env")
+[ -f "$HOME/budget-staging/staging.env" ] && extra_env=(--env-file "$HOME/budget-staging/staging.env")
 
 docker run -d --name "$name" \
   --init \

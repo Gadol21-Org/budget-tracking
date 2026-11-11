@@ -1,8 +1,8 @@
-//! Web push to the devices that installed the app, so a new email suggestion shows up as a phone
+//! Web push to the devices that installed the app, so a new receipt or email charge shows up as a phone
 //! notification even when the app is closed.
 //!
 //! The push carries no payload (so no message encryption is needed): the service worker, on
-//! waking, asks `/api/email/status` how many suggestions wait and shows that. Only the push endpoint URLs
+//! waking, asks `/api/sumit` for the unread notices and `/api/email/status` for what the latest mail brought, and shows both as one notification. Only the push endpoint URLs
 //! are stored. Pushes are signed with VAPID keys from the environment:
 //! `VAPID_PRIVATE_KEY_PEM_B64` (base64 of a PKCS#8 P-256 PEM), `VAPID_PUBLIC_KEY` (the matching
 //! uncompressed point, base64url, which the browser needs to subscribe) and optionally
@@ -77,19 +77,8 @@ pub fn check_endpoint(endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-async fn load(db: &dyn Storage) -> Result<Vec<String>> {
-    Ok(match db.get_setting(KEY).await? {
-        Some(s) if !s.is_empty() => serde_json::from_str(&s).context("stored push endpoints")?,
-        _ => Vec::new(),
-    })
-}
-
-async fn save(db: &dyn Storage, all: &[String]) -> Result<()> {
-    db.set_setting(KEY, &serde_json::to_string(all)?).await
-}
-
 async fn endpoints(db: &dyn Storage) -> Result<Vec<String>> {
-    load(db).await
+    crate::sumit::load(db, KEY).await
 }
 
 pub async fn subscribe(db: &dyn Storage, endpoint: &str) -> Result<()> {
@@ -100,7 +89,7 @@ pub async fn subscribe(db: &dyn Storage, endpoint: &str) -> Result<()> {
         if all.len() > MAX_DEVICES {
             all.remove(0);
         }
-        save(db, &all).await?;
+        crate::sumit::save(db, KEY, &all).await?;
     }
     Ok(())
 }
@@ -174,7 +163,7 @@ pub async fn notify_all(db: &dyn Storage) {
         }
         keep.push(ep);
     }
-    if let Err(e) = save(db, &keep).await {
+    if let Err(e) = crate::sumit::save(db, KEY, &keep).await {
         tracing::warn!("push: saving subscriptions failed: {e:#}");
     }
 }

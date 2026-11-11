@@ -32,7 +32,10 @@ body {
   color: var(--text);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
 }
-button, input, select { font: inherit; color: inherit; }
+button { font: inherit; color: inherit; }
+/* Entered values are always full-strength text, even inside a muted label; only placeholders are grey. */
+input, select, textarea { font: inherit; color: var(--text); }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 /* Native-app feel: controls and chrome are not selectable and don't flash on tap; typed text and notes stay selectable. */
 body { -webkit-tap-highlight-color: transparent; }
 /* A tap or click selects; it must not leave a focused/pressed look behind. Keyboard focus (:focus-visible) keeps its ring, and hover only applies where a real pointer can hover (touch browsers keep :hover stuck after a tap). */
@@ -71,6 +74,7 @@ h2 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--muted); font-weight: 6
 .daylabel { margin: 16px 4px 6px; font-size: .85rem; color: var(--muted); font-weight: 600; }
 .del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; padding: 8px; border-radius: 8px; }
 @media (hover: hover) { .del:hover { color: var(--expense); } }
+.del.txact { line-height: 0; min-width: 32px; min-height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .empty { text-align: center; color: var(--muted); padding: 32px 0; }
 
 .nav {
@@ -131,6 +135,7 @@ form.add input, form.add select { padding: 11px 12px; border: 1px solid var(--li
   .row { gap: 6px; }
   .row .name { font-size: .9rem; line-height: 1.35; }
   .row .del { padding: 6px 4px; }
+  .row .del.txact { padding: 0; min-width: 32px; }
 }
 
 /* Desktop: sidebar instead of bottom nav */
@@ -235,6 +240,10 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 /* Searchable pick list (category / sub-category). */
 .combo { position: relative; display: flex; flex-direction: column; }
 .combo input { width: 100%; }
+.combo:has(.combo-clear) input { padding-inline-end: 34px; }
+.combo-clear { position: absolute; inset-inline-end: 6px; top: 0; height: 44px; max-height: 100%; width: 28px; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.combo-clear:hover { color: var(--text); }
+.combo-list button[data-active] { background: var(--bg); }
 .combo input:disabled { opacity: .55; }
 .combo-list {
   position: absolute; inset-inline: 0; top: calc(100% + 4px); z-index: 10; max-height: 220px; overflow-y: auto; overscroll-behavior: contain;
@@ -351,6 +360,10 @@ form.add .datefield input.datenative { position: absolute; inset: 0; width: 100%
 @media (prefers-color-scheme: dark) { :root { --biz: #a5b4fc; --biz-soft: rgba(165, 180, 252, .16); } }
 .productchip { display: inline-flex; align-items: center; background: var(--biz-soft); color: var(--biz); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
 .productchip.auto { opacity: .8; font-weight: 600; }
+/* A product of an imported receipt: the same badge as the business, in another colour. */
+:root { --prod: #b45309; --prod-soft: rgba(217, 119, 6, .14); }
+@media (prefers-color-scheme: dark) { :root { --prod: #fcd34d; --prod-soft: rgba(252, 211, 77, .16); } }
+.productchip.sumitprod { background: var(--prod-soft); color: var(--prod); }
 .bizcard { border-color: var(--biz); }
 .bizcard .head { display: flex; align-items: center; gap: 8px; }
 .bizcard .bizname { color: var(--biz); font-weight: 700; }
@@ -431,8 +444,6 @@ dialog { overscroll-behavior: contain; }
 .suggestion .head { display: flex; align-items: flex-start; gap: 12px; }
 .suggestion.failed { border-inline-start: 4px solid var(--expense); }
 a.btn { text-decoration: none; display: inline-block; text-align: center; }
-.email-banner { border-inline-start: 4px solid var(--brand); }
-.email-banner .head { display: flex; align-items: center; gap: 12px; }
 .email-view { display: flex; flex-direction: column; height: 100%; }
 .email-view .head { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border, #ddd); }
 .email-view iframe { flex: 1; width: 100%; border: 0; background: #fff; }
@@ -451,6 +462,11 @@ a.btn { text-decoration: none; display: inline-block; text-align: center; }
 .mailchip { display: inline-flex; align-items: center; background: var(--mail-soft); color: var(--mail); border-radius: 999px; padding: 0 9px; font-size: .75rem; font-weight: 700; margin-inline-end: 4px; }
 .suggestion .actions .btn { white-space: nowrap; }
 
+/* Summary banner: Sumit receipts that were imported or are waiting for a category. */
+.sumit-banner { margin: 10px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--brand-soft, var(--surface)); border: 1px solid var(--brand); color: var(--text); cursor: pointer; font-weight: 600; }
+.sumit-banner.offer { position: relative; padding-inline-end: 40px; cursor: default; }
+.sumit-banner .dismiss { position: absolute; top: 4px; inset-inline-end: 6px; width: 30px; height: 30px; border: 0; background: none; color: var(--muted); font-size: 1.4rem; line-height: 1; cursor: pointer; border-radius: 50%; }
+.sumit-banner.warn { border-color: var(--expense, #c0392b); }
 .bizhub .bizmenu-title { font-size: 1rem; margin: 16px 0 6px; color: var(--muted); }
 .bizmenu { display: grid; gap: 8px; }
 .bizaction { display: flex; align-items: center; gap: 12px; margin: 0; }
@@ -472,8 +488,20 @@ a.btn { text-decoration: none; display: inline-block; text-align: center; }
 .srow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 14px; border: 0; background: none; color: var(--text); font: inherit; text-align: start; cursor: pointer; position: relative; }
 .srow + .srow::before { content: ""; position: absolute; top: 0; inset-inline: 56px 0; border-top: .5px solid var(--line); }
 .sicon { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-size: 17px; flex: none; box-shadow: inset 0 0 0 .5px #0002; }
-.slabel { flex: 1 1 auto; }
+.slabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sval { color: var(--muted); font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: ltr; }
-.schev { color: var(--muted); opacity: .6; font-size: 1.2rem; }
+.schev { flex: none; color: var(--muted); opacity: .6; margin-inline: 2px; }
 .sbtn { color: #007aff; }
 .sfoot { color: var(--muted); font-size: .8rem; margin: -14px 14px 20px; }
+
+.sfoot.top { margin: 4px 14px 14px; }
+.snote { padding: 12px 14px; font-size: .9rem; }
+.snote.error { color: var(--expense, #c0392b); }
+.srow.multi { padding-block: 10px; cursor: default; }
+.sp-tag { flex: none; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 1px 8px; font-size: .72rem; font-weight: 700; line-height: 1.5; }
+.sp-tag.ok { background: rgba(47, 158, 107, .15); color: #2f9e6b; }
+.sp-tag.warn { background: rgba(217, 119, 6, .16); color: #b45309; }
+.sp-tag.prod { background: var(--biz-soft); color: var(--biz); }
+.sp-tag.off { color: var(--muted); border: 1px solid var(--line); font-weight: 600; }
+.srow.noicon + .srow.noicon::before { inset-inline: 14px 0; }
+.srow.multi .slabel { white-space: normal; }

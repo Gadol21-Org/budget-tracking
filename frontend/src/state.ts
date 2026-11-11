@@ -1,9 +1,9 @@
 import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyProducts, type ProductsData, type BusinessView } from "./business";
-import { type AiCost, type Category, type EmailRule, type EmailStatus, type EmailSuggestion, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
+import { type SumitOverview, type AiCost, type Category, type EmailRule, type EmailStatus, type EmailSuggestion, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "actions" | "businessOverview" | "products" | "currencies" | "people" | "dataTransfer" | "emailInbox" | "aiCost";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "actions" | "businessOverview" | "products" | "currencies" | "people" | "dataTransfer" | "sumit" | "emailInbox" | "aiCost";
 
 export const root = document.getElementById("app")!;
 
@@ -59,6 +59,10 @@ export const state = {
   emailRules: [] as EmailRule[],
   /** Ids of the transactions made from an email (badge in the list). */
   emailTx: new Set<number>(),
+  /** Sumit receipts needing attention: waiting for a category, or new and not yet seen. */
+  sumit: { held: 0, unread: 0, pushKey: null as string | null, offerPush: false },
+  /** The last Sumit overview fetched, so the settings card draws at once instead of flashing while it loads. */
+  sumitData: undefined as SumitOverview | undefined,
   /** The server could not be reached: the last saved data is shown, and new lines wait in the queue. */
   offline: false,
 };

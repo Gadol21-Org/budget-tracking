@@ -45,3 +45,7 @@ The workflow reuses the production secrets and variables (`ORACLE_SSH_KEY`, `ORA
 3. **Alternative to 1-2:** add a second Cloudflare tunnel hostname (e.g. `staging.example.com` -> `http://localhost:8083`) with Cloudflare Access in front. Then no port needs opening. For that, change `0.0.0.0:` to `127.0.0.1:` in `deploy-staging.sh`.
 
 The app has no login, so anyone who knows `http://<ORACLE_HOST>:8083` can use it. That is acceptable only because it holds sample data; never put real data in staging.
+
+## Sumit receipts on staging (optional)
+
+To try receipt polling there, add repository secrets `STAGING_SUMIT_API_KEY` and `STAGING_SUMIT_COMPANY_ID` (the Sumit **test** account). For phone notifications also add `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY`; make the pair with the commands in `.env.example`. For email add `STAGING_EMAIL_INBOUND_SECRET` and `STAGING_GEMINI_API_KEY` (see `deploy/EMAIL.md`). The workflow writes all of them to one private file on the VM (`staging.env`) that only the staging container reads.

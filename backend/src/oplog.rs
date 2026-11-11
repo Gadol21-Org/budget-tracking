@@ -75,6 +75,15 @@ tokio::task_local! {
     pub static ACTOR: Option<String>;
 }
 
+/// The author recorded for changes the Sumit sync makes (scheduled or started by hand). It has no `@`,
+/// so it can never be a real user's email.
+pub const SYNC_ACTOR: &str = "sumit-sync";
+
+/// Run `f` with its changes recorded as made by the Sumit sync.
+pub async fn as_sync<F: std::future::Future>(f: F) -> F::Output {
+    ACTOR.scope(Some(SYNC_ACTOR.to_string()), f).await
+}
+
 /// The email Cloudflare Access put on the request, if any (never assumed present).
 pub fn actor_from_header(v: Option<&axum::http::HeaderValue>) -> Option<String> {
     let s = v?.to_str().ok()?.trim().to_lowercase();
@@ -677,6 +686,14 @@ impl Storage for Logged {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_sumit_sync_is_recorded_as_its_own_author() {
+        assert_eq!(current_actor(), None);
+        let who = as_sync(async { current_actor() }).await;
+        assert_eq!(who.as_deref(), Some(SYNC_ACTOR));
+        assert!(!SYNC_ACTOR.contains('@'));
+    }
 
     async fn db() -> Logged {
         Logged(Arc::new(crate::testdb::fresh().await))

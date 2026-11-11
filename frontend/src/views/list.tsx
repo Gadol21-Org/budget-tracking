@@ -1,6 +1,8 @@
 import { type ReactElement } from "react";
 import { api, formatMinor, formatRate, type Transaction } from "../api";
 import { productName, productOf } from "../business";
+import { splitSumitNote } from "../sumitNote";
+import { Icon } from "../components/Icon";
 import { Money } from "../components/Money";
 import { openTransactionDialog } from "../dialogs/transaction";
 import { goBack } from "../nav";
@@ -8,6 +10,7 @@ import { dequeue } from "../offline";
 import { render } from "../render";
 import { catName, catPath, dayTitle, fxOf, inFilter, inPeriod } from "../selectors";
 import { state } from "../state";
+import { isIncomeTx } from "../categories";
 import { IN_FLIGHT, load } from "../sync";
 import { fmtDate } from "../ui";
 import { ConnectedMonthBar } from "./month";
@@ -44,6 +47,7 @@ export function TransactionRow({ t }: { t: Transaction }) {
   const product = productOf(state.products, state.cats, t);
   const own = t.id > 0 && state.products.tx.has(t.id);
   const fx = fxOf(t);
+  const note = splitSumitNote(t.note);
   return (
     <div className={t.upcoming ? "row upcoming" : "row"}>
       <div className="grow">
@@ -61,24 +65,29 @@ export function TransactionRow({ t }: { t: Transaction }) {
             נקלט מאימייל
           </span>
         )}
+        {note.products.map((p) => (
+          <span className="productchip sumitprod" key={p} title="מוצר בקבלה מ-Sumit">
+            {p}
+          </span>
+        ))}
         <FxLine t={t} />
-        {t.note ? <div className="muted">{t.note}</div> : null}
+        {note.text ? <div className="muted">{note.text}</div> : null}
       </div>
       <SyncMark t={t} />
       {fx?.rate === 0 ? (
         <span className={`num ${fx.orig_minor < 0 ? "expense" : "income"}`}>{formatMinor(Math.abs(fx.orig_minor), fx.currency)}</span>
       ) : (
-        <Money agorot={t.amount_agorot} cls={t.amount_agorot < 0 ? "expense" : "income"} />
+        <Money agorot={t.amount_agorot} cls={isIncomeTx(state.cats, t) ? "income" : "expense"} />
       )}
       {t.sync_state === "queued" ? null : (
-        <button className="del" title="עריכה" onClick={() => openTransactionDialog(t)}>
-          ✎
+        <button className="del txact" title="עריכה" onClick={() => openTransactionDialog(t)}>
+          <Icon name="hoverPen" size={20} />
         </button>
       )}
       {/* An upcoming line has no row of its own to delete; stopping it is in its edit dialog. */}
       {t.upcoming ? null : (
         <button
-          className="del"
+          className="del txact"
           title="מחיקה"
           onClick={async () => {
             if (!confirm("למחוק את התנועה?")) return;
@@ -87,7 +96,7 @@ export function TransactionRow({ t }: { t: Transaction }) {
             await load();
           }}
         >
-          ✕
+          <Icon name="hoverTrash" size={20} />
         </button>
       )}
     </div>
@@ -100,6 +109,11 @@ const PRODUCT_FILTERS = [
   ["none", "ללא מוצר"],
 ] as const;
 
+/** Today's date (YYYY-MM-DD) in the app's timezone, not UTC. */
+export function todayInJerusalem(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+}
+
 export function listView(): ReactElement {
   return <ListScreen />;
 }
@@ -109,8 +123,9 @@ function ListScreen() {
     .filter(inFilter)
     .filter((t) => state.productFilter === "all" || (productOf(state.products, state.cats, t) != null) === (state.productFilter === "product"));
   const days = [...new Set(txs.map((t) => t.date))].sort().reverse();
-  // The first day (newest first) with something that really happened: the list opens here, with later, upcoming days above it.
-  const nowDay = days.find((d) => txs.some((t) => t.date === d && !t.upcoming));
+  // The first day (newest first) that is today or earlier: the list opens here, with days after today (upcoming) above it.
+  const today = todayInJerusalem();
+  const nowDay = days.find((d) => d <= today);
   const total = txs.reduce((s, t) => s + t.amount_agorot, 0);
   return (
     <div>

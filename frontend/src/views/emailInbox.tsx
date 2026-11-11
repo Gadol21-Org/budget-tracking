@@ -13,6 +13,10 @@ import { catById } from "../selectors";
 import { state } from "../state";
 import { fetchInbox, load } from "../sync";
 import { fmtDate } from "../ui";
+import { SettingsRow } from "../components/SettingsRow";
+import { enablePush } from "./sumit";
+
+const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" }) : "עדיין לא");
 
 /** "Parent › Child" of a category, or empty. */
 function categoryPath(id: number | null): string {
@@ -47,7 +51,8 @@ export function emailInboxView(): ReactElement {
           <div className="muted">נמצאו בהודעות שהועברו מ-Gmail</div>
         </div>
       </div>
-      <p className="muted small" style={{ margin: "10px 4px 0" }}>בטוח או עם כלל קבוע: נוסף מיד. השאר ממתין לאישורכם.</p>
+      <div className="sfoot top">מיילים שמועברים מ-Gmail נקראים על ידי AI. מה שבטוח או עם כלל קבוע נוסף מיד, השאר ממתין לאישורכם.</div>
+      <EmailStatus />
       {auto.length === 0 && pending.length === 0 && queued.length === 0 && failed.length === 0 && <div className="empty">אין הצעות ממתינות</div>}
       {auto.map((s) => (
         <AutoCard key={s.id} s={s} />
@@ -63,6 +68,52 @@ export function emailInboxView(): ReactElement {
       ))}
       <RulesCard />
     </div>
+  );
+}
+
+/** The mail connection, like the Sumit page: what is wrong (if anything), when mail last came, and the actions that belong to it. */
+function EmailStatus() {
+  const st = state.email;
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{ text: string; error: boolean } | null>(null);
+  if (!st) return null;
+  const retry = async () => {
+    setBusy(true);
+    setOut({ text: "מבצע…", error: false });
+    try {
+      const r = await api.emailRetry();
+      setOut({ text: r.read ? `נקראו ${r.read} הודעות.` : "אין הודעות שנקראו (השירות עדיין לא זמין, או שאין הודעות ממתינות).", error: false });
+      await load();
+    } catch (e) {
+      setOut({ text: `שגיאה: ${e instanceof Error ? e.message : e}`, error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const push = async () => {
+    try {
+      setOut({ text: await enablePush(state.sumit.pushKey!), error: false });
+      state.sumit.offerPush = false;
+      render();
+    } catch (e) {
+      setOut({ text: `שגיאה: ${e instanceof Error ? e.message : e}`, error: true });
+    }
+  };
+  const showActions = st.configured && (st.queued > 0 || state.sumit.offerPush);
+  return (
+    <>
+      {!st.configured && <div className="sgroup"><div className="snote error">קבלת מיילים עוד לא הוגדרה בשרת (EMAIL_INBOUND_SECRET). ההוראות ב-deploy/EMAIL.md.</div></div>}
+      {st.configured && !st.ai_configured && <div className="sgroup"><div className="snote error">חסר GEMINI_API_KEY בשרת, ולכן הודעות ממתינות בלי להיקרא.</div></div>}
+      {st.last_error && <div className="sgroup"><div className="snote error">{st.last_error}</div></div>}
+      {showActions && (
+        <div className="sgroup">
+          {st.queued > 0 && <SettingsRow label={busy ? "קורא…" : `קריאת ${st.queued} הודעות ממתינות`} action disabled={busy} onClick={() => void retry()} />}
+          {state.sumit.offerPush && <SettingsRow label="הפעלת התראות במכשיר" action onClick={() => void push()} />}
+        </div>
+      )}
+      {st.configured && <div className="sfoot">הודעה אחרונה התקבלה: {when(st.last_received)}</div>}
+      {out && <div className={out.error ? "note error" : "note muted"}>{out.text}</div>}
+    </>
   );
 }
 

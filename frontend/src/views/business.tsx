@@ -71,7 +71,7 @@ function Chart({ ctx, scope }: { ctx: BusinessCtx; scope: "all" | number }) {
   const [sel, setSel] = useState<number | null>(null);
   const months = lastMonths(ctx.period);
   const ts = scoped(ctx, scope);
-  const data = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m))));
+  const data = months.map((m) => figures(ts.filter((t) => t.date.startsWith(m)), ctx.cats));
   const max = Math.max(1, ...data.flatMap((d) => [d.income, d.expense]));
   return (
     <div className="card">
@@ -137,7 +137,7 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
   const { scope } = ctx.view;
   const ts = scoped(ctx, scope);
   const inPeriod = (t: Transaction) => contains(ctx.period, t.date);
-  const cur = figures(ts.filter(inPeriod));
+  const cur = figures(ts.filter(inPeriod), ctx.cats);
   const prevP = shift(ctx.period, -1);
   const share = scope === "all" ? null : allocation(ctx, ctx.period, scope);
   // Profit of each product against the period before it; colours stay with the product, whatever the order.
@@ -145,8 +145,8 @@ function Overview({ ctx }: { ctx: BusinessCtx }) {
     .map((b, i) => ({
       b,
       color: colorAt(i),
-      profit: figures(scoped(ctx, b.id).filter(inPeriod)).profit,
-      was: prevP ? figures(scoped(ctx, b.id).filter((t) => contains(prevP, t.date))).profit : 0,
+      profit: figures(scoped(ctx, b.id).filter(inPeriod), ctx.cats).profit,
+      was: prevP ? figures(scoped(ctx, b.id).filter((t) => contains(prevP, t.date)), ctx.cats).profit : 0,
     }))
     .sort((a, b) => b.profit - a.profit);
   const positive = rows.filter((r) => r.profit > 0);
@@ -240,8 +240,8 @@ function Trends({ ctx }: { ctx: BusinessCtx }) {
   const { scope } = ctx.view;
   const months = lastMonths(ctx.period);
   const ts = scoped(ctx, scope);
-  const rows = months.map((m) => ({ m, f: figures(ts.filter((t) => t.date.startsWith(m))) })).reverse();
-  const sum = figures(ts.filter((t) => months.some((m) => t.date.startsWith(m))));
+  const rows = months.map((m) => ({ m, f: figures(ts.filter((t) => t.date.startsWith(m)), ctx.cats) })).reverse();
+  const sum = figures(ts.filter((t) => months.some((m) => t.date.startsWith(m))), ctx.cats);
   return (
     <>
       <h2>הכנסות מול הוצאות · 6 חודשים</h2>

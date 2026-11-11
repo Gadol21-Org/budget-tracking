@@ -5,10 +5,11 @@ import { go, goBack } from "../nav";
 import { enabledCurrencies } from "../currencies";
 import { state } from "../state";
 import { load } from "../sync";
-import { EmailCard } from "./EmailCard";
+import { openEmailInbox } from "./emailInbox";
 import { openLog } from "./log";
 import { openAiCost } from "./aiCost";
 import { openPeople } from "./people";
+import { SettingsRow as Row } from "../components/SettingsRow";
 
 export function settingsView(): ReactElement {
   return <Settings />;
@@ -18,32 +19,23 @@ export function dataTransferView(): ReactElement {
   return <DataTransfer />;
 }
 
-type RowProps = { icon: string; color: [string, string]; label: string; value?: string; onClick: () => void };
-
-/** One row of the grouped list: a gradient icon, the name, the current value and a chevron (like iOS Settings). */
-function Row({ icon, color, label, value, onClick }: RowProps) {
-  return (
-    <button className="srow" onClick={onClick}>
-      <span className="sicon" style={{ background: `linear-gradient(180deg, ${color[0]}, ${color[1]})` }} aria-hidden="true">
-        {icon}
-      </span>
-      <span className="slabel">{label}</span>
-      {value && <span className="sval">{value}</span>}
-      <span className="schev" aria-hidden="true">‹</span>
-    </button>
-  );
+/** What the Sumit row shows: receipts waiting for a category, new ones, or nothing. */
+function sumitValue(): string {
+  const { held, unread } = state.sumit;
+  return held ? `${held} ממתינות` : unread ? `${unread} חדשות` : "";
 }
 
 function Settings() {
   return (
     <div>
       <h1>הגדרות</h1>
-      <EmailCard status={state.email} />
       <div className="sgroup">
         <Row icon="▦" color={["#ffb340", "#ff8a00"]} label="קטגוריות" value={String(state.cats.length)} onClick={() => go("categories")} />
         <Row icon="₪" color={["#5fe27f", "#22b84a"]} label="מטבעות" value={enabledCurrencies().join(" · ")} onClick={() => go("currencies")} />
       </div>
       <div className="sgroup">
+        <Row icon="🧾" color={["#2dd4bf", "#0f766e"]} label="קבלות מ-Sumit" value={sumitValue()} onClick={() => go("sumit")} />
+        {state.email && <Row icon="✉" color={["#e879f9", "#a21caf"]} label="חיובים מדוא״ל" value={state.email.pending ? `${state.email.pending} ממתינות` : ""} onClick={() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה"))} />}
         <Row icon="⇅" color={["#5ab4ff", "#0a6cff"]} label="ייבוא וייצוא" onClick={() => go("dataTransfer")} />
       </div>
       <div className="sgroup">
@@ -93,11 +85,11 @@ function DataTransfer() {
         </div>
       </div>
       <div className="sgroup">
-        <button className="srow sbtn" disabled={busy} onClick={importFromPaamonim}>ייבוא מפעמונים</button>
+        <Row label="ייבוא מפעמונים" action disabled={busy} onClick={importFromPaamonim} />
       </div>
       <div className="sfoot">מושך את כל ההיסטוריה מפעמונים ואינו יוצר כפילויות.</div>
       <div className="sgroup">
-        <button className="srow sbtn" disabled={busy} onClick={exportToSheets}>ייצוא ל-Google Sheets</button>
+        <Row label="ייצוא ל-Google Sheets" action disabled={busy} onClick={exportToSheets} />
       </div>
       <div className="sfoot">כותב עותק לגיליון Google.</div>
       <div className={out?.error ? "note error" : "note muted"}>{out?.text}</div>

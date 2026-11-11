@@ -1,3 +1,4 @@
+import { isIncomeTx } from "./categories";
 import { type Product, type ProductsWire, type Category, type Transaction } from "./api";
 import { contains, type Period } from "./period";
 
@@ -70,9 +71,10 @@ export interface Fig {
   expense: number;
   profit: number;
 }
-export const figures = (ts: Transaction[]): Fig => {
-  const income = ts.filter((t) => t.amount_agorot > 0).reduce((s, t) => s + t.amount_agorot, 0);
-  const expense = -ts.filter((t) => t.amount_agorot < 0).reduce((s, t) => s + t.amount_agorot, 0);
+export const figures = (ts: Transaction[], cats: Category[]): Fig => {
+  // By category, not by sign: a refund is a negative income and lowers the income.
+  const income = ts.filter((t) => isIncomeTx(cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
+  const expense = -ts.filter((t) => !isIncomeTx(cats, t)).reduce((s, t) => s + t.amount_agorot, 0);
   return { income, expense, profit: income - expense };
 };
 
@@ -96,7 +98,7 @@ export const scopeName = (ctx: Pick<BusinessCtx, "products">, scope: "all" | num
 export function allocation(ctx: BusinessCtx, p: Period, id: number): number | null {
   const general = ctx.products.products.find((b) => b.is_general);
   if (!general || general.id === id) return null;
-  const inP = (b: number) => figures(scoped(ctx, b).filter((t) => contains(p, t.date)));
+  const inP = (b: number) => figures(scoped(ctx, b).filter((t) => contains(p, t.date)), ctx.cats);
   const cost = -inP(general.id).profit;
   const others = ctx.products.products.filter((b) => !b.is_general);
   const total = others.reduce((s, b) => s + inP(b.id).income, 0);
@@ -106,7 +108,7 @@ export function allocation(ctx: BusinessCtx, p: Period, id: number): number | nu
 
 /** Profit of every product in the period, for the card on the summary. */
 export function summaryFigures(ctx: Pick<BusinessCtx, "txs" | "cats" | "products" | "period">): { total: Fig; per: { b: Product; f: Fig }[] } {
-  const per = ctx.products.products.map((b) => ({ b, f: figures(scoped(ctx, b.id).filter((t) => contains(ctx.period, t.date))) }));
-  return { total: figures(scoped(ctx, "all").filter((t) => contains(ctx.period, t.date))), per };
+  const per = ctx.products.products.map((b) => ({ b, f: figures(scoped(ctx, b.id).filter((t) => contains(ctx.period, t.date)), ctx.cats) }));
+  return { total: figures(scoped(ctx, "all").filter((t) => contains(ctx.period, t.date)), ctx.cats), per };
 }
 

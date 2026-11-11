@@ -4,6 +4,7 @@ mod email;
 mod error;
 mod mirroring;
 mod repeating;
+mod sumit;
 mod transactions;
 mod users;
 
@@ -12,6 +13,8 @@ pub(crate) use transactions::add_for_email;
 
 use self::error::{internal, ApiError};
 use self::mirroring::trigger_mirror;
+/// For the Sumit poll, which creates transactions outside any request.
+pub(crate) use self::mirroring::trigger_mirror as mirror_in_background;
 use crate::assets;
 use crate::oplog;
 use crate::recurring;
@@ -105,24 +108,24 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             get(transactions::get_currency_settings).put(transactions::put_currency_settings),
         )
         .route(
-            "/api/transactions/:id/refresh-rate",
+            "/api/transactions/{id}/refresh-rate",
             axum::routing::post(transactions::refresh_rate),
         )
         .route(
-            "/api/transactions/:id",
+            "/api/transactions/{id}",
             delete(transactions::delete_transaction).put(transactions::update_transaction),
         )
         .route(
             "/api/categories",
             get(categories::list_categories).post(categories::create_category),
         )
-        .route("/api/categories/:id", delete(categories::delete_category))
+        .route("/api/categories/{id}", delete(categories::delete_category))
         .route(
-            "/api/categories/:id/link",
+            "/api/categories/{id}/link",
             axum::routing::put(categories::link_category),
         )
         .route(
-            "/api/categories/:id/move",
+            "/api/categories/{id}/move",
             axum::routing::post(categories::move_category),
         )
         .route(
@@ -134,12 +137,12 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             get(repeating::recurring_occurrences),
         )
         .route(
-            "/api/recurring/:series_id/months/:month",
+            "/api/recurring/{series_id}/months/{month}",
             axum::routing::post(repeating::settle_recurring_month)
                 .delete(repeating::skip_recurring_month),
         )
         .route(
-            "/api/recurring/:series_id",
+            "/api/recurring/{series_id}",
             axum::routing::put(repeating::change_recurring).delete(repeating::cancel_recurring),
         )
         .route(
@@ -147,7 +150,7 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             get(businesses::get_businesses).post(businesses::create_business),
         )
         .route(
-            "/api/businesses/:id",
+            "/api/businesses/{id}",
             delete(businesses::delete_business).put(businesses::rename_business),
         )
         .route(
@@ -155,29 +158,39 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
             axum::routing::put(businesses::tag_transactions),
         )
         .route(
-            "/api/categories/:id/business",
+            "/api/categories/{id}/business",
             axum::routing::put(businesses::link_category_business),
         )
         .route(
-            "/api/categories/:id/business-required",
+            "/api/categories/{id}/business-required",
             axum::routing::put(businesses::require_category_business),
         )
-        .route("/api/push", axum::routing::post(email::push_subscribe))
-        .route("/api/push/check", axum::routing::post(email::push_check))
+        .route("/api/sumit", get(sumit::overview))
+        .route(
+            "/api/sumit/products",
+            axum::routing::put(sumit::set_product),
+        )
+        .route(
+            "/api/sumit/notices/read",
+            axum::routing::post(sumit::mark_read),
+        )
+        .route("/api/sumit/poll", axum::routing::post(sumit::poll_now))
+        .route("/api/push", axum::routing::post(sumit::subscribe))
+        .route("/api/push/check", axum::routing::post(sumit::push_check))
         .route("/api/email/status", get(email::status))
         .route("/api/email/cost", get(email::ai_cost))
         .route("/api/email/suggestions", get(email::list))
         .route(
-            "/api/email/suggestions/:id/accept",
+            "/api/email/suggestions/{id}/accept",
             axum::routing::post(email::accept),
         )
         .route(
-            "/api/email/suggestions/:id/reject",
+            "/api/email/suggestions/{id}/reject",
             axum::routing::post(email::reject),
         )
-        .route("/api/email/suggestions/:id/view", get(email::view))
+        .route("/api/email/suggestions/{id}/view", get(email::view))
         .route(
-            "/api/email/suggestions/:id",
+            "/api/email/suggestions/{id}",
             axum::routing::delete(email::discard),
         )
         .route("/api/email/transactions", get(email::transaction_ids))
@@ -211,7 +224,7 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
         )
         .route("/api/mirror/status", get(mirroring::mirror_status))
         .route(
-            "/api/mirror/paamonim/retry/:id",
+            "/api/mirror/paamonim/retry/{id}",
             axum::routing::post(mirroring::retry_mirror),
         )
         .with_state(db)
