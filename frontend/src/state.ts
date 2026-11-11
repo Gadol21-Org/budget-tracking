@@ -1,9 +1,9 @@
 import { type InsightsNav, type InsightsState } from "./insights/model";
 import { monthOf, type Period } from "./period";
 import { emptyProducts, type ProductsData, type BusinessView } from "./business";
-import { type SumitOverview, type Category, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
+import { type SumitOverview, type AiCost, type Category, type EmailRule, type EmailStatus, type EmailSuggestion, type Fx, type LogEntry, type LogUser, type RecurringSegment, type Transaction } from "./api";
 
-export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "actions" | "businessOverview" | "products" | "currencies" | "people" | "dataTransfer" | "sumit";
+export type View = "month" | "list" | "insights" | "settings" | "log" | "categories" | "actions" | "businessOverview" | "products" | "currencies" | "people" | "dataTransfer" | "sumit" | "emailInbox" | "aiCost";
 
 export const root = document.getElementById("app")!;
 
@@ -31,6 +31,9 @@ export const state = {
   logMore: false,
   /** The period the change history shows. */
   logPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  /** AI cost screen: the period shown and the calls in it. */
+  aiCostPeriod: monthOf(new Date().toISOString().slice(0, 10)) as Period,
+  aiCost: null as AiCost | null,
   /** Emails seen on recorded changes, with display names. */
   logUsers: [] as LogUser[],
   /** Changes are written to Paamonim (PAAMONIM_MIRROR=1). */
@@ -48,6 +51,14 @@ export const state = {
   /** Choosing several lines to tag them as a product's. */
   /** Transactions entered in USD or JPY, by transaction id (queued lines by -queue id): original amount and rate. */
   fx: new Map<number, Fx>(),
+  /** Gmail connection and how many emailed suggestions wait for a decision (null until loaded or when the server has no Gmail). */
+  email: null as EmailStatus | null,
+  /** The suggestions the inbox shows (pending first, then the ones that could not be read). */
+  suggestions: [] as EmailSuggestion[],
+  /** The standing rules for mail subjects (loaded with the inbox). */
+  emailRules: [] as EmailRule[],
+  /** Ids of the transactions made from an email (badge in the list). */
+  emailTx: new Set<number>(),
   /** Sumit receipts needing attention: waiting for a category, or new and not yet seen. */
   sumit: { held: 0, unread: 0, pushKey: null as string | null, offerPush: false },
   /** The last Sumit overview fetched, so the settings card draws at once instead of flashing while it loads. */

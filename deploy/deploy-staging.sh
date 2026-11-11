@@ -61,10 +61,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
-# Optional Sumit test-account settings (SUMIT_API_KEY, SUMIT_COMPANY_ID), written by the workflow
-# from staging-only secrets. They are never the production ones.
-sumit_env=()
-[ -f "$HOME/budget-staging/sumit.env" ] && sumit_env=(--env-file "$HOME/budget-staging/sumit.env")
+# Optional staging-only settings (Sumit test account, VAPID push keys, email), written by the workflow
+# from staging secrets. They are never the production ones.
+extra_env=()
+[ -f "$HOME/budget-staging/staging.env" ] && extra_env=(--env-file "$HOME/budget-staging/staging.env")
 
 docker run -d --name "$name" \
   --init \
@@ -74,7 +74,7 @@ docker run -d --name "$name" \
   --network "$network" \
   -e MYSQL_URL="mysql://root:staging@$db:3306/budget" \
   -e PAAMONIM_MIRROR=0 \
-  "${sumit_env[@]}" \
+  "${extra_env[@]}" \
   "$image"
 
 for _ in $(seq 1 30); do

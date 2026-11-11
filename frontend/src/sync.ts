@@ -68,8 +68,28 @@ export async function load() {
     state.offline = true;
   }
   state.loadedFrom = loadedFrom;
+  await loadEmail();
   await loadEnabledCurrencies();
   await apply(data);
+}
+
+/** Email status (and the open inbox) after a load. Optional: a failure leaves it out. */
+export async function loadEmail() {
+  if (state.offline) return;
+  try {
+    state.email = await api.emailStatus();
+    state.emailTx = new Set(await api.emailTransactions());
+    if (state.view === "emailInbox") state.suggestions = await fetchInbox();
+  } catch {
+    state.email = null;
+  }
+}
+
+/** Suggestions waiting for a decision, then the messages the AI has not read yet or could not read. */
+export async function fetchInbox() {
+  const [auto, added, pending, queued, failed, rules] = await Promise.all([api.emailSuggestions("auto"), api.emailSuggestions("added"), api.emailSuggestions("pending"), api.emailSuggestions("queued"), api.emailSuggestions("error"), api.emailRules()]);
+  state.emailRules = rules;
+  return [...pending, ...[...auto, ...added].sort((a, b) => b.received.localeCompare(a.received) || b.id - a.id), ...queued, ...failed];
 }
 
 /** First paint: show the offline copy at once, before anything is fetched. False if there is none yet. */
@@ -129,7 +149,8 @@ async function refreshSumit() {
   try {
     const o = await api.sumit();
     state.sumitData = o;
-    const pushKey = o.configured ? o.push_public_key : null;
+    // Notifications are offered when either source (Sumit receipts, email) is set up.
+    const pushKey = (o.configured ? o.push_public_key : null) ?? (state.email?.configured ? (state.email.push_public_key ?? null) : null);
     const next = { held: o.configured ? o.held.length : 0, unread: o.configured ? o.notices.filter((n) => !n.read).length : 0, pushKey, offerPush: pushKey ? await needsPush() : false };
     const cur = state.sumit;
     if (next.held === cur.held && next.unread === cur.unread && next.pushKey === cur.pushKey && next.offerPush === cur.offerPush) return;

@@ -8,6 +8,7 @@ import { shift } from "../period";
 import { goBack, showSide } from "../nav";
 import { state } from "../state";
 import { insightsCtx, render } from "../render";
+import { openEmailInbox } from "./emailInbox";
 import { DrillCrumbs, SummaryCategories } from "./insights";
 import { categoryName, isIncomeTx } from "../categories";
 import { inPeriod } from "../selectors";
@@ -41,6 +42,17 @@ export function openPeriodDialog() {
 }
 
 const sign = (n: number) => (n < 0 ? "expense" : "income");
+
+/** On the summary: charges found in emails that wait for a check (same banner as the Sumit receipts). */
+function EmailBanner() {
+  const n = state.email?.pending ?? 0;
+  if (!n) return null;
+  return (
+    <div className="sumit-banner warn" {...clickableProps(() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה")))}>
+      {n === 1 ? "חיוב אחד מדוא״ל ממתין לבדיקה" : `${n} חיובים מדוא״ל ממתינים לבדיקה`}
+    </div>
+  );
+}
 
 /** The top bar of a category drill-down: back to the level above (the summary, or the category when a sub-category is open). */
 function DrillBackBar() {
@@ -102,6 +114,7 @@ function MonthScreen() {
         <Stat label="הוצאות" agorot={-expense} cls="expense" kind="expense" />
         <Stat label="יתרה" agorot={balance} cls={sign(balance)} />
       </div>
+      <EmailBanner />
       <SummaryCategories ctx={insightsCtx()} />
     </div>
   );

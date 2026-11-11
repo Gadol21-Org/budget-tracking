@@ -163,6 +163,67 @@ export interface LogUser {
   name: string;
 }
 
+/** One transaction an email seems to describe, waiting for a decision. */
+export interface EmailSuggestion {
+  id: number;
+  message_id: string;
+  status: "pending" | "auto" | "added" | "accepted" | "rejected" | "ignored" | "queued" | "error";
+  received: string;
+  sender: string;
+  subject: string;
+  /** A short piece of the email, dropped once the suggestion is decided. */
+  excerpt: string;
+  date: string;
+  /** Signed like a transaction (an expense is negative), in the currency's minor unit. */
+  amount_minor: number;
+  currency: Currency;
+  category_id: number | null;
+  note: string;
+  confidence: "high" | "medium" | "low" | "";
+  transaction_id: number | null;
+  error: string;
+  /** The email's own HTML is stored and can be shown. */
+  has_html: boolean;
+}
+
+/** "Always file mail with this subject like this": the AI then reads only the amounts. */
+export interface EmailRule {
+  subject: string;
+  category_id: number;
+  business_id: number | null;
+}
+
+/** One AI call that read an email, with what it cost (millionths of a US dollar). */
+export interface AiCostItem {
+  at: string;
+  sender: string;
+  subject: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micro_usd: number;
+  result: string;
+}
+
+export interface AiCost {
+  items: AiCostItem[];
+  total_micro_usd: number;
+}
+
+export interface EmailStatus {
+  /** VAPID public key for subscribing to web push; absent when push is not set up on the server. */
+  push_public_key?: string | null;
+  /** The server has EMAIL_INBOUND_SECRET. */
+  configured: boolean;
+  ai_configured: boolean;
+  /** When a message last arrived (UTC, ISO 8601). */
+  last_received: string | null;
+  last_error: string | null;
+  /** Suggestions waiting for a decision. */
+  pending: number;
+  /** Messages the AI has not read yet. */
+  queued: number;
+}
+
 /** The proxy in front of the app answered instead of the app (bad gateway, tunnel down, ...): same as offline. */
 export class ServerUnavailableError extends TypeError {
   constructor(status: number) {
@@ -213,7 +274,8 @@ export const api = {
   sumitPoll: () => request<{ baseline: boolean; new_receipts: number; refunds: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
   sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
-  pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
+  /** Register this device with the keys the browser made for it (the server encrypts each push to them). */
+  pushSubscribe: (sub: PushSubscriptionJSON) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint, keys: sub.keys }) }),
   pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>
@@ -282,6 +344,22 @@ export const api = {
   currencySettings: () => request<{ enabled: Currency[]; supported: Currency[] }>("/api/settings/currencies"),
   saveCurrencySettings: (enabled: Currency[]) =>
     request<{ enabled: Currency[] }>("/api/settings/currencies", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  emailStatus: () => request<EmailStatus>("/api/email/status"),
+  emailSuggestions: (status: string) => request<EmailSuggestion[]>(`/api/email/suggestions?status=${status}`),
+  /** Read the messages the AI could not read earlier (all, or one). */
+  aiCost: (from: string, to: string) => request<AiCost>(`/api/email/cost?from=${from}&to=${to}`),
+  emailRetry: (id?: number) => request<{ read: number }>(`/api/email/retry${id != null ? `?id=${id}` : ""}`, { method: "POST" }),
+  /** Drop a message that is waiting or could not be read. */
+  discardSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}`, { method: "DELETE" }),
+  acceptSuggestion: (id: number, transactionId: number) =>
+    request<void>(`/api/email/suggestions/${id}/accept`, { method: "POST", body: JSON.stringify({ transaction_id: transactionId }) }),
+  /** Ids of the transactions made from an email. */
+  emailTransactions: () => request<number[]>("/api/email/transactions"),
+  emailRules: () => request<EmailRule[]>("/api/email/rules"),
+  /** Save a rule; `applyTo` (a transaction id) moves that transaction to the rule's category and business too. */
+  putEmailRule: (r: EmailRule, applyTo?: number) => request<void>("/api/email/rules", { method: "POST", body: JSON.stringify({ ...r, apply_to: applyTo ?? null }) }),
+  deleteEmailRule: (subject: string) => request<void>("/api/email/rules", { method: "DELETE", body: JSON.stringify({ subject }) }),
+  rejectSuggestion: (id: number) => request<void>(`/api/email/suggestions/${id}/reject`, { method: "POST" }),
   /** Whether changes are being written to Paamonim. */
   mirrorStatus: () => request<{ enabled: boolean }>("/api/mirror/status"),
 };

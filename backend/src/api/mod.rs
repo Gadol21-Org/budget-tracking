@@ -1,5 +1,6 @@
 mod businesses;
 mod categories;
+mod email;
 mod error;
 mod mirroring;
 mod repeating;
@@ -8,6 +9,7 @@ mod transactions;
 mod users;
 
 pub(crate) use mirroring::{mirroring_enabled, run_mirror};
+pub(crate) use transactions::add_for_email;
 
 use self::error::{internal, ApiError};
 use self::mirroring::trigger_mirror;
@@ -87,7 +89,13 @@ pub(crate) async fn export_sheets(
 /// All HTTP routes. A separate function so a test can build it: axum panics on
 /// overlapping routes when the router is constructed, which would otherwise only
 /// show up when the server starts.
+#[cfg(test)]
 pub(crate) fn router(db: Db) -> Router {
+    let svc = crate::email::Service::from_env(db.clone());
+    router_with(db, svc)
+}
+
+pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
     Router::new()
         .route(
             "/api/transactions",
@@ -169,6 +177,36 @@ pub(crate) fn router(db: Db) -> Router {
         .route("/api/sumit/poll", axum::routing::post(sumit::poll_now))
         .route("/api/push", axum::routing::post(sumit::subscribe))
         .route("/api/push/check", axum::routing::post(sumit::push_check))
+        .route("/api/email/status", get(email::status))
+        .route("/api/email/cost", get(email::ai_cost))
+        .route("/api/email/suggestions", get(email::list))
+        .route(
+            "/api/email/suggestions/{id}/accept",
+            axum::routing::post(email::accept),
+        )
+        .route(
+            "/api/email/suggestions/{id}/reject",
+            axum::routing::post(email::reject),
+        )
+        .route("/api/email/suggestions/{id}/view", get(email::view))
+        .route(
+            "/api/email/suggestions/{id}",
+            axum::routing::delete(email::discard),
+        )
+        .route("/api/email/transactions", get(email::transaction_ids))
+        .route(
+            "/api/email/rules",
+            get(email::rules_list)
+                .post(email::rules_put)
+                .delete(email::rules_delete),
+        )
+        .route("/api/email/retry", axum::routing::post(email::retry))
+        // The one route the Cloudflare Worker calls: open to the internet, checks a shared secret.
+        .route(
+            "/api/email/inbound",
+            axum::routing::post(email::inbound)
+                .layer(axum::extract::DefaultBodyLimit::max(email::MAX_MAIL_BYTES)),
+        )
         .route("/api/monthly-totals", get(monthly_totals))
         .route("/api/log", get(change_log))
         .route(
@@ -191,5 +229,6 @@ pub(crate) fn router(db: Db) -> Router {
         )
         .with_state(db)
         .fallback(assets::static_handler)
+        .layer(axum::Extension(email))
         .layer(axum::middleware::from_fn(users::with_actor))
 }

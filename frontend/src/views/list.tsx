@@ -60,6 +60,11 @@ export function TransactionRow({ t }: { t: Transaction }) {
             {productName(state.products, product)}
           </span>
         )}
+        {t.id > 0 && state.emailTx.has(t.id) && (
+          <span className="mailchip" title="נקלט מאימייל">
+            נקלט מאימייל
+          </span>
+        )}
         {note.products.map((p) => (
           <span className="productchip sumitprod" key={p} title="מוצר בקבלה מ-Sumit">
             {p}

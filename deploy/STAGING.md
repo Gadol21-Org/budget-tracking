@@ -48,4 +48,4 @@ The app has no login, so anyone who knows `http://<ORACLE_HOST>:8083` can use it
 
 ## Sumit receipts on staging (optional)
 
-To try receipt polling there, add repository secrets `STAGING_SUMIT_API_KEY` and `STAGING_SUMIT_COMPANY_ID` (the Sumit **test** account). For phone notifications also add `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY`; make the pair with the commands in `.env.example`. The workflow writes them to a private file on the VM that only the staging container reads.
+To try receipt polling there, add repository secrets `STAGING_SUMIT_API_KEY` and `STAGING_SUMIT_COMPANY_ID` (the Sumit **test** account). For phone notifications also add `STAGING_VAPID_PRIVATE_KEY_PEM_B64` and `STAGING_VAPID_PUBLIC_KEY`; make the pair with the commands in `.env.example`. For email add `STAGING_EMAIL_INBOUND_SECRET` and `STAGING_GEMINI_API_KEY` (see `deploy/EMAIL.md`). The workflow writes all of them to one private file on the VM (`staging.env`) that only the staging container reads.

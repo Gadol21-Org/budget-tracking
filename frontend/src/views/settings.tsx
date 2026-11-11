@@ -5,7 +5,9 @@ import { go, goBack } from "../nav";
 import { enabledCurrencies } from "../currencies";
 import { state } from "../state";
 import { load } from "../sync";
+import { openEmailInbox } from "./emailInbox";
 import { openLog } from "./log";
+import { openAiCost } from "./aiCost";
 import { openPeople } from "./people";
 import { SettingsRow as Row } from "../components/SettingsRow";
 
@@ -33,10 +35,12 @@ function Settings() {
       </div>
       <div className="sgroup">
         <Row icon="🧾" color={["#2dd4bf", "#0f766e"]} label="קבלות מ-Sumit" value={sumitValue()} onClick={() => go("sumit")} />
+        {state.email && <Row icon="✉" color={["#e879f9", "#a21caf"]} label="חיובים מדוא״ל" value={state.email.pending ? `${state.email.pending} ממתינות` : ""} onClick={() => void openEmailInbox().catch(() => alert("טעינת ההצעות נכשלה"))} />}
         <Row icon="⇅" color={["#5ab4ff", "#0a6cff"]} label="ייבוא וייצוא" onClick={() => go("dataTransfer")} />
       </div>
       <div className="sgroup">
         <Row icon="↺" color={["#b4b4ba", "#7c7c82"]} label="היסטוריית שינויים" onClick={() => void openLog().catch(() => alert("טעינת ההיסטוריה נכשלה"))} />
+        <Row icon="$" color={["#ffd24a", "#e0a000"]} label="עלות AI" onClick={() => void openAiCost().catch(() => alert("טעינת העלות נכשלה"))} />
         <Row icon="☺" color={["#cf7bf2", "#9b3fd0"]} label="שמות משתמשים" onClick={() => void openPeople().catch(() => alert("טעינת הרשימה נכשלה"))} />
       </div>
     </div>

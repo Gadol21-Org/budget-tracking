@@ -25,7 +25,7 @@ export async function enablePush(key: string): Promise<string> {
   if ((await Notification.requestPermission()) !== "granted") return "ההרשאה להתראות לא ניתנה";
   const reg = await navigator.serviceWorker.ready;
   const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(key) }));
-  await api.pushSubscribe(sub.endpoint);
+  await api.pushSubscribe(sub.toJSON());
   return "ההתראות הופעלו במכשיר זה";
 }
 
@@ -58,7 +58,15 @@ function offerDismissed(): boolean {
   }
 }
 
-/** Offers to turn on notifications for new Sumit receipts, only while the server does not hold this device yet. The X hides it on this device; the same option is in the Sumit settings page. */
+/** What the notifications are for: new Sumit receipts, charges found in email, or both. */
+function pushOfferText(): string {
+  const sumit = state.sumitData?.configured;
+  const email = state.email?.configured;
+  if (sumit && email) return "לקבל התראה כשמגיעה קבלה מ-Sumit או חיוב מדוא״ל?";
+  return email ? "לקבל התראה כשמגיע חיוב חדש מדוא״ל?" : "לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?";
+}
+
+/** Offers to turn on notifications for new Sumit receipts and email charges, only while the server does not hold this device yet. The X hides it on this device; the same option is in the Sumit settings page. */
 export function PushOffer() {
   if (!state.sumit.offerPush || offerDismissed()) return null;
   const dismiss = () => {
@@ -83,7 +91,7 @@ export function PushOffer() {
       <button className="dismiss" aria-label="סגירה" title="סגירה (אפשר להפעיל בהגדרות)" onClick={dismiss}>
         ×
       </button>
-      <div>לקבל התראה כשמגיעה קבלה חדשה מ-Sumit?</div>
+      <div>{pushOfferText()}</div>
       <div className="actions" style={{ justifyContent: "flex-start", marginTop: 8 }}>
         <button className="btn primary" onClick={() => void ask()}>
           הפעלה

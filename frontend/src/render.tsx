@@ -13,6 +13,8 @@ import { listView } from "./views/list";
 import { logView } from "./views/log";
 import { trackScreen } from "./analytics";
 import { peopleView } from "./views/people";
+import { emailInboxView } from "./views/emailInbox";
+import { aiCostView } from "./views/aiCost";
 import { categoriesView } from "./views/categories";
 import { dataTransferView, settingsView } from "./views/settings";
 import { sumitView } from "./views/sumit";
@@ -50,7 +52,7 @@ const TABS: [View | "business", string][] = [
 ];
 
 const BUSINESS_SCREENS: View[] = ["actions", "businessOverview", "products"];
-const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people", "dataTransfer", "sumit"];
+const SETTINGS_SCREENS: View[] = ["log", "categories", "currencies", "people", "dataTransfer", "sumit", "emailInbox", "aiCost"];
 
 function openTab(view: View | "business") {
   if (view === "business") return openBusinessDashboard();
@@ -143,6 +145,8 @@ const screens: Record<View, () => ReactElement> = {
   people: peopleView,
   dataTransfer: dataTransferView,
   sumit: sumitView,
+  emailInbox: emailInboxView,
+  aiCost: aiCostView,
 };
 
 function App() {

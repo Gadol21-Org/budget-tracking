@@ -310,3 +310,62 @@ pub fn rounds_to(local: i64, imported: i64) -> bool {
     (local < 0) == (imported < 0)
         && crate::money::to_paamonim_shekels(local.abs()) * 100 == imported.abs()
 }
+
+/// One transaction an email seems to describe, waiting for a person to accept or reject it.
+/// A message that described nothing is kept as one row with status `ignored` (and no amount)
+/// so it is never sent to the AI twice. `queued` rows are messages the AI service could not
+/// answer yet (their text is kept in `excerpt` until it is retried); `error` rows were answered
+/// with something unusable.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EmailSuggestion {
+    pub id: i64,
+    pub message_id: String,
+    pub idx: i64,
+    /// `pending`, `accepted`, `rejected`, `ignored`, `queued` or `error`.
+    pub status: String,
+    /// When the email was received (YYYY-MM-DD).
+    pub received: String,
+    pub sender: String,
+    pub subject: String,
+    /// A short piece of the email for the reviewer (the whole text on a `queued` row, so it can
+    /// be retried); dropped once the suggestion is resolved.
+    pub excerpt: String,
+    /// The day of the transaction (YYYY-MM-DD); empty when the status is `ignored`/`error`.
+    pub date: String,
+    /// Signed like a transaction: expenses are negative. In the currency's minor unit.
+    pub amount_minor: i64,
+    pub currency: String,
+    pub category_id: Option<i64>,
+    pub note: String,
+    pub confidence: String,
+    pub transaction_id: Option<i64>,
+    pub error: String,
+    /// The email's own HTML is stored (see [`Storage::email_html`]).
+    pub has_html: bool,
+}
+
+/// What the parser found in a message; stored with [`Storage::add_email_suggestions`].
+#[derive(Clone, Debug, Default)]
+pub struct NewEmailSuggestion {
+    pub message_id: String,
+    pub idx: i64,
+    pub status: String,
+    pub received: String,
+    pub sender: String,
+    pub subject: String,
+    pub excerpt: String,
+    pub date: String,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub category_id: Option<i64>,
+    pub note: String,
+    pub confidence: String,
+    pub error: String,
+    /// The email's HTML, kept until the suggestion is decided so it can be shown as it looked.
+    pub html: String,
+    /// The whole raw message, kept only while it waits unread (so its attachments can be read on
+    /// the retry); empty otherwise.
+    pub raw: Vec<u8>,
+    /// The transaction already made from it (status `auto`).
+    pub transaction_id: Option<i64>,
+}

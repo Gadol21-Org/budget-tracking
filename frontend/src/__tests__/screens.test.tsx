@@ -10,6 +10,7 @@ vi.mock("../sync", () => ({
     render();
   }),
   loadHistory: async () => {},
+  fetchInbox: vi.fn(async () => []),
   IN_FLIGHT: new Set<string>(),
 }));
 vi.mock("../api", async (orig) => ({
@@ -18,6 +19,9 @@ vi.mock("../api", async (orig) => ({
     importPaamonim: vi.fn(async () => ({ transactions_added: 12, transactions_skipped: 30, categories_added: 1 })),
     exportSheets: vi.fn(async () => ({ transactions: 5, tabs: 1 })),
     setLogUserName: vi.fn(async () => {}),
+    rejectSuggestion: vi.fn(async () => {}),
+    deleteEmailRule: vi.fn(async () => {}),
+    discardSuggestion: vi.fn(async () => {}),
     sumit: vi.fn(async () => ({ configured: false, last_poll_at: null, last_error: null, next_poll_at: null, calls_this_month: 0, monthly_limit: 0, products: [], notices: [], held: [], push_public_key: null })),
   },
 }));
@@ -86,6 +90,136 @@ describe("the app shell", () => {
     state.offline = false;
     app.render();
     expect(screen.queryByText(/אין חיבור או שהשרת אינו זמין/)).toBeNull();
+  });
+});
+
+describe("the email inbox", () => {
+  const suggestion = {
+    id: 7,
+    message_id: "g7",
+    status: "pending" as const,
+    received: "2026-03-02",
+    sender: "Shop <shop@example.com>",
+    subject: "Your receipt",
+    excerpt: "Total 12.50",
+    date: "2026-03-01",
+    amount_minor: -1250,
+    currency: "ILS",
+    category_id: null,
+    note: "Corner shop",
+    confidence: "high" as const,
+    transaction_id: null,
+    error: "",
+    has_html: true,
+  };
+
+  it("shows what was found, and nothing is added until it is accepted", async () => {
+    state.suggestions = [suggestion];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("Corner shop")).toBeTruthy();
+    expect(screen.getByText(/בלי קטגוריה/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "בדיקה והוספה" })).toBeTruthy();
+  });
+
+  it("rejects a suggestion through the API", async () => {
+    const { api } = await import("../api");
+    state.suggestions = [suggestion];
+    state.view = "emailInbox";
+    app.render();
+    fireEvent.click(await screen.findByRole("button", { name: "דחייה" }));
+    await waitFor(() => expect(api.rejectSuggestion).toHaveBeenCalledWith(7));
+  });
+
+  it("lets a message the AI has not read yet be retried or removed", async () => {
+    state.suggestions = [{ ...suggestion, id: 9, status: "queued", error: "the AI service answered 503" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("ההודעה עדיין לא נקראה")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "קריאה עכשיו" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הסרה" })).toBeTruthy();
+  });
+
+  it("is a row in settings, and its page offers reading the waiting mail and the notifications like the Sumit page", async () => {
+    state.email = { configured: true, ai_configured: true, last_received: null, last_error: null, pending: 2, queued: 3, push_public_key: "k" } as never;
+    state.view = "settings";
+    app.render();
+    expect(await screen.findByText("2 ממתינות")).toBeTruthy();
+    state.sumit.offerPush = true;
+    state.suggestions = [];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByRole("button", { name: "קריאת 3 הודעות ממתינות" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הפעלת התראות במכשיר" })).toBeTruthy();
+    state.sumit.offerPush = false;
+    state.email = null;
+  });
+
+  it("offers manual entry for a message that could not be read", async () => {
+    state.suggestions = [{ ...suggestion, id: 8, status: "error", error: "no answer" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText("לא הצלחתי לקרוא את ההודעה")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "הוספה ידנית" })).toBeTruthy();
+  });
+
+  it("shows each AI call with its price and the total", async () => {
+    state.aiCost = {
+      total_micro_usd: 2400,
+      items: [
+        { at: new Date().toISOString(), sender: "a@b", subject: "Your receipt", input_tokens: 1000, output_tokens: 150, cost_micro_usd: 160, result: "1 suggestions" },
+        { at: new Date().toISOString(), sender: "a@b", subject: "Newsletter", input_tokens: 5000, output_tokens: 20, cost_micro_usd: 2240, result: "ignored" },
+      ],
+    };
+    state.view = "aiCost";
+    app.render();
+    expect(await screen.findByText("$0.002400")).toBeTruthy();
+    expect(screen.getByText("Your receipt")).toBeTruthy();
+    expect(screen.getByText("$0.000160")).toBeTruthy();
+    expect(screen.getByText(/לא נמצאה תנועה/)).toBeTruthy();
+  });
+
+  it("shows a transaction that was added by itself, and the standing rules", async () => {
+    const { api } = await import("../api");
+    state.suggestions = [{ ...suggestion, id: 12, status: "auto", category_id: null, transaction_id: 3 }];
+    state.emailRules = [{ subject: "Gym receipt", category_id: 1, business_id: null }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText(/נוספה מדוא״ל לתנועות/)).toBeTruthy();
+    expect(screen.getByText("Gym receipt")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "הסרה" })[0]);
+    await waitFor(() => expect(api.deleteEmailRule).toHaveBeenCalledWith("Gym receipt"));
+  });
+
+  it("offers a rule for an automatically added mail whose subject has none", async () => {
+    state.suggestions = [{ ...suggestion, id: 13, status: "auto", subject: "Fwd: Cloud bill", transaction_id: 4 }];
+    state.emailRules = [];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByRole("button", { name: "כלל קבוע לנושא" })).toBeTruthy();
+    state.emailRules = [{ subject: "Cloud bill", category_id: 1, business_id: null }];
+    app.render();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "כלל קבוע לנושא" })).toBeNull());
+  });
+
+  it("marks a transaction that came from an email in the list", async () => {
+    const t = { id: 41, date: new Date().toISOString().slice(0, 10), amount_agorot: -5000, category_id: null, payment_method_id: null, note: "from mail", sync_state: "synced", recurring_series_id: null } as never;
+    Element.prototype.scrollIntoView = () => {};
+    state.txs = [t];
+    state.emailTx = new Set([41]);
+    state.view = "list";
+    app.render();
+    expect(await screen.findByText("נקלט מאימייל")).toBeTruthy();
+    state.emailTx = new Set();
+    app.render();
+    await waitFor(() => expect(screen.queryByText("נקלט מאימייל")).toBeNull());
+  });
+
+  it("says when an attachment was left unread", async () => {
+    state.suggestions = [{ ...suggestion, id: 11, status: "error", error: "attachment not read by the AI: scan.jpg" }];
+    state.view = "emailInbox";
+    app.render();
+    expect(await screen.findByText(/קובץ מצורף שה-AI לא קורא \(scan\.jpg\)/)).toBeTruthy();
   });
 });
 

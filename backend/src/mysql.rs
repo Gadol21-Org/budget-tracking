@@ -16,12 +16,12 @@ use sqlx::Row;
 use crate::oplog::{LogEntry, NewLogEntry};
 use crate::recurring::{NewRecurring, Occurrence, RecurringSegment};
 use crate::storage::{
-    rounds_to, Business, BusinessLinks, Category, ImportBatch, ImportSummary, LineDelete,
-    MonthlyTotal, NewTransaction, PaymentMethod, PendingMirror, RawBackup, RawCategory,
-    RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
+    rounds_to, Business, BusinessLinks, Category, EmailSuggestion, ImportBatch, ImportSummary,
+    LineDelete, MonthlyTotal, NewEmailSuggestion, NewTransaction, PaymentMethod, PendingMirror,
+    RawBackup, RawCategory, RawPaymentMethod, Storage, SyncState, Transaction, TxFx,
 };
 
-const SCHEMA: [&str; 15] = [
+const SCHEMA: [&str; 16] = [
     "CREATE TABLE IF NOT EXISTS categories (
          id BIGINT AUTO_INCREMENT PRIMARY KEY,
          name VARCHAR(400) NOT NULL,
@@ -130,6 +130,25 @@ const SCHEMA: [&str; 15] = [
     "CREATE TABLE IF NOT EXISTS category_business_required (
          category_id BIGINT PRIMARY KEY
      )",
+    "CREATE TABLE IF NOT EXISTS email_items (
+         id BIGINT AUTO_INCREMENT PRIMARY KEY,
+         message_id VARCHAR(128) NOT NULL,
+         idx INT NOT NULL,
+         status VARCHAR(12) NOT NULL,
+         received VARCHAR(10) NOT NULL,
+         sender VARCHAR(255) NOT NULL,
+         subject VARCHAR(255) NOT NULL,
+         excerpt MEDIUMTEXT NOT NULL,
+         date VARCHAR(10) NOT NULL,
+         amount_minor BIGINT NOT NULL,
+         currency VARCHAR(8) NOT NULL,
+         category_id BIGINT NULL,
+         note VARCHAR(255) NOT NULL,
+         confidence VARCHAR(8) NOT NULL,
+         transaction_id BIGINT NULL,
+         error TEXT NOT NULL,
+         UNIQUE KEY email_message (message_id, idx)
+     ) DEFAULT CHARSET=utf8mb4",
 ];
 
 /// See [`Storage::requeue_skipped_sub_categories`]. A category goes under a Paamonim category
@@ -194,6 +213,14 @@ impl MySqlStorage {
                 .await?;
         }
         // Tables created before categories could be linked; fails harmlessly if present.
+        // The email's HTML, kept only until its suggestion is decided (email_items came first without it).
+        let _ = sqlx::query("ALTER TABLE email_items ADD COLUMN html MEDIUMTEXT NULL")
+            .execute(&pool)
+            .await;
+        // The raw message of mail waiting unread, so attachments survive until it is read.
+        let _ = sqlx::query("ALTER TABLE email_items ADD COLUMN raw LONGBLOB NULL")
+            .execute(&pool)
+            .await;
         let _ = sqlx::query("ALTER TABLE categories ADD COLUMN linked_to BIGINT NULL")
             .execute(&pool)
             .await;
@@ -477,6 +504,166 @@ impl Storage for MySqlStorage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn add_email_suggestions(&self, rows: &[NewEmailSuggestion]) -> Result<usize> {
+        let mut added = 0;
+        for r in rows {
+            let res = sqlx::query(
+                "INSERT IGNORE INTO email_items
+                   (message_id, idx, status, received, sender, subject, excerpt, date,
+                    amount_minor, currency, category_id, note, confidence, error, html, raw, transaction_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&r.message_id)
+            .bind(r.idx)
+            .bind(&r.status)
+            .bind(&r.received)
+            .bind(&r.sender)
+            .bind(&r.subject)
+            .bind(&r.excerpt)
+            .bind(&r.date)
+            .bind(r.amount_minor)
+            .bind(&r.currency)
+            .bind(r.category_id)
+            .bind(&r.note)
+            .bind(&r.confidence)
+            .bind(&r.error)
+            .bind(&r.html)
+            .bind((!r.raw.is_empty()).then_some(&r.raw))
+            .bind(r.transaction_id)
+            .execute(&self.pool)
+            .await?;
+            added += res.rows_affected() as usize;
+        }
+        Ok(added)
+    }
+
+    async fn email_message_seen(&self, message_id: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM email_items WHERE message_id = ? LIMIT 1")
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    async fn list_email_suggestions(&self, status: Option<&str>) -> Result<Vec<EmailSuggestion>> {
+        let rows = sqlx::query(
+            "SELECT id, message_id, idx, status, received, sender, subject, excerpt, date,
+                    amount_minor, currency, category_id, note, confidence, transaction_id, error,
+                    html IS NOT NULL AND html <> '' AS has_html
+             FROM email_items WHERE (? IS NULL OR status = ?)
+             ORDER BY received DESC, id DESC LIMIT 500",
+        )
+        .bind(status)
+        .bind(status)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(EmailSuggestion {
+                    id: r.try_get("id")?,
+                    message_id: r.try_get("message_id")?,
+                    idx: r.try_get::<i32, _>("idx")? as i64,
+                    status: r.try_get("status")?,
+                    received: r.try_get("received")?,
+                    sender: r.try_get("sender")?,
+                    subject: r.try_get("subject")?,
+                    excerpt: r.try_get("excerpt")?,
+                    date: r.try_get("date")?,
+                    amount_minor: r.try_get("amount_minor")?,
+                    currency: r.try_get("currency")?,
+                    category_id: r.try_get("category_id")?,
+                    note: r.try_get("note")?,
+                    confidence: r.try_get("confidence")?,
+                    transaction_id: r.try_get("transaction_id")?,
+                    error: r.try_get("error")?,
+                    has_html: r.try_get("has_html")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn email_transaction_ids(&self) -> Result<Vec<i64>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT transaction_id FROM email_items
+             WHERE transaction_id IS NOT NULL AND status IN ('accepted', 'auto', 'added')",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok(r.try_get::<i64, _>("transaction_id")?))
+            .collect()
+    }
+
+    async fn expire_auto_emails(&self, before: &str) -> Result<usize> {
+        let res = sqlx::query(
+            "UPDATE email_items SET status = 'accepted', excerpt = '', html = NULL
+             WHERE status IN ('auto', 'added') AND received < ?",
+        )
+        .bind(before)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() as usize)
+    }
+
+    async fn email_html(&self, id: i64) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT html FROM email_items WHERE id = ? AND status <> 'ignored'")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r
+                .try_get::<Option<String>, _>("html")?
+                .filter(|h| !h.is_empty()),
+            None => None,
+        })
+    }
+
+    async fn email_raw(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        let row = sqlx::query("SELECT raw FROM email_items WHERE id = ? AND status = 'queued'")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r
+                .try_get::<Option<Vec<u8>>, _>("raw")?
+                .filter(|b| !b.is_empty()),
+            None => None,
+        })
+    }
+
+    async fn delete_email_suggestion(&self, id: i64) -> Result<bool> {
+        let res =
+            sqlx::query("DELETE FROM email_items WHERE id = ? AND status IN ('queued', 'error')")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn resolve_email_suggestion(
+        &self,
+        id: i64,
+        status: &str,
+        transaction_id: Option<i64>,
+    ) -> Result<bool> {
+        // A mail that became a transaction (`added`) stays listed, with its email, until it expires.
+        let keep = status == "added" || status == "auto";
+        let res = sqlx::query(if keep {
+            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id)
+             WHERE id = ? AND status IN ('pending', 'auto')"
+        } else {
+            "UPDATE email_items SET status = ?, transaction_id = COALESCE(?, transaction_id),
+                    excerpt = '', html = NULL
+             WHERE id = ? AND status IN ('pending', 'auto')"
+        })
+        .bind(status)
+        .bind(transaction_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     async fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -1402,6 +1589,35 @@ impl Storage for MySqlStorage {
         )
         .bind(before_id.unwrap_or(i64::MAX))
         .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let json = |col: &str| -> Result<Option<serde_json::Value>> {
+                    let s: Option<String> = r.try_get(col)?;
+                    Ok(s.and_then(|s| s.parse().ok()))
+                };
+                Ok(LogEntry {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    kind: r.try_get("kind")?,
+                    entity_id: r.try_get("entity_id")?,
+                    old: json("old_value")?,
+                    new: json("new_value")?,
+                    user_email: r.try_get("user_email")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_log_kind(&self, kind: &str, from: &str, before: &str) -> Result<Vec<LogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log
+             WHERE kind = ? AND at >= ? AND at < ? ORDER BY id DESC",
+        )
+        .bind(kind)
+        .bind(from)
+        .bind(before)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()

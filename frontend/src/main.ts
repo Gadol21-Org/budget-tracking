@@ -8,6 +8,7 @@ import { showStatus } from "./render";
 import { load, showCached } from "./sync";
 import { screenState } from "./nav";
 import { openTransactionDialog } from "./dialogs/transaction";
+import { openEmailInbox } from "./views/emailInbox";
 
 startAnalytics();
 
@@ -25,7 +26,11 @@ showCached()
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
   // The service worker stores a newer app page in the background (used from the next launch): offer a relaunch, never reload on its own.
-  navigator.serviceWorker.addEventListener("message", (e) => e.data?.type === "shell-updated" && void checkForUpdate());
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type === "shell-updated") void checkForUpdate();
+    // A tap on an email notification while the app is open.
+    if (e.data?.type === "open-email-inbox") void openEmailInbox().catch(() => {});
+  });
   setTimeout(() => void checkForUpdate(), 3000);
 }
 
@@ -47,9 +52,13 @@ async function checkForUpdate() {
   }
 }
 
-/** App-icon shortcuts (see manifest.webmanifest) start the app at /?action=add-expense or /?action=add-income. */
+/** App-icon shortcuts (see manifest.webmanifest) start the app at /?action=add-expense or /?action=add-income; a tap on an email notification at /?action=email-inbox. */
 function openShortcutAction() {
   const action = new URLSearchParams(location.search).get("action");
+  if (action === "email-inbox") {
+    history.replaceState(screenState({ n: 0 }), "", location.pathname);
+    return openEmailInbox().catch(() => {});
+  }
   if (action !== "add-expense" && action !== "add-income") return;
   history.replaceState(screenState({ n: 0 }), "", location.pathname);
   openTransactionDialog(undefined, action === "add-income");

@@ -54,37 +54,36 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// A push carries no data: ask the server what is new and show it.
+// A push carries its text (title, body, tag and the page to open when tapped), encrypted for this device by the server.
+// A device the server has no keys for yet only gets an empty wake-up: it shows a plain notice until it is subscribed again.
 self.addEventListener("push", (e) => {
+  let msg = null;
+  try {
+    msg = e.data ? e.data.json() : null;
+  } catch {
+    /* an empty or unreadable push */
+  }
   e.waitUntil(
-    fetch("/api/sumit", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((o) => o.notices.filter((n) => !n.read))
-      .catch(() => [])
-      .then((unread) => {
-        const opts = { tag: "sumit-receipt", dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
-        if (unread.length <= 1) {
-          const n = unread[0];
-          return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { ...opts, body: n ? n.body : "" });
-        }
-        // Several at once: one notification that says what came in, with a line for each.
-        const held = unread.filter((n) => n.title.includes("ממתי")).length;
-        const refunds = unread.filter((n) => !n.title.includes("ממתי") && n.title.includes("זיכוי")).length;
-        const receipts = unread.length - held - refunds;
-        const parts = [];
-        if (receipts) parts.push(receipts === 1 ? "קבלה חדשה" : `${receipts} קבלות חדשות`);
-        if (refunds) parts.push(refunds === 1 ? "זיכוי" : `${refunds} זיכויים`);
-        if (held) parts.push(`${held} ממתינים לסיווג`);
-        const lines = unread.slice(0, 5).map((n) => n.title);
-        if (unread.length > 5) lines.push(`ועוד ${unread.length - 5}`);
-        return self.registration.showNotification(parts.join(", "), { ...opts, body: lines.join("\n") });
-      }),
+    self.registration.showNotification(msg?.title || "יש חדש באפליקציה", {
+      body: msg?.body || "",
+      tag: msg?.tag || "budget-new",
+      dir: "rtl",
+      lang: "he",
+      icon: "/icon-192-v2.png",
+      data: { url: msg?.url || "/" },
+    }),
   );
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
+  // Open the page the push named: tell a running app to go there, or start the app on it.
+  const url = e.notification.data?.url || "/";
   e.waitUntil(
-    self.clients.matchAll({ type: "window" }).then((cs) => (cs.length ? cs[0].focus() : self.clients.openWindow("/"))),
+    self.clients.matchAll({ type: "window" }).then((cs) => {
+      if (!cs.length) return self.clients.openWindow(url);
+      if (url.includes("action=email-inbox")) cs[0].postMessage({ type: "open-email-inbox" });
+      return cs[0].focus();
+    }),
   );
 });
