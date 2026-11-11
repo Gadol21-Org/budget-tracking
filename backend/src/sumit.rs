@@ -1043,6 +1043,7 @@ async fn retry_held_inner(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize>
     let mut recs: Vec<ReceiptRecord> = load(db, RECEIPTS_KEY).await?;
     let mut notices: Vec<Notice> = load(db, NOTICES_KEY).await?;
     let held: Vec<Held> = state.held.values().cloned().collect();
+    let already = notices.len();
     let mut done = 0;
     for h in held {
         if settle_doc(db, &mut state, h.doc, h.items, now, &mut recs, &mut notices)
@@ -1052,12 +1053,54 @@ async fn retry_held_inner(db: &dyn Storage, now: DateTime<Utc>) -> Result<usize>
             done += 1;
         }
     }
+    let news = notices[already.min(notices.len())..].to_vec();
     persist_lists(db, &mut recs, &mut notices).await?;
     save(db, STATE_KEY, &state).await?;
     if done > 0 {
-        crate::push::notify_all(db, "sumit").await;
+        crate::push::notify_all(db, &push_message(&news)).await;
     }
     Ok(done)
+}
+
+/// The notification for notices that just came in: the one notice as it is, or a sum-up with a line for each.
+fn push_message(news: &[Notice]) -> crate::push::Message {
+    let (title, body) = match news {
+        [] => ("התקבלה קבלה חדשה".to_string(), String::new()),
+        [n] => (n.title.clone(), n.body.clone()),
+        _ => {
+            let held = news.iter().filter(|n| n.title.contains("ממתי")).count();
+            let refunds = news
+                .iter()
+                .filter(|n| !n.title.contains("ממתי") && n.title.contains("זיכוי"))
+                .count();
+            let receipts = news.len() - held - refunds;
+            let mut parts: Vec<String> = Vec::new();
+            match receipts {
+                0 => {}
+                1 => parts.push("קבלה חדשה".into()),
+                n => parts.push(format!("{n} קבלות חדשות")),
+            }
+            match refunds {
+                0 => {}
+                1 => parts.push("זיכוי".into()),
+                n => parts.push(format!("{n} זיכויים")),
+            }
+            if held > 0 {
+                parts.push(format!("{held} ממתינים לסיווג"));
+            }
+            let mut lines: Vec<String> = news.iter().take(5).map(|n| n.title.clone()).collect();
+            if news.len() > 5 {
+                lines.push(format!("ועוד {}", news.len() - 5));
+            }
+            (parts.join(", "), lines.join("\n"))
+        }
+    };
+    crate::push::Message {
+        title,
+        body,
+        tag: "sumit-receipt".into(),
+        url: "/".into(),
+    }
 }
 
 fn notice_body(doc: &DocSummary, items: &[DocItem], unmapped: bool) -> String {
@@ -1117,6 +1160,16 @@ pub async fn poll_and_notify(
     api: &dyn SumitApi,
     cfg: &Config,
 ) -> Result<PollSummary> {
+    let last_notice = || async {
+        load::<Vec<Notice>>(db, NOTICES_KEY)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|n| n.id)
+            .max()
+            .unwrap_or(0)
+    };
+    let before = last_notice().await;
     match crate::oplog::as_sync(poll_once(db, api, cfg, Utc::now())).await {
         Ok(s) => {
             tracing::info!(
@@ -1127,7 +1180,13 @@ pub async fn poll_and_notify(
                 s.calls
             );
             if s.new_receipts > 0 || s.held > 0 || s.refunds > 0 {
-                crate::push::notify_all(db, "sumit").await;
+                let news: Vec<Notice> = load::<Vec<Notice>>(db, NOTICES_KEY)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|n| n.id > before)
+                    .collect();
+                crate::push::notify_all(db, &push_message(&news)).await;
             }
             Ok(s)
         }

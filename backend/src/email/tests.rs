@@ -721,17 +721,6 @@ async fn a_sure_answer_with_a_category_is_added_at_once() {
     assert!(t[0].category_id.is_some());
     assert_eq!(rows(&r, "auto").await.len(), 1);
     assert_eq!(r.db.email_transaction_ids().await.unwrap(), vec![t[0].id]);
-    let s = r.svc.status().await.unwrap();
-    assert_eq!(
-        s.latest,
-        vec![Latest {
-            auto: true,
-            date: "2026-03-01".into(),
-            note: "Corner shop".into(),
-            amount_minor: -1250,
-            currency: "ILS".into()
-        }]
-    );
     // Not sure: waits for a person as before.
     let out = r
         .svc
@@ -857,4 +846,30 @@ async fn an_approved_suggestion_stays_listed_with_its_email_until_it_expires() {
     r.svc.status().await.unwrap();
     assert!(rows(&r, "added").await.is_empty());
     assert_eq!(rows(&r, "accepted").await[0].transaction_id, Some(tx));
+}
+
+#[test]
+fn the_push_text_lists_each_transaction_with_price_note_and_day() {
+    let l = |auto, note: &str, amount_minor, currency: &str| Latest {
+        auto,
+        date: "2026-03-01".into(),
+        note: note.into(),
+        amount_minor,
+        currency: currency.into(),
+    };
+    let m = push_message(&[l(true, "Corner shop", -1250, "ILS")]);
+    assert_eq!(m.title, "תנועה נוספה מדוא״ל");
+    assert_eq!(m.body, "₪12.50 · Corner shop · 01/03/2026");
+    assert_eq!(m.url, "/?action=email-inbox");
+    let m = push_message(&[l(false, "Cloud", -1240, "USD")]);
+    assert_eq!(
+        (m.title.as_str(), m.body.as_str()),
+        ("חיוב חדש מדוא״ל", "$12.40 · Cloud · 01/03/2026")
+    );
+    let m = push_message(&[l(true, "a", -100, "JPY"), l(false, "b", 500, "CHF")]);
+    assert_eq!(m.title, "חיובים חדשים מדוא״ל");
+    assert_eq!(
+        m.body,
+        "נוספו:\n¥100 · a · 01/03/2026\nממתינות לבדיקה:\nCHF 5.00 · b · 01/03/2026"
+    );
 }

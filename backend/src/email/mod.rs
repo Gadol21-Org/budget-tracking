@@ -35,7 +35,6 @@ use inbound::Mail;
 
 const LAST_RECEIVED_KEY: &str = "email_last_received";
 const LAST_ERROR_KEY: &str = "email_last_error";
-const LATEST_KEY: &str = "email_latest_batch";
 /// Mail added without asking stays listed this many days, then goes (with its stored email).
 const AUTO_KEEP_DAYS: i64 = 30;
 const AI_DAY_KEY: &str = "email_ai_day";
@@ -84,8 +83,6 @@ pub struct Status {
     pub last_error: Option<String>,
     /// Suggestions waiting for a decision.
     pub pending: usize,
-    /// What the latest message brought (up to 5 lines), for the push text.
-    pub latest: Vec<Latest>,
     /// Messages the AI has not read yet.
     pub queued: usize,
     /// VAPID public key for subscribing to web push; absent when push is not set up.
@@ -93,7 +90,7 @@ pub struct Status {
 }
 
 /// One transaction the latest message brought: added at once, or waiting for review.
-#[derive(Serialize, serde::Deserialize, Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Latest {
     pub auto: bool,
     /// The transaction's day (YYYY-MM-DD).
@@ -119,6 +116,50 @@ fn latest_of(rows: &[NewEmailSuggestion]) -> Vec<Latest> {
             currency: r.currency.clone(),
         })
         .collect()
+}
+
+/// The amount as a notification shows it (`$12.40`, `₪187.40`).
+fn price(l: &Latest) -> String {
+    let (places, symbol) = match l.currency.as_str() {
+        "ILS" => (2, "₪".to_string()),
+        "USD" => (2, "$".to_string()),
+        "EUR" => (2, "€".to_string()),
+        "GBP" => (2, "£".to_string()),
+        "JPY" => (0, "¥".to_string()),
+        other => (2, format!("{other} ")),
+    };
+    let n = l.amount_minor.unsigned_abs() as f64 / 10f64.powi(places);
+    format!("{symbol}{n:.*}", places as usize)
+}
+
+/// One line of the notification: price, note, day (`₪187.40 · Corner shop · 01/03/2026`).
+fn push_line(l: &Latest) -> String {
+    let day: Vec<&str> = l.date.split('-').rev().collect();
+    format!("{} · {} · {}", price(l), l.note, day.join("/"))
+}
+
+/// The notification for what a message brought. Tapping it opens the email list.
+fn push_message(items: &[Latest]) -> crate::push::Message {
+    let added: Vec<String> = items.iter().filter(|l| l.auto).map(push_line).collect();
+    let review: Vec<String> = items.iter().filter(|l| !l.auto).map(push_line).collect();
+    let (title, body) = match (added.is_empty(), review.is_empty()) {
+        (false, false) => (
+            "חיובים חדשים מדוא״ל",
+            format!(
+                "נוספו:\n{}\nממתינות לבדיקה:\n{}",
+                added.join("\n"),
+                review.join("\n")
+            ),
+        ),
+        (false, true) => ("תנועה נוספה מדוא״ל", added.join("\n")),
+        _ => ("חיוב חדש מדוא״ל", review.join("\n")),
+    };
+    crate::push::Message {
+        title: title.into(),
+        body,
+        tag: "email-suggestion".into(),
+        url: "/?action=email-inbox".into(),
+    }
 }
 
 /// What became of one message.
@@ -209,12 +250,6 @@ impl Service {
         let pending = self.db.list_email_suggestions(Some("pending")).await?.len();
         let queued = self.db.list_email_suggestions(Some("queued")).await?.len();
         self.expire_auto().await;
-        let latest = self
-            .db
-            .get_setting(LATEST_KEY)
-            .await?
-            .and_then(|v| serde_json::from_str(&v).ok())
-            .unwrap_or_default();
         Ok(Status {
             configured: self.cfg.is_some(),
             ai_configured: self.cfg.as_ref().is_some_and(|c| c.ai_key.is_some()),
@@ -229,7 +264,6 @@ impl Service {
                 .await?
                 .filter(|s| !s.is_empty()),
             pending,
-            latest,
             queued,
             push_public_key: crate::push::public_key(),
         })
@@ -249,16 +283,13 @@ impl Service {
         }
     }
 
-    /// Tell the devices what just arrived (the push itself carries no text; the app asks).
+    /// Tell the devices what just arrived.
     async fn announce(&self, mut items: Vec<Latest>) {
         if items.is_empty() {
             return;
         }
         items.truncate(5);
-        if let Ok(json) = serde_json::to_string(&items) {
-            let _ = self.db.set_setting(LATEST_KEY, &json).await;
-        }
-        crate::push::notify_all(self.db.as_ref(), "email").await;
+        crate::push::notify_all(self.db.as_ref(), &push_message(&items)).await;
     }
 
     /// Record one paid AI call in the operation log (kind `ai_email`), with what it cost.

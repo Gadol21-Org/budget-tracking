@@ -200,13 +200,15 @@ pub(crate) async fn poll_now(State(db): State<Db>) -> Result<Json<sumit::PollSum
 #[derive(Deserialize)]
 pub(crate) struct Subscription {
     endpoint: String,
+    /// What the browser made for encrypting pushes to it (absent in the old app).
+    keys: Option<push::Keys>,
 }
 
 pub(crate) async fn subscribe(
     State(db): State<Db>,
     Json(b): Json<Subscription>,
 ) -> Result<StatusCode, ApiError> {
-    push::subscribe(db.as_ref(), &b.endpoint)
+    push::subscribe(db.as_ref(), &b.endpoint, b.keys)
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
@@ -226,9 +228,4 @@ pub(crate) async fn push_check(
         .await
         .map_err(internal)?;
     Ok(Json(Registered { registered }))
-}
-
-/// The numbered list of recent pushes, for the service worker: it shows the ones it has not shown yet.
-pub(crate) async fn push_events(State(db): State<Db>) -> Result<Json<Vec<push::Event>>, ApiError> {
-    Ok(Json(push::events(db.as_ref()).await.map_err(internal)?))
 }

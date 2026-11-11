@@ -12,7 +12,7 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== "push-seen").map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -54,98 +54,35 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// A push carries no data and does not say who sent it: ask the server what is new. The email status lists the latest charges
-// only while the last push was the email one; otherwise this is the Sumit poll, with the receipts not yet looked at.
-const SYMBOL = { ILS: "₪", USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
-const priceOf = (l) => {
-  const places = l.currency === "JPY" ? 0 : 2;
-  return `${SYMBOL[l.currency] ?? l.currency + " "}${(Math.abs(l.amount_minor) / 10 ** places).toFixed(places)}`;
-};
-const mailLine = (l) => `${priceOf(l)} · ${l.note} · ${l.date.split("-").reverse().join("/")}`;
-const getJson = (url, pick) =>
-  fetch(url, { cache: "no-store" })
-    .then((r) => r.json())
-    .then(pick)
-    .catch(() => []);
-
-const emailNote = (mail, opts) => {
-  const added = mail.filter((l) => l.auto);
-  const review = mail.filter((l) => !l.auto);
-  let title = "חיוב חדש מדוא״ל";
-  let body;
-  if (added.length && review.length) {
-    title = "חיובים חדשים מדוא״ל";
-    body = `נוספו:\n${added.map(mailLine).join("\n")}\nממתינות לבדיקה:\n${review.map(mailLine).join("\n")}`;
-  } else if (added.length) {
-    title = "תנועה נוספה מדוא״ל";
-    body = added.map(mailLine).join("\n");
-  } else {
-    body = review.map(mailLine).join("\n");
-  }
-  // The click opens the email list.
-  return self.registration.showNotification(title, { ...opts, body, data: { email: true } });
-};
-
-const receiptNote = (unread, opts) => {
-  if (unread.length <= 1) {
-    const n = unread[0];
-    return self.registration.showNotification(n ? n.title : "התקבלה קבלה חדשה", { ...opts, body: n ? n.body : "" });
-  }
-  // Several at once: one notification that says what came in, with a line for each.
-  const held = unread.filter((n) => n.title.includes("ממתי")).length;
-  const refunds = unread.filter((n) => !n.title.includes("ממתי") && n.title.includes("זיכוי")).length;
-  const receipts = unread.length - held - refunds;
-  const parts = [];
-  if (receipts) parts.push(receipts === 1 ? "קבלה חדשה" : `${receipts} קבלות חדשות`);
-  if (refunds) parts.push(refunds === 1 ? "זיכוי" : `${refunds} זיכויים`);
-  if (held) parts.push(`${held} ממתינים לסיווג`);
-  const lines = unread.slice(0, 5).map((n) => n.title);
-  if (unread.length > 5) lines.push(`ועוד ${unread.length - 5}`);
-  return self.registration.showNotification(parts.join(", "), { ...opts, body: lines.join("\n") });
-};
-
-// The last numbered push this device showed (kept in the cache, since the worker is stopped between pushes).
-const SEEN = "push-seen";
-const SEEN_URL = "/__push-seen";
-const lastSeen = () =>
-  caches
-    .open(SEEN)
-    .then((c) => c.match(SEEN_URL))
-    .then((r) => (r ? r.text() : null))
-    .then((s) => (s == null ? null : Number(s)))
-    .catch(() => null);
-const saveSeen = (seq) => caches.open(SEEN).then((c) => c.put(SEEN_URL, new Response(String(seq)))).catch(() => {});
-
+// A push carries its text (title, body, tag and the page to open when tapped), encrypted for this device by the server.
+// A device the server has no keys for yet only gets an empty wake-up: it shows a plain notice until it is subscribed again.
 self.addEventListener("push", (e) => {
-  // Each kind has its own tag: a newer email notification replaces an older email one, but never a Sumit one (and the other way round).
-  const base = { dir: "rtl", lang: "he", icon: "/icon-192-v2.png" };
+  let msg = null;
+  try {
+    msg = e.data ? e.data.json() : null;
+  } catch {
+    /* an empty or unreadable push */
+  }
   e.waitUntil(
-    Promise.all([getJson("/api/push/events", (o) => o), lastSeen()]).then(async ([events, seen]) => {
-      // The server numbers its pushes: show what this device has not shown yet (the newest one when it has no record).
-      const newest = events.length ? events[events.length - 1].seq : 0;
-      const fresh = events.filter((ev) => ev.seq > (seen ?? newest - 1));
-      const sources = new Set((fresh.length ? fresh : events.slice(-1)).map((ev) => ev.source));
-      // The server is older than this worker, or the list is empty: it is the Sumit poll, as before.
-      if (!sources.size) sources.add("sumit");
-      await saveSeen(newest);
-      if (sources.has("email")) {
-        const mail = await getJson("/api/email/status", (o) => o.latest || []);
-        if (mail.length) await emailNote(mail, { ...base, tag: "email-suggestion" });
-        else sources.add("sumit");
-      }
-      if (sources.has("sumit")) await receiptNote(await getJson("/api/sumit", (o) => o.notices.filter((n) => !n.read)), { ...base, tag: "sumit-receipt" });
+    self.registration.showNotification(msg?.title || "יש חדש באפליקציה", {
+      body: msg?.body || "",
+      tag: msg?.tag || "budget-new",
+      dir: "rtl",
+      lang: "he",
+      icon: "/icon-192-v2.png",
+      data: { url: msg?.url || "/" },
     }),
   );
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  // Only email in it: open the email list (tell a running app to go there, or start the app on it).
-  const email = e.notification.data?.email;
+  // Open the page the push named: tell a running app to go there, or start the app on it.
+  const url = e.notification.data?.url || "/";
   e.waitUntil(
     self.clients.matchAll({ type: "window" }).then((cs) => {
-      if (!cs.length) return self.clients.openWindow(email ? "/?action=email-inbox" : "/");
-      if (email) cs[0].postMessage({ type: "open-email-inbox" });
+      if (!cs.length) return self.clients.openWindow(url);
+      if (url.includes("action=email-inbox")) cs[0].postMessage({ type: "open-email-inbox" });
       return cs[0].focus();
     }),
   );

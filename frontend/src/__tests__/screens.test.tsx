@@ -141,7 +141,7 @@ describe("the email inbox", () => {
   });
 
   it("is a row in settings, and its page offers reading the waiting mail and the notifications like the Sumit page", async () => {
-    state.email = { configured: true, ai_configured: true, last_received: null, last_error: null, pending: 2, queued: 3, latest: [], push_public_key: "k" } as never;
+    state.email = { configured: true, ai_configured: true, last_received: null, last_error: null, pending: 2, queued: 3, push_public_key: "k" } as never;
     state.view = "settings";
     app.render();
     expect(await screen.findByText("2 ממתינות")).toBeTruthy();

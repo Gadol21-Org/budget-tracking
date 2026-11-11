@@ -220,8 +220,6 @@ export interface EmailStatus {
   last_error: string | null;
   /** Suggestions waiting for a decision. */
   pending: number;
-  /** What the latest message brought (for the push text): added at once, or waiting for review. */
-  latest: { auto: boolean; date: string; note: string; amount_minor: number; currency: string }[];
   /** Messages the AI has not read yet. */
   queued: number;
 }
@@ -276,7 +274,8 @@ export const api = {
   sumitPoll: () => request<{ baseline: boolean; new_receipts: number; refunds: number; transactions: number; calls: number }>("/api/sumit/poll", { method: "POST" }),
   sumitProduct: (name: string, business_id: number | null, category_id: number | null) => request<void>("/api/sumit/products", { method: "PUT", body: JSON.stringify({ name, business_id, category_id }) }),
   sumitRead: () => request<void>("/api/sumit/notices/read", { method: "POST" }),
-  pushSubscribe: (endpoint: string) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint }) }),
+  /** Register this device with the keys the browser made for it (the server encrypts each push to them). */
+  pushSubscribe: (sub: PushSubscriptionJSON) => request<void>("/api/push", { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint, keys: sub.keys }) }),
   pushRegistered: (endpoint: string) => request<{ registered: boolean }>("/api/push/check", { method: "POST", body: JSON.stringify({ endpoint }) }).then((r) => r.registered),
   /** Change log, newest first; pass the last id of the previous page as `beforeId` for the next. */
   log: (beforeId?: number, limit = 100) =>

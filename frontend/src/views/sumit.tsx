@@ -25,7 +25,7 @@ export async function enablePush(key: string): Promise<string> {
   if ((await Notification.requestPermission()) !== "granted") return "ההרשאה להתראות לא ניתנה";
   const reg = await navigator.serviceWorker.ready;
   const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(key) }));
-  await api.pushSubscribe(sub.endpoint);
+  await api.pushSubscribe(sub.toJSON());
   return "ההתראות הופעלו במכשיר זה";
 }
 
