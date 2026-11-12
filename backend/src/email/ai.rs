@@ -62,6 +62,9 @@ pub enum Failure {
     Unreadable(anyhow::Error),
 }
 
+/// How the message of an HTTP error from the service begins.
+const REFUSED: &str = "the AI service answered";
+
 const SYSTEM: &str = "You read one email for a household budget app and report the expense it describes: \
 a card or bank charge, a purchase or receipt, an invoice that was paid. \
 The email was forwarded by rules chosen to catch such mail, so it normally describes one expense. Only when it describes none \
@@ -74,7 +77,7 @@ Note: a short description in the language of the email, naming the merchant.";
 
 /// Added when the model is to pick a category too.
 const CATEGORY_RULE: &str =
-    " Category: the entry of the category list that fits best; leave it out if none clearly fits.";
+    " Category: copy, character for character, the entry of the category list below that fits best; leave it out if none clearly fits.";
 
 fn schema(categories: &[String]) -> Value {
     let mut props = json!({
@@ -86,7 +89,7 @@ fn schema(categories: &[String]) -> Value {
     });
     // With no list the model is not asked for a category at all (a rule already knows it).
     if !categories.is_empty() {
-        props["category"] = json!({ "type": "string", "description": "The category of the expense; omit it when none fits.", "enum": categories });
+        props["category"] = json!({ "type": "string", "description": "The category of the expense; omit it when none fits." });
     }
     json!({
         "type": "object",
@@ -126,11 +129,48 @@ pub async fn parse(
     usage: &mut Option<Usage>,
 ) -> Result<Vec<Found>, Failure> {
     let labels = category_labels(cats);
-    let names: Vec<String> = labels.iter().take(300).map(|(l, _)| l.clone()).collect();
+    // The service refuses a list with an empty or repeated entry.
+    let mut names: Vec<String> = Vec::new();
+    for (l, _) in labels.iter() {
+        if names.len() < 300 && !l.trim().is_empty() && !names.contains(l) {
+            names.push(l.clone());
+        }
+    }
+    match ask(http, cfg, key, mail, &names, &labels, usage).await {
+        // Something in the category list may be what it refuses (prod data differs from test data):
+        // the amount is worth more than the category, so ask once more without the list.
+        Err(Failure::Unreadable(e)) if !names.is_empty() && e.to_string().starts_with(REFUSED) => {
+            tracing::warn!(
+                "the AI refused the request with the category list, asking without it \
+                 ({} categories, {} PDFs of {} bytes, {} characters of text): {e:#}",
+                names.len(),
+                mail.pdfs.len(),
+                mail.pdfs.iter().map(|p| p.len()).sum::<usize>(),
+                mail.text.chars().count()
+            );
+            ask(http, cfg, key, mail, &[], &labels, usage).await
+        }
+        other => other,
+    }
+}
+
+async fn ask(
+    http: &reqwest::Client,
+    cfg: &Config,
+    key: &str,
+    mail: &Mail,
+    names: &[String],
+    labels: &[(String, &Category)],
+    usage: &mut Option<Usage>,
+) -> Result<Vec<Found>, Failure> {
     let system = if names.is_empty() {
         SYSTEM.to_string()
     } else {
-        format!("{SYSTEM}{CATEGORY_RULE}")
+        // The list rides in the prompt: a long enum in the schema makes the service refuse the request.
+        format!(
+            "{SYSTEM}{CATEGORY_RULE}\nCategory list:\n{}",
+            names.join("\n")
+        )
     };
     let user = format!(
         "Email received on {}\nFrom: {}\nSubject: {}\n\n<email>\n{}\n</email>",
@@ -151,7 +191,7 @@ pub async fn parse(
             "temperature": 0,
             "maxOutputTokens": 1024,
             "responseMimeType": "application/json",
-            "responseSchema": schema(&names),
+            "responseSchema": schema(names),
         },
     });
     let resp = http
@@ -180,7 +220,7 @@ pub async fn parse(
             .and_then(|v| v["error"]["status"].as_str().map(String::from))
             .unwrap_or_default();
         let err = anyhow!(
-            "the AI service answered {status} {google_status}: {}",
+            "{REFUSED} {status} {google_status}: {}",
             super::truncate(&msg, 200)
         );
         // Only a request the service finds invalid is about this email. Google also answers 400 for a bad
@@ -203,7 +243,7 @@ pub async fn parse(
         .context("the AI service sent something unreadable")
         .map_err(Failure::Unreadable)?;
     *usage = Usage::from(&v);
-    extract(&v, mail, &labels).map_err(Failure::Unreadable)
+    extract(&v, mail, labels).map_err(Failure::Unreadable)
 }
 
 /// The checked transactions out of the service's answer.
@@ -351,10 +391,11 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_the_categories_as_an_enum() {
+    fn the_categories_ride_in_the_prompt_not_in_the_schema() {
         let s = schema(&["Food > Groceries".to_string(), "Fun > Cinema".to_string()]);
         let cat = &s["properties"]["transactions"]["items"]["properties"]["category"];
-        assert_eq!(cat["enum"], json!(["Food > Groceries", "Fun > Cinema"]));
+        assert_eq!(cat["type"], "string");
+        assert!(cat.get("enum").is_none());
         assert!(s["properties"]["transactions"]["items"]["properties"]
             .get("direction")
             .is_none());
