@@ -162,6 +162,20 @@ fn push_message(items: &[Latest]) -> crate::push::Message {
     }
 }
 
+/// The notification for messages that arrived but could not be read. Tapping it opens the email list.
+fn failed_message(subjects: &[String]) -> crate::push::Message {
+    let body = match subjects {
+        [one] => one.clone(),
+        many => format!("{} הודעות לא נקראו", many.len()),
+    };
+    crate::push::Message {
+        title: "הגיעה הודעה שלא הצלחתי לקרוא".into(),
+        body,
+        tag: "email-failed".into(),
+        url: "/?action=email-inbox".into(),
+    }
+}
+
 /// What became of one message.
 #[derive(Serialize, Debug, Default, PartialEq)]
 pub struct Ingested {
@@ -284,12 +298,20 @@ impl Service {
     }
 
     /// Tell the devices what just arrived.
-    async fn announce(&self, mut items: Vec<Latest>) {
-        if items.is_empty() {
-            return;
+    async fn announce(&self, rows: &[NewEmailSuggestion]) {
+        let mut items = latest_of(rows);
+        if !items.is_empty() {
+            items.truncate(5);
+            crate::push::notify_all(self.db.as_ref(), &push_message(&items)).await;
         }
-        items.truncate(5);
-        crate::push::notify_all(self.db.as_ref(), &push_message(&items)).await;
+        let failed: Vec<String> = rows
+            .iter()
+            .filter(|r| r.status == "error")
+            .map(|r| truncate(&r.subject, 60))
+            .collect();
+        if !failed.is_empty() {
+            crate::push::notify_all(self.db.as_ref(), &failed_message(&failed)).await;
+        }
     }
 
     /// Record one paid AI call in the operation log (kind `ai_email`), with what it cost.
@@ -381,7 +403,11 @@ impl Service {
         if mail.text.is_empty() && mail.pdfs.is_empty() {
             // Nothing to read. With attachments the AI cannot read, a person should look.
             if !mail.unread.is_empty() {
-                self.db.add_email_suggestions(&[unread_row(&mail)]).await?;
+                let row = unread_row(&mail);
+                self.db
+                    .add_email_suggestions(std::slice::from_ref(&row))
+                    .await?;
+                self.announce(&[row]).await;
                 return Ok(Ingested {
                     failed: true,
                     ..Default::default()
@@ -398,7 +424,7 @@ impl Service {
         let categories = self.db.list_categories().await?;
         let out = self.read(&mail, &categories).await?;
         self.db.add_email_suggestions(&out.rows).await?;
-        self.announce(latest_of(&out.rows)).await;
+        self.announce(&out.rows).await;
         Ok(out.summary)
     }
 
@@ -564,7 +590,7 @@ impl Service {
         let _guard = self.running.lock().await;
         let categories = self.db.list_categories().await?;
         let mut done = 0;
-        let mut new_items = Vec::new();
+        let mut new_rows = Vec::new();
         for row in self
             .db
             .list_email_suggestions(Some("queued"))
@@ -602,10 +628,10 @@ impl Service {
             if self.db.delete_email_suggestion(row.id).await? {
                 self.db.add_email_suggestions(&out.rows).await?;
                 done += 1;
-                new_items.extend(latest_of(&out.rows));
+                new_rows.extend(out.rows);
             }
         }
-        self.announce(new_items).await;
+        self.announce(&new_rows).await;
         Ok(done)
     }
 

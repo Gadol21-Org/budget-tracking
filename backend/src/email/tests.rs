@@ -880,6 +880,17 @@ fn the_push_text_lists_each_transaction_with_price_note_and_day() {
     );
 }
 
+#[test]
+fn the_push_for_unreadable_mail_names_the_subject_or_counts_them() {
+    let m = failed_message(&["Your receipt".to_string()]);
+    assert_eq!(m.title, "הגיעה הודעה שלא הצלחתי לקרוא");
+    assert_eq!(m.body, "Your receipt");
+    assert_eq!(m.tag, "email-failed");
+    assert_eq!(m.url, "/?action=email-inbox");
+    let m = failed_message(&["a".to_string(), "b".to_string()]);
+    assert_eq!(m.body, "2 הודעות לא נקראו");
+}
+
 #[tokio::test]
 async fn a_bad_key_answered_with_400_waits_for_a_retry_instead_of_failing_the_mail() {
     let r = rig().await;
@@ -905,7 +916,7 @@ async fn a_bad_key_answered_with_400_waits_for_a_retry_instead_of_failing_the_ma
     // The same 400 for an invalid request is about this mail: it fails once, with the reason kept.
     {
         let mut w = r.w.lock().unwrap();
-        w.ai_fail = vec![400];
+        w.ai_fail = vec![400, 400]; // the retry without the category list fails too
         w.ai_fail_body = Some(
             json!({ "error": { "code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT" } }),
         );
@@ -918,4 +929,24 @@ async fn a_bad_key_answered_with_400_waits_for_a_retry_instead_of_failing_the_ma
     assert!(out.failed);
     let e = rows(&r, "error").await;
     assert!(e[0].error.contains("invalid argument"), "{}", e[0].error);
+}
+
+#[tokio::test]
+async fn a_request_the_service_refuses_is_asked_again_without_the_category_list() {
+    let r = rig().await;
+    {
+        let mut w = r.w.lock().unwrap();
+        w.ai_fail = vec![400];
+        w.ai_fail_body = Some(
+            json!({ "error": { "code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT" } }),
+        );
+    }
+    let out = r
+        .svc
+        .ingest(&eml("f1", "Receipt", "receipt 12.50"))
+        .await
+        .unwrap();
+    assert!(!out.failed && !out.queued, "{out:?}");
+    assert_eq!(r.w.lock().unwrap().ai_calls, 2);
+    assert!(rows(&r, "error").await.is_empty());
 }
