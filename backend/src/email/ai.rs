@@ -141,7 +141,12 @@ pub async fn parse(
         // the amount is worth more than the category, so ask once more without the list.
         Err(Failure::Unreadable(e)) if !names.is_empty() && e.to_string().starts_with(REFUSED) => {
             tracing::warn!(
-                "the AI refused the request with the category list, asking without it: {e:#}"
+                "the AI refused the request with the category list, asking without it \
+                 ({} categories, {} PDFs of {} bytes, {} characters of text): {e:#}",
+                names.len(),
+                mail.pdfs.len(),
+                mail.pdfs.iter().map(|p| p.len()).sum::<usize>(),
+                mail.text.chars().count()
             );
             ask(http, cfg, key, mail, &[], &labels, usage).await
         }
