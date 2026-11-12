@@ -77,7 +77,7 @@ Note: a short description in the language of the email, naming the merchant.";
 
 /// Added when the model is to pick a category too.
 const CATEGORY_RULE: &str =
-    " Category: the entry of the category list that fits best; leave it out if none clearly fits.";
+    " Category: copy, character for character, the entry of the category list below that fits best; leave it out if none clearly fits.";
 
 fn schema(categories: &[String]) -> Value {
     let mut props = json!({
@@ -89,7 +89,7 @@ fn schema(categories: &[String]) -> Value {
     });
     // With no list the model is not asked for a category at all (a rule already knows it).
     if !categories.is_empty() {
-        props["category"] = json!({ "type": "string", "description": "The category of the expense; omit it when none fits.", "enum": categories });
+        props["category"] = json!({ "type": "string", "description": "The category of the expense; omit it when none fits." });
     }
     json!({
         "type": "object",
@@ -161,7 +161,11 @@ async fn ask(
     let system = if names.is_empty() {
         SYSTEM.to_string()
     } else {
-        format!("{SYSTEM}{CATEGORY_RULE}")
+        // The list rides in the prompt: a long enum in the schema makes the service refuse the request.
+        format!(
+            "{SYSTEM}{CATEGORY_RULE}\nCategory list:\n{}",
+            names.join("\n")
+        )
     };
     let user = format!(
         "Email received on {}\nFrom: {}\nSubject: {}\n\n<email>\n{}\n</email>",
@@ -382,10 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_lists_the_categories_as_an_enum() {
+    fn the_categories_ride_in_the_prompt_not_in_the_schema() {
         let s = schema(&["Food > Groceries".to_string(), "Fun > Cinema".to_string()]);
         let cat = &s["properties"]["transactions"]["items"]["properties"]["category"];
-        assert_eq!(cat["enum"], json!(["Food > Groceries", "Fun > Cinema"]));
+        assert_eq!(cat["type"], "string");
+        assert!(cat.get("enum").is_none());
         assert!(s["properties"]["transactions"]["items"]["properties"]
             .get("direction")
             .is_none());
