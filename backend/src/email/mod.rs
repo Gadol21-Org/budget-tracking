@@ -450,6 +450,11 @@ impl Service {
         }
         Ok(match parsed {
             Ok(found) if found.is_empty() && !mail.unread.is_empty() => {
+                tracing::warn!(
+                    "email has attachments the AI does not read and nothing in its text (subject {:?}): {}",
+                    truncate(&mail.subject, 80),
+                    truncate(&mail.unread.join(", "), 200)
+                );
                 self.note_error(None).await;
                 Read {
                     rows: vec![unread_row(mail)],
@@ -480,13 +485,21 @@ impl Service {
                 self.note_error(Some(&format!("{e:#}"))).await;
                 wait(format!("{e:#}"))
             }
-            Err(ai::Failure::Unreadable(e)) => Read {
-                rows: vec![error_row(mail, &e)],
-                summary: Ingested {
-                    failed: true,
-                    ..Default::default()
-                },
-            },
+            Err(ai::Failure::Unreadable(e)) => {
+                // This message will not be retried: say why, so it can be told apart from a setting problem.
+                tracing::warn!(
+                    "email could not be read (from {:?}, subject {:?}): {e:#}",
+                    truncate(&mail.from, 80),
+                    truncate(&mail.subject, 80)
+                );
+                Read {
+                    rows: vec![error_row(mail, &e)],
+                    summary: Ingested {
+                        failed: true,
+                        ..Default::default()
+                    },
+                }
+            }
         })
     }
 

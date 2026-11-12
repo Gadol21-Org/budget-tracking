@@ -370,10 +370,19 @@ function FailedCard({ s }: { s: EmailSuggestion }) {
     <div className="card suggestion failed">
       <div className="name">לא הצלחתי לקרוא את ההודעה</div>
       <div className="muted small">{s.subject || s.sender}</div>
-      {attachments && (
+      {attachments ? (
         <div className="muted small" dir="auto">
           {`קובץ מצורף שה-AI לא קורא (${attachments}), ייתכן שהתנועה נמצאת בו`}
         </div>
+      ) : (
+        s.error && (
+          <>
+            <div className="muted small">הסיבה:</div>
+            <div className="muted small" dir="auto">
+              {s.error}
+            </div>
+          </>
+        )
       )}
       <div className="actions" style={{ justifyContent: "flex-start" }}>
         <ViewButton s={s} />
