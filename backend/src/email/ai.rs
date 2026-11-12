@@ -170,20 +170,34 @@ pub async fn parse(
         .await
         .map_err(|e| Failure::Transient(e.into()))?;
     if !status.is_success() {
-        let msg = serde_json::from_str::<Value>(&text)
-            .ok()
+        let body = serde_json::from_str::<Value>(&text).ok();
+        let msg = body
+            .as_ref()
             .and_then(|v| v["error"]["message"].as_str().map(String::from))
             .unwrap_or_default();
+        let google_status = body
+            .as_ref()
+            .and_then(|v| v["error"]["status"].as_str().map(String::from))
+            .unwrap_or_default();
         let err = anyhow!(
-            "the AI service answered {status}: {}",
+            "the AI service answered {status} {google_status}: {}",
             super::truncate(&msg, 200)
         );
-        // A bad request is about this email; anything else (key, quota, outage) is not.
-        return Err(if status == reqwest::StatusCode::BAD_REQUEST {
-            Failure::Unreadable(err)
-        } else {
-            Failure::Transient(err)
-        });
+        // Only a request the service finds invalid is about this email. Google also answers 400 for a bad
+        // or restricted key and for an account that cannot use the API (location, billing): those are not
+        // about the email, so it waits for a retry and the setting problem is shown instead.
+        let key_problem =
+            text.contains("API_KEY_INVALID") || msg.to_lowercase().contains("api key");
+        return Err(
+            if status == reqwest::StatusCode::BAD_REQUEST
+                && google_status == "INVALID_ARGUMENT"
+                && !key_problem
+            {
+                Failure::Unreadable(err)
+            } else {
+                Failure::Transient(err)
+            },
+        );
     }
     let v: Value = serde_json::from_str(&text)
         .context("the AI service sent something unreadable")
@@ -202,8 +216,9 @@ fn extract(v: &Value, mail: &Mail, labels: &[(String, &Category)]) -> anyhow::Re
         .find_map(|p| p["text"].as_str())
         .ok_or_else(|| {
             anyhow!(
-                "the AI gave no answer for this email ({})",
-                v["candidates"][0]["finishReason"].as_str().unwrap_or("?")
+                "the AI gave no answer for this email (finish reason: {}, blocked: {})",
+                v["candidates"][0]["finishReason"].as_str().unwrap_or("?"),
+                v["promptFeedback"]["blockReason"].as_str().unwrap_or("no")
             )
         })?;
     let input: Value =

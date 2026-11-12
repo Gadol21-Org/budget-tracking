@@ -15,6 +15,8 @@ use super::*;
 struct World {
     /// Fail the next AI calls with these statuses.
     ai_fail: Vec<u16>,
+    /// The body those failing calls answer with (a plain "busy" message when empty).
+    ai_fail_body: Option<Value>,
     ai_calls: usize,
     prompts: Vec<String>,
     /// How many PDF parts each AI call carried.
@@ -42,7 +44,11 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         let code = w.ai_fail.remove(0);
         return (
             StatusCode::from_u16(code).unwrap(),
-            Json(json!({ "error": { "message": "busy" } })),
+            Json(
+                w.ai_fail_body
+                    .clone()
+                    .unwrap_or_else(|| json!({ "error": { "message": "busy" } })),
+            ),
         );
     }
     let reply = |text: String| {
@@ -872,4 +878,44 @@ fn the_push_text_lists_each_transaction_with_price_note_and_day() {
         m.body,
         "נוספו:\n¥100 · a · 01/03/2026\nממתינות לבדיקה:\nCHF 5.00 · b · 01/03/2026"
     );
+}
+
+#[tokio::test]
+async fn a_bad_key_answered_with_400_waits_for_a_retry_instead_of_failing_the_mail() {
+    let r = rig().await;
+    {
+        let mut w = r.w.lock().unwrap();
+        w.ai_fail = vec![400];
+        w.ai_fail_body = Some(
+            json!({ "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT", "details": [{ "reason": "API_KEY_INVALID" }] } }),
+        );
+    }
+    let out = r
+        .svc
+        .ingest(&eml("k1", "Receipt", "receipt 12.50"))
+        .await
+        .unwrap();
+    assert!(out.queued && !out.failed);
+    assert!(rows(&r, "error").await.is_empty());
+    let q = rows(&r, "queued").await;
+    assert!(q[0].error.contains("API key not valid"), "{}", q[0].error);
+    // The setting problem is what the app shows.
+    let e = r.svc.status().await.unwrap().last_error.unwrap();
+    assert!(e.contains("API key not valid"), "{e}");
+    // The same 400 for an invalid request is about this mail: it fails once, with the reason kept.
+    {
+        let mut w = r.w.lock().unwrap();
+        w.ai_fail = vec![400];
+        w.ai_fail_body = Some(
+            json!({ "error": { "code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT" } }),
+        );
+    }
+    let out = r
+        .svc
+        .ingest(&eml("k2", "Receipt", "receipt 13.50"))
+        .await
+        .unwrap();
+    assert!(out.failed);
+    let e = rows(&r, "error").await;
+    assert!(e[0].error.contains("invalid argument"), "{}", e[0].error);
 }
