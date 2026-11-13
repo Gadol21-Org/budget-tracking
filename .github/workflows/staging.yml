@@ -78,6 +78,8 @@ jobs:
           # Optional email-to-transactions settings for staging only (see deploy/EMAIL.md).
           EMAIL_INBOUND_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
           GEMINI_API_KEY: ${{ secrets.STAGING_GEMINI_API_KEY }}
+          # Optional MCP endpoint token for staging only (see deploy/MCP.md).
+          MCP_TOKEN: ${{ secrets.STAGING_MCP_TOKEN }}
           RESET: ${{ inputs.teardown && 'teardown' || (inputs.reset && 'reset' || '') }}
         run: |
           ssh="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes $TARGET"
@@ -104,6 +106,7 @@ jobs:
             fi
             [ -z "$EMAIL_INBOUND_SECRET" ] || printf 'EMAIL_INBOUND_SECRET=%s\n' "$(printf '%s' "$EMAIL_INBOUND_SECRET" | tr -d ' \r\n')"
             [ -z "$GEMINI_API_KEY" ] || printf 'GEMINI_API_KEY=%s\n' "$(printf '%s' "$GEMINI_API_KEY" | tr -d ' \r\n')"
+            [ -z "$MCP_TOKEN" ] || printf 'MCP_TOKEN=%s\n' "$(printf '%s' "$MCP_TOKEN" | tr -d ' \r\n')"
           } > staging.env.tmp
           # One env file for every optional staging setting (Sumit test account, push keys, email).
           if [ -s staging.env.tmp ]; then

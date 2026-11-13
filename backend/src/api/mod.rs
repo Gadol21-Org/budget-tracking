@@ -2,6 +2,7 @@ mod businesses;
 mod categories;
 mod email;
 mod error;
+pub(crate) mod mcp;
 mod mirroring;
 mod repeating;
 mod sumit;
@@ -97,6 +98,9 @@ pub(crate) fn router(db: Db) -> Router {
 
 pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
     Router::new()
+        // The MCP endpoint for AI assistants: open to the internet (Cloudflare Access is bypassed
+        // for this one path), so it checks its own bearer token. Off unless MCP_TOKEN is set.
+        .route("/mcp", axum::routing::any(mcp::handle))
         .route(
             "/api/transactions",
             get(transactions::list_transactions).post(transactions::create_transaction),
@@ -230,5 +234,6 @@ pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
         .with_state(db)
         .fallback(assets::static_handler)
         .layer(axum::Extension(email))
+        .layer(axum::Extension(Arc::new(mcp::Config::from_env())))
         .layer(axum::middleware::from_fn(users::with_actor))
 }

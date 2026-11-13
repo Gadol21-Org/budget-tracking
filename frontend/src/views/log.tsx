@@ -105,10 +105,12 @@ function LogLines({ e }: { e: LogEntry }) {
 }
 
 /** The display name given to an email, else the email itself. */
-export const userLabel = (email: string) => (email === SYNC_ACTOR ? "Sumit Sync" : state.logUsers.find((u) => u.email === email)?.name || email);
+export const userLabel = (email: string) => (email === SYNC_ACTOR ? "Sumit Sync" : email === MCP_ACTOR ? "עוזר AI (MCP)" : state.logUsers.find((u) => u.email === email)?.name || email);
 
 /** The author the server records for changes made by the Sumit sync (not a person). */
 const SYNC_ACTOR = "sumit-sync";
+/** The author the server records for changes made through the MCP endpoint (an AI assistant). */
+const MCP_ACTOR = "mcp";
 
 function LogEntryRow({ e }: { e: LogEntry }) {
   const [ico, label] = LOG_KINDS[e.kind] ?? ["•", e.kind];
@@ -123,7 +125,7 @@ function LogEntryRow({ e }: { e: LogEntry }) {
           {label}
           {what ? <span className="muted">{` · ${what}`}</span> : null}
         </div>
-        {e.user_email ? <div className="logline muted">{`${e.user_email === SYNC_ACTOR ? "🏢" : "👤"} ${userLabel(e.user_email)}`}</div> : null}
+        {e.user_email ? <div className="logline muted">{`${e.user_email === SYNC_ACTOR ? "🏢" : e.user_email === MCP_ACTOR ? "🤖" : "👤"} ${userLabel(e.user_email)}`}</div> : null}
         <LogLines e={e} />
       </div>
       <span className="muted logtime">{time}</span>
