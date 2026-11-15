@@ -189,7 +189,7 @@ fn tool_definitions() -> Value {
             "note": {"type": "string"},
         })
     };
-    let mut create_props = tx_fields();
+    let create_props = tx_fields();
     let mut update_props = tx_fields();
     update_props["id"] = json!({"type": "integer"});
     json!([
