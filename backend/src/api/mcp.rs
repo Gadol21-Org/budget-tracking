@@ -164,63 +164,52 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "budget-tracker", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Household budget data. Amounts are exact integer agorot (1/100 shekel), \
-            signed: expenses negative, income positive. Lists are paginated: `limit` is required \
-            (1-100); pass the returned `next_cursor` to get the next page. Every transaction \
-            carries its source (manual, email, sumit, recurring, paamonim_import, mcp) and how that \
-            was determined. Writes are recorded in the change log as made by `mcp` and are mirrored \
-            to Paamonim like any other change."
+        "instructions": "Amounts are signed integer agorot: expenses negative. Lists need `limit` (1-100); \
+            continue with `next_cursor`."
     })
 }
 
 fn tool_definitions() -> Value {
     let limit = json!({"type": "integer", "minimum": 1, "maximum": MAX_LIMIT,
-        "description": format!("Page size, required, 1-{MAX_LIMIT}.")});
-    let cursor = json!({"type": "string",
-        "description": "`next_cursor` from the previous page; omit for the first page."});
+        "description": "Page size, required."});
+    let cursor = json!({"type": "string", "description": "Previous `next_cursor`."});
     let date = |what: &str| json!({"type": "string", "format": "date", "description": what});
-    let tx_fields = |req_note: bool| {
-        let _ = req_note;
+    let tx_fields = || {
         json!({
-            "date": date("Transaction day, YYYY-MM-DD."),
+            "date": date("YYYY-MM-DD."),
             "amount_agorot": {"type": "integer", "description":
-                "Signed exact amount in agorot (-1250 = an expense of 12.50 shekels). Not zero. \
-                 For a foreign-currency entry, leave it out to price it at the day's rate, or give \
-                 the shekel amount the card really charged."},
+                "Signed agorot, not zero (-1250 = expense of 12.50). Foreign currency: omit to \
+                 use the day's rate, or give the shekel amount actually charged."},
             "currency": {"type": "string", "description":
-                "Optional foreign currency (USD, EUR, JPY...); default is the shekel."},
+                "Foreign currency code (USD, JPY...); default shekel."},
             "orig_minor": {"type": "integer", "description":
-                "With `currency`: signed amount in cents (whole yen)."},
+                "With `currency`: signed cents (whole yen)."},
             "category_id": {"type": "integer", "description": "From list_categories."},
             "payment_method_id": {"type": "integer", "description": "From list_payment_methods."},
             "note": {"type": "string"},
         })
     };
-    let mut create_props = tx_fields(true);
-    let mut update_props = tx_fields(false);
+    let mut create_props = tx_fields();
+    let mut update_props = tx_fields();
     update_props["id"] = json!({"type": "integer"});
-    create_props["date"]["description"] = json!("Transaction day, YYYY-MM-DD (required).");
     json!([
         {
             "name": "list_transactions",
-            "title": "List transactions",
-            "description": "One page of transactions, newest first (by date, then id), with all \
-                stored metadata including their source. Pagination is required.",
+            "description": "One page of transactions, newest first, with all stored metadata and source.",
             "inputSchema": {"type": "object", "required": ["limit"], "additionalProperties": false,
                 "properties": {
                     "limit": limit.clone(),
                     "cursor": cursor.clone(),
                     "type": {"type": "string", "enum": ["income", "expense"], "description":
-                        "Income or expense, by the kind of the category (by sign when uncategorised)."},
-                    "from": date("Only this day (inclusive) or later."),
-                    "to": date("Only this day (inclusive) or earlier."),
+                        "By category kind (by sign if uncategorised)."},
+                    "from": date("From this day."),
+                    "to": date("Up to this day."),
                     "category_id": {"type": "integer", "description": "Only this category."},
                 }},
             "annotations": {"readOnlyHint": true}
         },
         {
             "name": "get_transaction",
-            "title": "Get a transaction",
             "description": "One transaction with all stored metadata.",
             "inputSchema": {"type": "object", "required": ["id"], "additionalProperties": false,
                 "properties": {"id": {"type": "integer"}}},
@@ -228,59 +217,50 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "create_transaction",
-            "title": "Create a transaction",
-            "description": "Add a transaction. Recorded in the change log and mirrored to Paamonim \
-                like one added in the app.",
+            "description": "Add a transaction.",
             "inputSchema": {"type": "object", "required": ["date"], "additionalProperties": false,
                 "properties": create_props},
             "annotations": {"readOnlyHint": false, "destructiveHint": false}
         },
         {
             "name": "update_transaction",
-            "title": "Update a transaction",
-            "description": "Change the given fields of a transaction (the others stay). Pass \
-                `category_id`/`payment_method_id` as null to clear them.",
+            "description": "Change the given fields; null clears `category_id`/`payment_method_id`.",
             "inputSchema": {"type": "object", "required": ["id"], "additionalProperties": false,
                 "properties": update_props},
             "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true}
         },
         {
             "name": "delete_transaction",
-            "title": "Delete a transaction",
-            "description": "Permanently delete a transaction (its change-log entry keeps the old values).",
+            "description": "Permanently delete a transaction.",
             "inputSchema": {"type": "object", "required": ["id"], "additionalProperties": false,
                 "properties": {"id": {"type": "integer"}}},
             "annotations": {"readOnlyHint": false, "destructiveHint": true}
         },
         {
             "name": "list_operations_log",
-            "title": "List the operations log",
-            "description": "One page of the change log (what changed, old and new values, who, \
-                when), newest first. Entries are kept for a year. Pagination is required.",
+            "description": "One page of the change log (old/new values, author, time), newest first. Kept one year.",
             "inputSchema": {"type": "object", "required": ["limit"], "additionalProperties": false,
                 "properties": {
                     "limit": limit,
                     "cursor": cursor,
-                    "from": date("Entries stamped on this UTC day (inclusive) or later."),
-                    "to": date("Entries stamped on this UTC day (inclusive) or earlier."),
+                    "from": date("From this UTC day."),
+                    "to": date("Up to this UTC day."),
                     "kind": {"type": "string", "description":
                         "Only this kind, e.g. transaction_create, transaction_update, \
                          transaction_delete, category_create, recurring_settle, import."},
-                    "entity_id": {"type": "integer", "description": "Only entries about this id."},
+                    "entity_id": {"type": "integer", "description": "Only this id."},
                 }},
             "annotations": {"readOnlyHint": true}
         },
         {
             "name": "list_categories",
-            "title": "List categories",
-            "description": "All categories (income and expense, top-level and sub-categories).",
+            "description": "All categories.",
             "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
             "annotations": {"readOnlyHint": true}
         },
         {
             "name": "list_payment_methods",
-            "title": "List payment methods",
-            "description": "All payment methods, for `payment_method_id`.",
+            "description": "All payment methods.",
             "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
             "annotations": {"readOnlyHint": true}
         }
@@ -290,7 +270,7 @@ fn tool_definitions() -> Value {
 /// A tool's answer: the data as JSON in both `structuredContent` and as text.
 fn ok(v: Value) -> Value {
     json!({
-        "content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}],
+        "content": [{"type": "text", "text": serde_json::to_string(&v).unwrap_or_default()}],
         "structuredContent": v,
         "isError": false
     })
