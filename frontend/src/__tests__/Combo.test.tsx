@@ -48,6 +48,18 @@ describe("Combo", () => {
     expect(input.value).toBe("מזון");
   });
 
+  it("types over the picked label even when the tap dropped the select-all", () => {
+    render(<Host />);
+    const input = screen.getByPlaceholderText("חיפוש…") as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.mouseDown(screen.getByRole("option", { name: "מזון" }));
+    fireEvent.focus(input);
+    // Nothing selected: the typed letter lands after the label.
+    fireEvent.change(input, { target: { value: "מזוןת" } });
+    expect(input.value).toBe("ת");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["תחבורה", "מסעדות"]);
+  });
+
   it("takes the first match on Enter", () => {
     render(<Host />);
     const input = screen.getByPlaceholderText("חיפוש…") as HTMLInputElement;
