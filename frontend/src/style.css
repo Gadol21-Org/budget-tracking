@@ -259,7 +259,6 @@ body { overscroll-behavior-y: contain; touch-action: pan-x pan-y; }
 }
 .combo-list[hidden] { display: none; }
 .combo-list { transition: max-height .15s ease; }
-.combo-list.settling { visibility: hidden; transition: none; }
 @media (prefers-reduced-motion: reduce) { .combo-list { transition: none; } }
 .combo-list::-webkit-scrollbar { width: 6px; }
 .combo-list::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }

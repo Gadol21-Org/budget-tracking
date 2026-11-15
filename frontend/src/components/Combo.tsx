@@ -81,23 +81,8 @@ export function Combo({ items, value, onChange, placeholder, disabled = false, c
     };
     fit();
     window.visualViewport?.addEventListener("resize", fit);
-    // In a dialog the page scrolls the field to the top and the keyboard slides in: keep the list invisible (it still takes
-    // its place) until that has settled, so it appears once at its final size instead of jumping.
-    const list = listRef.current;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    if (list && inputRef.current?.closest("dialog")) {
-      list.classList.add("settling");
-      timer = setTimeout(() => {
-        fit();
-        void list.offsetHeight; // apply the final size while the transition is still off
-        list.classList.remove("settling");
-      }, 450);
-    }
-    return () => {
-      clearTimeout(timer);
-      list?.classList.remove("settling");
-      window.visualViewport?.removeEventListener("resize", fit);
-    };
+    // The list shows at once; if the keyboard then slides in, `fit` resizes it (with a short transition).
+    return () => window.visualViewport?.removeEventListener("resize", fit);
   }, [open]);
 
   return (
@@ -119,7 +104,14 @@ export function Combo({ items, value, onChange, placeholder, disabled = false, c
           setOpen(true);
         }}
         onClick={(e) => (justPicked() ? e.currentTarget.blur() : setOpen(true))}
-        onChange={(e) => (setTyped(e.target.value), setActive(-1), setOpen(true))}
+        onChange={(e) => {
+          // A tap can drop the select-all from focus, so typing then lands beside the picked label: type over it, not after it.
+          let v = e.target.value;
+          if (typed === null && label && v !== label && v.includes(label)) v = v.replace(label, "");
+          setTyped(v);
+          setActive(-1);
+          setOpen(true);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Tab" && open) close();
           if (e.key === "Escape" && open) {
