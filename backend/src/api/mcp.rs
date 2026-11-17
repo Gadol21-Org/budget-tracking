@@ -5,7 +5,7 @@
 //!
 //! Auth: none of its own. The endpoint is meant to be reached only from inside the VM's Docker
 //! network (see `deploy/MCP.md`); on the public hostname it stays behind Cloudflare Access (no
-//! bypass). Off, and answering 404 as if the route did not exist, unless `MCP_ENABLED=1`. As the
+//! bypass). On by default; `MCP_ENABLED=0` turns it off (404, as if the route did not exist). As the
 //! only guard against a web page POSTing to it from a browser, a request carrying an `Origin`
 //! header is refused and the body must be sent as `application/json` (which makes a browser ask
 //! first). Whatever the request claims about itself (including a forged Access header), changes
@@ -43,8 +43,12 @@ pub(crate) struct Config {
 
 impl Config {
     pub(crate) fn from_env() -> Config {
-        let on = std::env::var("MCP_ENABLED").ok();
-        Config::new(matches!(on.as_deref().map(str::trim), Some("1" | "true")))
+        // On unless switched off with MCP_ENABLED=0 (or false).
+        let off = std::env::var("MCP_ENABLED").ok();
+        Config::new(!matches!(
+            off.as_deref().map(str::trim),
+            Some("0" | "false")
+        ))
     }
 
     pub(crate) fn new(enabled: bool) -> Config {

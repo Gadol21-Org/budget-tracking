@@ -77,7 +77,7 @@ async fn protocol_basics() {
 }
 
 #[tokio::test]
-async fn endpoint_is_off_unless_enabled_and_refuses_browsers() {
+async fn endpoint_can_be_switched_off_and_refuses_browsers() {
     let db = db().await;
     let send = |enabled: bool, method: Method, content_type: Option<&str>, origin: Option<&str>| {
         let db = db.clone();
@@ -682,4 +682,14 @@ async fn categories_list_everything() {
     assert!(call(&db, "list_categories", json!({"limit": 1}))
         .await
         .is_err());
+}
+
+#[test]
+fn on_by_default_off_with_zero() {
+    let _g = crate::fx::ENV_LOCK.blocking_lock();
+    std::env::remove_var("MCP_ENABLED");
+    assert!(Config::from_env().enabled);
+    std::env::set_var("MCP_ENABLED", "0");
+    assert!(!Config::from_env().enabled);
+    std::env::remove_var("MCP_ENABLED");
 }

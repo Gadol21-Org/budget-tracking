@@ -74,7 +74,6 @@ docker run -d --name "$name" \
   --network "$network" \
   -e MYSQL_URL="mysql://root:staging@$db:3306/budget" \
   -e PAAMONIM_MIRROR=0 \
-  -e MCP_ENABLED=1 \
   "${extra_env[@]}" \
   "$image"
 
