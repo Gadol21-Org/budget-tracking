@@ -3,12 +3,13 @@
 //! Transport: "Streamable HTTP", the stateless subset: every JSON-RPC request is a `POST /mcp`
 //! answered with one JSON body (no sessions, no streaming, no server-initiated messages).
 //!
-//! Auth: Cloudflare Access cannot be passed by an MCP client, so (like `/api/email/inbound`) this
-//! one path is bypassed in Access and checks its own secret: `Authorization: Bearer <MCP_TOKEN>`,
-//! compared in constant time before anything is read. Off, and answering 404 as if the route did
-//! not exist, unless `MCP_TOKEN` is set to at least 32 characters. Whatever the request claims
-//! about itself (including a forged Access header), changes made here are recorded in the change
-//! log as made by `mcp`.
+//! Auth: none of its own. The endpoint is meant to be reached only from inside the VM's Docker
+//! network (see `deploy/MCP.md`); on the public hostname it stays behind Cloudflare Access (no
+//! bypass). Off, and answering 404 as if the route did not exist, unless `MCP_ENABLED=1`. As the
+//! only guard against a web page POSTing to it from a browser, a request carrying an `Origin`
+//! header is refused and the body must be sent as `application/json` (which makes a browser ask
+//! first). Whatever the request claims about itself (including a forged Access header), changes
+//! made here are recorded in the change log as made by `mcp`.
 //!
 //! The data model keeps no "where did this come from" column on a transaction, so the source in
 //! each returned transaction is worked out from what is stored (see [`infer_source`]) and says
@@ -16,7 +17,6 @@
 
 use super::error::ApiError;
 use super::{settle, transactions, Db};
-use crate::email::same;
 use crate::oplog;
 use crate::storage::{
     Category, EmailSuggestion, LogFilter, MirrorLink, PaymentMethod, Transaction, TxFx,
@@ -36,31 +36,19 @@ use std::sync::Arc;
 pub(crate) const MAX_LIMIT: usize = 100;
 const LATEST_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
-const MIN_TOKEN_LEN: usize = 32;
 
 pub(crate) struct Config {
-    token: Option<String>,
+    enabled: bool,
 }
 
 impl Config {
     pub(crate) fn from_env() -> Config {
-        Config::with_token(std::env::var("MCP_TOKEN").ok())
+        let on = std::env::var("MCP_ENABLED").ok();
+        Config::new(matches!(on.as_deref().map(str::trim), Some("1" | "true")))
     }
 
-    pub(crate) fn with_token(token: Option<String>) -> Config {
-        let token = token
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty());
-        let token = match token {
-            Some(t) if t.len() < MIN_TOKEN_LEN => {
-                tracing::error!(
-                    "MCP_TOKEN is shorter than {MIN_TOKEN_LEN} characters: the MCP endpoint is off"
-                );
-                None
-            }
-            t => t,
-        };
-        Config { token }
+    pub(crate) fn new(enabled: bool) -> Config {
+        Config { enabled }
     }
 }
 
@@ -73,22 +61,26 @@ pub(crate) async fn handle(
     body: Bytes,
 ) -> Response {
     // Off looks like no such route.
-    let Some(token) = &cfg.token else {
+    if !cfg.enabled {
         return StatusCode::NOT_FOUND.into_response();
-    };
-    let given = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    if !given.is_some_and(|g| same(token, g)) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Bearer")],
-        )
-            .into_response();
     }
     if method != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response();
+    }
+    // Browsers always send Origin on a cross-site POST; MCP clients on the server side do not.
+    if headers.contains_key(header::ORIGIN) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let json_body = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("application/json")
+        });
+    if !json_body {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
     }
     match process(&db, &body).await {
         Some(v) => axum::Json(v).into_response(),

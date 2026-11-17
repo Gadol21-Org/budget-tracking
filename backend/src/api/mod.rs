@@ -98,8 +98,8 @@ pub(crate) fn router(db: Db) -> Router {
 
 pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
     Router::new()
-        // The MCP endpoint for AI assistants: open to the internet (Cloudflare Access is bypassed
-        // for this one path), so it checks its own bearer token. Off unless MCP_TOKEN is set.
+        // The MCP endpoint for AI assistants. No login of its own: reach it only over the VM's
+        // Docker network, never through a public bypass. Off unless MCP_ENABLED=1.
         .route("/mcp", axum::routing::any(mcp::handle))
         .route(
             "/api/transactions",

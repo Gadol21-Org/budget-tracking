@@ -77,14 +77,17 @@ async fn protocol_basics() {
 }
 
 #[tokio::test]
-async fn endpoint_needs_the_token() {
+async fn endpoint_is_off_unless_enabled_and_refuses_browsers() {
     let db = db().await;
-    let send = |token: Option<&str>, auth: Option<&str>, method: Method| {
+    let send = |enabled: bool, method: Method, content_type: Option<&str>, origin: Option<&str>| {
         let db = db.clone();
-        let cfg = Arc::new(Config::with_token(token.map(Into::into)));
+        let cfg = Arc::new(Config::new(enabled));
         let mut h = HeaderMap::new();
-        if let Some(a) = auth {
-            h.insert(header::AUTHORIZATION, a.parse().unwrap());
+        if let Some(c) = content_type {
+            h.insert(header::CONTENT_TYPE, c.parse().unwrap());
+        }
+        if let Some(o) = origin {
+            h.insert(header::ORIGIN, o.parse().unwrap());
         }
         async move {
             handle(
@@ -98,22 +101,30 @@ async fn endpoint_needs_the_token() {
             .status()
         }
     };
-    let good = "x".repeat(40);
-    let bearer = format!("Bearer {good}");
-    // Off without a token, and with one that is too short to be safe.
-    assert_eq!(send(None, Some(&bearer), Method::POST).await, 404);
+    let json = Some("application/json");
+    assert_eq!(send(false, Method::POST, json, None).await, 404);
+    assert_eq!(send(true, Method::POST, json, None).await, 200);
     assert_eq!(
-        send(Some("short"), Some("Bearer short"), Method::POST).await,
-        404
+        send(
+            true,
+            Method::POST,
+            Some("application/json; charset=utf-8"),
+            None
+        )
+        .await,
+        200
     );
-    assert_eq!(send(Some(&good), None, Method::POST).await, 401);
+    assert_eq!(send(true, Method::GET, json, None).await, 405);
+    // A web page cannot drive it: no Origin, and no "simple" content types.
     assert_eq!(
-        send(Some(&good), Some("Bearer nope"), Method::POST).await,
-        401
+        send(true, Method::POST, json, Some("https://evil.example")).await,
+        403
     );
-    assert_eq!(send(Some(&good), Some(&good), Method::POST).await, 401);
-    assert_eq!(send(Some(&good), Some(&bearer), Method::POST).await, 200);
-    assert_eq!(send(Some(&good), Some(&bearer), Method::GET).await, 405);
+    assert_eq!(
+        send(true, Method::POST, Some("text/plain"), None).await,
+        415
+    );
+    assert_eq!(send(true, Method::POST, None, None).await, 415);
 }
 
 #[tokio::test]

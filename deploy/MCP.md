@@ -4,11 +4,14 @@ Lets an AI assistant (Claude Desktop, Claude Code, any MCP client) read and edit
 
 ## Turn it on
 
-1. Make a token: `openssl rand -hex 32`. Put it in the app's environment as `MCP_TOKEN=<token>` (production: the `BUDGET_ENV` secret, then run the Deploy workflow; staging: the `STAGING_MCP_TOKEN` repository secret). Shorter than 32 characters and the endpoint stays off. Without it the endpoint answers 404.
-2. **Production only:** Cloudflare Access cannot be passed by an MCP client, so make exactly this path public, like the email endpoint: Zero Trust > Access > Applications > the budget app > add a policy **Bypass** (Everyone) for the path `/mcp`. The endpoint refuses every request without `Authorization: Bearer <MCP_TOKEN>` (compared in constant time) and reads nothing before that check. Treat the token like a password: it gives full read and write access to the household's finances. To rotate it, change the secret and redeploy.
-3. Connect a client, e.g. Claude Code: `claude mcp add --transport http budget https://<host>/mcp --header "Authorization: Bearer <token>"`.
+The endpoint has **no login**: anyone who can reach it can read and change everything. So it is meant to be reached only from another container on the VM, never from the internet.
 
-Staging (sample data only) has no Access in front of it, so there the token is the only protection.
+1. Set `MCP_ENABLED=1` in the app's environment (production: the `BUDGET_ENV` secret, then run the Deploy workflow). Without it the endpoint answers 404. Staging has it on.
+2. Put both containers on a shared Docker network. Once: `docker network create budget-internal`. Add `--network budget-internal` to the `docker run` in `deploy/deploy.sh` (keep the `-p 127.0.0.1:8082:3000`), and the same to the other service. (`docker network connect budget-internal budget-tracking` does it for the running container until the next deploy.)
+3. The other service calls `http://budget-tracking:3000/mcp` (the container's own port, by container name). Do **not** use `127.0.0.1:8082` from another container: that is its own loopback.
+4. **Do not add a Cloudflare Access bypass for `/mcp`.** On the public hostname it then stays behind Access like the rest of the app. A client on your own machine can reach it through `cloudflared access` or an SSH tunnel to `127.0.0.1:8082`.
+
+Guards that remain: a request with an `Origin` header (a browser cross-site call) is refused with 403 and a body that is not `application/json` with 415, so a web page cannot drive it even from a browser that can reach it. Staging (sample data only) has no Access in front of it, so there anyone who finds the port can use it.
 
 ## What it does
 
