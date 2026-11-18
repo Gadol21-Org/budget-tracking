@@ -18,8 +18,13 @@ fn tx(date: &str, agorot: i64, cat: Option<i64>) -> NewTransaction {
     }
 }
 
-/// Call a tool the way a client does; `Ok` is the structured result, `Err` the error text.
-async fn call(db: &Db, tool: &str, args: Value) -> Result<Value, String> {
+/// Call a tool the way a client does; `Ok` is the structured result, `Err` the error text. The
+/// two list tools answer in compact text unless asked for `full`, so this asks for it (the
+/// compact text is tested through `text`).
+async fn call(db: &Db, tool: &str, mut args: Value) -> Result<Value, String> {
+    if matches!(tool, "list_transactions" | "list_categories") && args.get("detail").is_none() {
+        args["detail"] = json!("full");
+    }
     let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": args}});
     let res = process(db, req.to_string().as_bytes()).await.unwrap();
@@ -28,6 +33,22 @@ async fn call(db: &Db, tool: &str, args: Value) -> Result<Value, String> {
         Err(r["content"][0]["text"].as_str().unwrap().to_string())
     } else {
         Ok(r["structuredContent"].clone())
+    }
+}
+
+/// The text a model reads from a tool (the compact lists, the summary).
+async fn text(db: &Db, tool: &str, args: Value) -> Result<String, String> {
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool, "arguments": args}});
+    let res = process(db, req.to_string().as_bytes()).await.unwrap();
+    let r = &res["result"];
+    let t = r["content"][0]["text"].as_str().unwrap().to_string();
+    if r["isError"] == true {
+        Err(t)
+    } else {
+        // Compact answers carry no structured copy of themselves.
+        assert!(r.get("structuredContent").is_none() || serde_json::from_str::<Value>(&t).is_ok());
+        Ok(t)
     }
 }
 
@@ -282,7 +303,7 @@ async fn a_transaction_carries_all_its_metadata_and_source() {
     let via_mcp = call(
         &db,
         "create_transaction",
-        json!({"date": "2026-04-04", "amount_agorot": -4250, "category_id": food, "note": "lunch"}),
+        json!({"date": "2026-04-04", "amount": -42.5, "category_id": food, "note": "lunch"}),
     )
     .await
     .unwrap();
@@ -362,7 +383,7 @@ async fn a_transaction_carries_all_its_metadata_and_source() {
     for k in [
         "id",
         "date",
-        "amount_agorot",
+        "amount",
         "amount",
         "type",
         "category",
@@ -436,35 +457,35 @@ async fn writes_are_validated_applied_and_logged_as_mcp() {
     assert!(call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "amount_agorot": 0})
+        json!({"date": "2026-05-01", "amount": 0})
     )
     .await
     .is_err());
     assert!(call(
         &db,
         "create_transaction",
-        json!({"date": "May", "amount_agorot": 5})
+        json!({"date": "May", "amount": "0.05"})
     )
     .await
     .is_err());
     assert!(call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "amount_agorot": 5, "category_id": 9999})
+        json!({"date": "2026-05-01", "amount": "0.05", "category_id": 9999})
     )
     .await
     .is_err());
     assert!(call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "amount_agorot": 5, "payment_method_id": 9999})
+        json!({"date": "2026-05-01", "amount": "0.05", "payment_method_id": 9999})
     )
     .await
     .is_err());
     assert!(call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "amount_agorot": 5, "bogus": 1})
+        json!({"date": "2026-05-01", "amount": "0.05", "bogus": 1})
     )
     .await
     .is_err());
@@ -473,7 +494,7 @@ async fn writes_are_validated_applied_and_logged_as_mcp() {
     let created = call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "amount_agorot": -1999, "category_id": food, "note": "a"}),
+        json!({"date": "2026-05-01", "amount": "-19.99", "category_id": food, "note": "a"}),
     )
     .await
     .unwrap();
@@ -488,7 +509,7 @@ async fn writes_are_validated_applied_and_logged_as_mcp() {
     .await
     .unwrap();
     assert_eq!(u["transaction"]["note"], "b");
-    assert_eq!(u["transaction"]["amount_agorot"], -1999);
+    assert_eq!(u["transaction"]["amount"], "-19.99");
     assert_eq!(u["transaction"]["date"], "2026-05-01");
     assert_eq!(u["transaction"]["category"]["id"], pay);
     assert_eq!(u["transaction"]["last_updated_by"], "mcp");
@@ -500,19 +521,17 @@ async fn writes_are_validated_applied_and_logged_as_mcp() {
     .await
     .unwrap();
     assert!(u["transaction"]["category"].is_null());
-    assert_eq!(u["transaction"]["amount_agorot"], -1999);
+    assert_eq!(u["transaction"]["amount"], "-19.99");
     assert!(
         call(&db, "update_transaction", json!({"id": 4242, "note": "x"}))
             .await
             .is_err()
     );
-    assert!(call(
-        &db,
-        "update_transaction",
-        json!({"id": id, "amount_agorot": 0})
-    )
-    .await
-    .is_err());
+    assert!(
+        call(&db, "update_transaction", json!({"id": id, "amount": 0}))
+            .await
+            .is_err()
+    );
 
     // Delete answers with what was removed, and the log keeps it.
     let d = call(&db, "delete_transaction", json!({"id": id}))
@@ -553,7 +572,7 @@ async fn writes_are_validated_applied_and_logged_as_mcp() {
             call(
                 &db,
                 "create_transaction",
-                json!({"date": "2026-05-02", "amount_agorot": 1}),
+                json!({"date": "2026-05-02", "amount": 0.01}),
             ),
         )
         .await
@@ -569,21 +588,21 @@ async fn a_foreign_line_keeps_its_rate_when_only_the_note_changes() {
     let c = call(
         &db,
         "create_transaction",
-        json!({"date": "2026-05-01", "currency": "USD", "orig_minor": -1000}),
+        json!({"date": "2026-05-01", "currency": "USD", "foreign_amount": -10}),
     )
     .await
     .unwrap();
     let id = c["transaction"]["id"].as_i64().unwrap();
     assert_eq!(c["transaction"]["foreign_currency"]["currency"], "USD");
-    assert_eq!(c["transaction"]["amount_agorot"], -3600);
+    assert_eq!(c["transaction"]["amount"], "-36.00");
     let u = call(&db, "update_transaction", json!({"id": id, "note": "trip"}))
         .await
         .unwrap();
     assert_eq!(
-        u["transaction"]["foreign_currency"]["original_minor"],
-        -1000
+        u["transaction"]["foreign_currency"]["original_amount"],
+        "-10.00"
     );
-    assert_eq!(u["transaction"]["amount_agorot"], -3600);
+    assert_eq!(u["transaction"]["amount"], "-36.00");
 }
 
 #[tokio::test]
@@ -671,4 +690,304 @@ async fn categories_list_everything() {
     assert!(call(&db, "list_categories", json!({"limit": 1}))
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn compact_lists_are_one_line_per_row() {
+    let _g = crate::fx::ENV_LOCK.lock().await;
+    std::env::set_var("FX_FAKE_RATES", "USD=3.6");
+    let db = db().await;
+    let home = db.insert_category("בית", false, None).await.unwrap();
+    let food = db.insert_category("מזון", false, Some(home)).await.unwrap();
+    let work = db.insert_category("הכנסות", true, None).await.unwrap();
+    let biz = db.insert_business("עסק", false).await.unwrap();
+    db.set_category_business(work, Some(biz)).await.unwrap();
+
+    // Empty page: a header and the columns, no rows.
+    let empty = text(&db, "list_transactions", json!({"limit": 5}))
+        .await
+        .unwrap();
+    assert!(empty.starts_with(
+        "Transactions, newest first: returned 0 of 0 matching. next_cursor: none (no more)\n"
+    ));
+    assert_eq!(empty.lines().count(), 2);
+
+    let plain = db
+        .create_transaction(&tx("2026-11-02", -18540, Some(food)))
+        .await
+        .unwrap();
+    // A note with a bar and a line break must not break the line format.
+    let mut odd = tx("2026-11-02", -5000, Some(food));
+    odd.note = "ארומה | קפה\nשני".into();
+    let odd = db.create_transaction(&odd).await.unwrap();
+    let foreign = call(
+        &db,
+        "create_transaction",
+        json!({"date": "2026-11-01", "currency": "USD", "foreign_amount": "-13.89", "category_id": food}),
+    )
+    .await
+    .unwrap()["transaction"]["id"]
+        .as_i64()
+        .unwrap();
+    let income = db
+        .create_transaction(&tx("2026-11-03", 120000, Some(work)))
+        .await
+        .unwrap();
+
+    let t = text(&db, "list_transactions", json!({"limit": 10}))
+        .await
+        .unwrap();
+    let lines: Vec<&str> = t.lines().collect();
+    assert_eq!(
+        lines[0],
+        "Transactions, newest first: returned 4 of 4 matching. next_cursor: none (no more)"
+    );
+    assert!(lines[1].starts_with("Columns: id|date|amount in shekels"));
+    // Newest first; a business through its category; a plain row has five fields only.
+    assert_eq!(
+        lines[2],
+        format!("{income}|2026-11-03|1200.00|{work} הכנסות|n2026-11-03|business עסק")
+    );
+    assert_eq!(
+        lines[3],
+        format!("{odd}|2026-11-02|-50.00|{food} בית > מזון|ארומה / קפה שני")
+    );
+    assert_eq!(
+        lines[4],
+        format!("{plain}|2026-11-02|-185.40|{food} בית > מזון|n2026-11-02")
+    );
+    assert!(
+        lines[5].starts_with(&format!(
+            "{foreign}|2026-11-01|-50.00|{food} בית > מזון||foreign 13.89 USD"
+        )),
+        "{}",
+        lines[5]
+    );
+    assert_eq!(lines.len(), 6);
+    assert!(!t.contains("source") && !t.contains("sync"));
+
+    // Paging still works, with the cursor in the header.
+    let p1 = text(&db, "list_transactions", json!({"limit": 3}))
+        .await
+        .unwrap();
+    let cursor = p1
+        .lines()
+        .next()
+        .unwrap()
+        .rsplit("next_cursor: ")
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(p1.contains("returned 3 of 4 matching") && cursor != "none (no more)");
+    let p2 = text(
+        &db,
+        "list_transactions",
+        json!({"limit": 3, "cursor": cursor}),
+    )
+    .await
+    .unwrap();
+    assert!(p2.contains("returned 1 of 4 matching") && p2.contains("none (no more)"));
+    assert!(p2.lines().nth(2).unwrap().starts_with(&foreign.to_string()));
+
+    // `full` keeps today's JSON; a bad value is refused.
+    let full = call(&db, "list_transactions", json!({"limit": 2}))
+        .await
+        .unwrap();
+    assert!(full["transactions"][0]["source"].is_object());
+    assert!(text(
+        &db,
+        "list_transactions",
+        json!({"limit": 2, "detail": "tiny"})
+    )
+    .await
+    .is_err());
+
+    let c = text(&db, "list_categories", json!({})).await.unwrap();
+    assert_eq!(
+        c.lines().collect::<Vec<_>>(),
+        vec![
+            "Categories. Columns: id|path (parent > child)|income or expense|extras".to_string(),
+            format!("{home}|בית|expense"),
+            format!("{work}|הכנסות|income|business עסק"),
+            format!("{food}|בית > מזון|expense"),
+        ]
+    );
+    // get_transaction is unchanged.
+    let one = call(&db, "get_transaction", json!({"id": plain}))
+        .await
+        .unwrap();
+    assert_eq!(one["transaction"]["amount"], "-185.40");
+    assert!(one["transaction"]["source"]["basis"].is_string());
+}
+
+#[tokio::test]
+async fn summary_groups_and_totals() {
+    let db = db().await;
+    let food = db.insert_category("Food", false, None).await.unwrap();
+    let fun = db.insert_category("Fun", false, None).await.unwrap();
+    let pay = db.insert_category("Pay", true, None).await.unwrap();
+    for (d, a, c) in [
+        ("2026-10-05", -1000, Some(food)),
+        ("2026-11-01", -2000, Some(food)),
+        ("2026-11-02", -500, Some(fun)),
+        ("2026-11-03", -300, None),
+        ("2026-11-04", 10000, Some(pay)),
+    ] {
+        db.create_transaction(&tx(d, a, c)).await.unwrap();
+    }
+    let by_cat = text(&db, "summarize_transactions", json!({"type": "expense"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        by_cat.lines().collect::<Vec<_>>(),
+        vec![
+            "Summary, all dates: 4 transactions, net total -38.00 (income 0.00, expenses -38.00). Amounts in shekels, expenses negative.",
+            "Columns: category path|count|total in shekels",
+            "Food|2|-30.00",
+            "Fun|1|-5.00",
+            "(no category)|1|-3.00",
+        ]
+    );
+    let by_month = text(
+        &db,
+        "summarize_transactions",
+        json!({"group_by": "month", "from": "2026-10-01", "to": "2026-11-30"}),
+    )
+    .await
+    .unwrap();
+    let rows: Vec<&str> = by_month.lines().skip(2).collect();
+    assert_eq!(rows, vec!["2026-11|4|72.00", "2026-10|1|-10.00"]);
+    let both = text(
+        &db,
+        "summarize_transactions",
+        json!({"group_by": "category_month", "category_id": food}),
+    )
+    .await
+    .unwrap();
+    let rows: Vec<&str> = both.lines().skip(2).collect();
+    assert_eq!(rows, vec!["2026-11|Food|1|-20.00", "2026-10|Food|1|-10.00"]);
+    assert!(
+        text(&db, "summarize_transactions", json!({"group_by": "year"}))
+            .await
+            .is_err()
+    );
+    assert!(text(&db, "summarize_transactions", json!({"limit": 5}))
+        .await
+        .is_err());
+    let none = text(&db, "summarize_transactions", json!({"from": "2030-01-01"}))
+        .await
+        .unwrap();
+    assert!(none.starts_with("Summary, 2030-01-01 to now: 0 transactions, net total 0.00"));
+}
+
+#[test]
+fn amounts_are_read_exactly_without_floats() {
+    let ok = |t: &str, d: u32| decimal_to_minor(t, d, "amount").unwrap();
+    assert_eq!(ok("12.34", 2), 1234);
+    assert_eq!(ok("-12.5", 2), -1250);
+    assert_eq!(ok("3", 2), 300);
+    assert_eq!(ok("0.07", 2), 7);
+    assert_eq!(ok("-0.01", 2), -1);
+    assert_eq!(ok(".5", 2), 50);
+    assert_eq!(ok("1500", 0), 1500);
+    assert_eq!(ok("1.234", 3), 1234);
+    for bad in [
+        "1.234", "1e3", "1,5", "", "-", ".", "abc", "1.2.3", "--1", " ",
+    ] {
+        assert!(decimal_to_minor(bad, 2, "amount").is_err(), "{bad}");
+    }
+    assert!(decimal_to_minor("1.5", 0, "amount").is_err());
+    assert!(decimal_to_minor("99999999999999999999", 2, "amount").is_err());
+    // Classic float traps go through as the digits that were typed.
+    let m: Map<String, Value> =
+        serde_json::from_str(r#"{"a": 0.1, "b": 1.15, "c": 8.2, "d": "19.99", "e": 4.35}"#)
+            .unwrap();
+    assert_eq!(amount(&m, "a", 2).unwrap(), Some(10));
+    assert_eq!(amount(&m, "b", 2).unwrap(), Some(115));
+    assert_eq!(amount(&m, "c", 2).unwrap(), Some(820));
+    assert_eq!(amount(&m, "d", 2).unwrap(), Some(1999));
+    assert_eq!(amount(&m, "e", 2).unwrap(), Some(435));
+    assert_eq!(amount(&m, "none", 2).unwrap(), None);
+    // And the other way round.
+    assert_eq!(money(-1850), "-18.50");
+    assert_eq!(money(5), "0.05");
+    assert_eq!(money(-5), "-0.05");
+    assert_eq!(minor_text(1389, 2), "13.89");
+    assert_eq!(minor_text(-1500, 0), "-1500");
+}
+
+#[tokio::test]
+async fn shekels_in_and_out_with_no_agorot_anywhere() {
+    let db = db().await;
+    let (food, _) = cats(&db).await;
+    for (input, shown) in [
+        (json!(0.1), "0.10"),
+        (json!("1.15"), "1.15"),
+        (json!(-8.2), "-8.20"),
+        (json!(4.35), "4.35"),
+    ] {
+        let r = call(
+            &db,
+            "create_transaction",
+            json!({"date": "2026-05-01", "amount": input, "category_id": food}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r["transaction"]["amount"], shown);
+        assert!(r["transaction"].get("amount_agorot").is_none());
+    }
+    // Three decimals are refused rather than rounded; the old field names are unknown now.
+    assert!(call(
+        &db,
+        "create_transaction",
+        json!({"date": "2026-05-01", "amount": 1.005})
+    )
+    .await
+    .is_err());
+    assert!(call(
+        &db,
+        "create_transaction",
+        json!({"date": "2026-05-01", "amount_agorot": 5})
+    )
+    .await
+    .is_err());
+    assert!(call(
+        &db,
+        "create_transaction",
+        json!({"date": "2026-05-01", "foreign_amount": 5})
+    )
+    .await
+    .is_err());
+    // The stored value is exact.
+    let stored: Vec<i64> = db
+        .list_transactions()
+        .await
+        .unwrap()
+        .iter()
+        .map(|t| t.amount_agorot)
+        .collect();
+    assert_eq!(stored, vec![435, -820, 115, 10]);
+
+    // The change log shows shekels too, in its old and new snapshots.
+    let id = db.list_transactions().await.unwrap()[0].id;
+    call(
+        &db,
+        "update_transaction",
+        json!({"id": id, "amount": "4.40"}),
+    )
+    .await
+    .unwrap();
+    let log = call(&db, "list_operations_log", json!({"limit": 1}))
+        .await
+        .unwrap();
+    let e = &log["entries"][0];
+    assert_eq!(e["old"]["amount"], "4.35");
+    assert_eq!(e["new"]["amount"], "4.40");
+    assert!(!serde_json::to_string(&log).unwrap().contains("agorot"));
+    let full = call(&db, "list_transactions", json!({"limit": 10}))
+        .await
+        .unwrap();
+    assert!(!serde_json::to_string(&full).unwrap().contains("agorot"));
+    let tools = serde_json::to_string(&tool_definitions()).unwrap();
+    assert!(!tools.contains("agorot") && !tools.contains("orig_minor"));
 }
