@@ -135,7 +135,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "budget-tracker", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Lists show shekels, expenses negative (create/update take signed agorot). \
+        "instructions": "Amounts are shekels with 2 decimals, expenses negative. \
             Lists need `limit` (1-100); continue with `next_cursor`."
     })
 }
@@ -148,13 +148,13 @@ fn tool_definitions() -> Value {
     let tx_fields = || {
         json!({
             "date": date("YYYY-MM-DD."),
-            "amount_agorot": {"type": "integer", "description":
-                "Signed agorot, not zero (-1250 = expense of 12.50). Foreign currency: omit to \
-                 use the day's rate, or give the shekel amount actually charged."},
+            "amount": {"type": ["number", "string"], "description":
+                "Signed shekels, at most 2 decimals, not zero (-12.50 = expense). Foreign \
+                 currency: omit to use the day's rate, or give the shekels actually charged."},
             "currency": {"type": "string", "description":
                 "Foreign currency code (USD, JPY...); default shekel."},
-            "orig_minor": {"type": "integer", "description":
-                "With `currency`: signed cents (whole yen)."},
+            "foreign_amount": {"type": ["number", "string"], "description":
+                "With `currency`: signed amount in that currency."},
             "category_id": {"type": "integer", "description": "From list_categories."},
             "payment_method_id": {"type": "integer", "description": "From list_payment_methods."},
             "note": {"type": "string"},
@@ -422,14 +422,82 @@ fn decode_cursor(c: &str) -> Result<String, String> {
         .ok_or_else(|| "cursor is not one returned by this server".to_string())
 }
 
-fn money(agorot: i64) -> String {
-    let abs = agorot.unsigned_abs();
+/// A signed amount in minor units as an exact decimal, e.g. (-1850, 2) is "-18.50".
+fn minor_text(minor: i64, decimals: u32) -> String {
+    let abs = minor.unsigned_abs();
+    let sign = if minor < 0 { "-" } else { "" };
+    if decimals == 0 {
+        return format!("{sign}{abs}");
+    }
+    let unit = 10u64.pow(decimals);
     format!(
-        "{}{}.{:02}",
-        if agorot < 0 { "-" } else { "" },
-        abs / 100,
-        abs % 100
+        "{sign}{}.{:0w$}",
+        abs / unit,
+        abs % unit,
+        w = decimals as usize
     )
+}
+
+/// Shekels, two decimals: the form every amount takes in and out of this endpoint.
+fn money(agorot: i64) -> String {
+    minor_text(agorot, 2)
+}
+
+/// An exact decimal ("-12.5", "3") to minor units, with no floating point in between. Fewer
+/// decimals than `decimals` is fine; more is refused rather than rounded.
+fn decimal_to_minor(text: &str, decimals: u32, what: &str) -> Result<i64, String> {
+    let bad =
+        || format!("{what} must be a decimal number like -12.50 (at most {decimals} decimals)");
+    let t = text.trim();
+    let (neg, digits) = match t.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let (whole, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let all_digits = |x: &str| x.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && frac.is_empty()) || !all_digits(whole) || !all_digits(frac) {
+        return Err(bad());
+    }
+    if frac.len() > decimals as usize {
+        return Err(bad());
+    }
+    let padded = format!("{frac:0<w$}", w = decimals as usize);
+    let magnitude = format!("{}{padded}", if whole.is_empty() { "0" } else { whole })
+        .parse::<i64>()
+        .map_err(|_| format!("{what} is too large"))?;
+    Ok(if neg { -magnitude } else { magnitude })
+}
+
+/// A JSON number or string holding a decimal amount, read exactly (a JSON number is taken from
+/// its shortest text form, so 12.34 is 1234 agorot and not 1233.999...).
+fn amount(a: &Map<String, Value>, k: &str, decimals: u32) -> Result<Option<i64>, String> {
+    match a.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => decimal_to_minor(s, decimals, k).map(Some),
+        Some(Value::Number(n)) => decimal_to_minor(&n.to_string(), decimals, k).map(Some),
+        Some(_) => Err(format!("{k} must be a number")),
+    }
+}
+
+/// Snapshots in the change log keep `amount_agorot`; show them as `amount` in shekels.
+fn shekelize(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            if let Some(n) = m.remove("amount_agorot") {
+                match n.as_i64() {
+                    Some(n) => {
+                        m.insert("amount".into(), Value::String(money(n)));
+                    }
+                    None => {
+                        m.insert("amount_agorot".into(), n);
+                    }
+                }
+            }
+            m.values_mut().for_each(shekelize);
+        }
+        Value::Array(items) => items.iter_mut().for_each(shekelize),
+        _ => {}
+    }
 }
 
 // ---- categories -----------------------------------------------------------------------------
@@ -646,14 +714,7 @@ async fn compact_transactions(
             .and_then(|id| cats.iter().find(|x| x.id == id));
         let mut extras = Vec::new();
         if let Some(f) = fx.iter().find(|f| f.transaction_id == t.id) {
-            let d = crate::fx::decimals(&f.currency);
-            let units = 10u64.pow(d);
-            let abs = f.orig_minor.unsigned_abs();
-            let amount = if d == 0 {
-                abs.to_string()
-            } else {
-                format!("{}.{:0w$}", abs / units, abs % units, w = d as usize)
-            };
+            let amount = minor_text(f.orig_minor.abs(), crate::fx::decimals(&f.currency));
             extras.push(format!(
                 "foreign {amount} {}{}",
                 f.currency,
@@ -800,9 +861,9 @@ async fn get_transaction(db: &Db, a: Map<String, Value>) -> Result<Value, String
 
 const WRITE_KEYS: [&str; 7] = [
     "date",
-    "amount_agorot",
+    "amount",
     "currency",
-    "orig_minor",
+    "foreign_amount",
     "category_id",
     "payment_method_id",
     "note",
@@ -827,19 +888,30 @@ async fn check_links(db: &Db, category: Option<i64>, pm: Option<i64>) -> Result<
     Ok(())
 }
 
+/// `foreign_amount` in the currency's minor units (cents, whole yen).
+fn foreign_minor(a: &Map<String, Value>, currency: Option<&str>) -> Result<Option<i64>, String> {
+    if !a.contains_key("foreign_amount") {
+        return Ok(None);
+    }
+    let currency = currency.ok_or("foreign_amount needs a currency")?;
+    amount(a, "foreign_amount", crate::fx::decimals(currency))
+}
+
 async fn create_transaction(db: &Db, a: Map<String, Value>) -> Result<Value, String> {
     only_keys(&a, &WRITE_KEYS)?;
     let date = string(&a, "date")?.ok_or("date is required")?;
     let (category, pm) = (int(&a, "category_id")?, int(&a, "payment_method_id")?);
     check_links(db, category, pm).await?;
+    let currency = string(&a, "currency")?;
+    let orig = foreign_minor(&a, currency.as_deref())?;
     let body = transactions::TxBody::new(
         date,
-        int(&a, "amount_agorot")?,
+        amount(&a, "amount", 2)?,
         category,
         pm,
         string(&a, "note")?.unwrap_or_default(),
-        string(&a, "currency")?,
-        int(&a, "orig_minor")?,
+        currency,
+        orig,
     );
     let id = transactions::create(db, body).await.map_err(api_err)?;
     let t = find_transaction(db, id).await?;
@@ -868,7 +940,7 @@ async fn update_transaction(db: &Db, a: Map<String, Value>) -> Result<Value, Str
         Some(_) => int(&a, "payment_method_id")?,
     };
     check_links(db, category, pm).await?;
-    let amount_touched = ["amount_agorot", "currency", "orig_minor"]
+    let amount_touched = ["amount", "currency", "foreign_amount"]
         .iter()
         .any(|k| a.contains_key(*k));
     let (amount, currency, orig) = if !amount_touched {
@@ -880,8 +952,9 @@ async fn update_transaction(db: &Db, a: Map<String, Value>) -> Result<Value, Str
         )
     } else {
         let currency = string(&a, "currency")?.or_else(|| fx.as_ref().map(|f| f.currency.clone()));
-        let orig = int(&a, "orig_minor")?.or_else(|| fx.as_ref().map(|f| f.orig_minor));
-        (int(&a, "amount_agorot")?, currency, orig)
+        let orig =
+            foreign_minor(&a, currency.as_deref())?.or_else(|| fx.as_ref().map(|f| f.orig_minor));
+        (amount(&a, "amount", 2)?, currency, orig)
     };
     let body = transactions::TxBody::new(
         string(&a, "date")?.unwrap_or(old.date.clone()),
@@ -1077,7 +1150,6 @@ fn describe_one(t: &Transaction, c: &Context) -> Value {
     json!({
         "id": t.id,
         "date": t.date,
-        "amount_agorot": t.amount_agorot,
         "amount": money(t.amount_agorot),
         "currency": "ILS",
         "type": if is_income(&c.cats, t) { "income" } else { "expense" },
@@ -1088,7 +1160,9 @@ fn describe_one(t: &Transaction, c: &Context) -> Value {
         "payment_method": pm.map(|p| json!({"id": p.id, "name": p.name})),
         "note": t.note,
         "foreign_currency": fx.map(|f| json!({
-            "currency": f.currency, "original_minor": f.orig_minor, "rate": f.rate,
+            "currency": f.currency,
+            "original_amount": minor_text(f.orig_minor, crate::fx::decimals(&f.currency)),
+            "rate": f.rate,
             "rate_date": f.rate_date, "rate_is_estimate": f.estimated,
         })),
         "business": business,
@@ -1147,13 +1221,15 @@ async fn list_operations_log(db: &Db, a: Map<String, Value>) -> Result<Value, St
     let entries: Vec<Value> = rows
         .iter()
         .map(|e| {
+            let (mut old, mut new) = (e.old.clone(), e.new.clone());
+            old.iter_mut().chain(new.iter_mut()).for_each(shekelize);
             json!({
                 "id": e.id,
                 "at": e.at,
                 "kind": e.kind,
                 "entity_id": e.entity_id,
-                "old": e.old,
-                "new": e.new,
+                "old": old,
+                "new": new,
                 "user_email": e.user_email,
                 "actor_type": actor_type(e.user_email.as_deref()),
             })

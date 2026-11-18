@@ -35,9 +35,9 @@ Columns: id|date|amount in shekels (expenses negative)|category id and path|note
 12346|2026-11-02|-50.00|23 בית > מזון|ארומה|foreign 13.89 USD (estimated rate)
 ```
 
-- Amounts are **shekels** with two decimals, expenses negative (create/update still take signed agorot). Category is `<id> <path>`, empty when there is none. Notes have line breaks turned into spaces and `|` into `/`.
+- Amounts are **shekels** with two decimals, expenses negative. Category is `<id> <path>`, empty when there is none. Notes have line breaks turned into spaces and `|` into `/`.
 - Extras, only when present, joined by `; `: `foreign <original amount> <currency>` (` (estimated rate)` while the day's rate is a stand-in), `business <name>` (its own tag, else its category's), `recurring`.
-- Left out: agorot and currency (ILS), type (the sign says it), payment method, source and its details, who created or changed it and when, the repeating-series id, the Paamonim sync state. All of it is in `get_transaction` or `detail: "full"`.
+- Left out: currency (ILS), type (the sign says it), payment method, source and its details, who created or changed it and when, the repeating-series id, the Paamonim sync state. All of it is in `get_transaction` or `detail: "full"`.
 - Paging is unchanged: pass `next_cursor` from the header; `none (no more)` ends it. An empty result is the header and the columns line only.
 - `list_categories`: `id|path (parent > child)|income or expense|extras` per line, extra `business <name>` when linked. Left out: `parent_id`, the Paamonim fields, `business_required`.
 - `summarize_transactions` prints a header with the count, the net total and the income and expense totals, then one line per group (`category path|count|total`, with the month first for `month` and `category_month`; months newest first, then biggest total). Transactions without a category are `(no category)`.
@@ -50,5 +50,5 @@ Pages are keyed on `(date, id)` for transactions and on the entry id for the log
 - **Writes have the app's side effects.** They are mirrored to Paamonim (when that is on), appear in the Sheets export, and are recorded in the change log with author `mcp` (shown in the app as "עוזר AI (MCP)"), whatever Access header the request carries.
 - `list_transactions` first settles repeating charges that have come due, like the app's list; those entries are logged without an author.
 - `from`/`to` of the log are UTC days (entries are stamped in UTC); transactions' are the plain dates.
-- Amounts are exact integer agorot, signed (expenses negative) in the full JSON and in writes; `amount` is the same as a decimal string, and compact text shows shekels. `type` follows the category's kind, or the sign when there is no category.
+- **Agorot are not exposed.** Every amount in and out is shekels with at most two decimals, expenses negative: `amount` in the output is an exact decimal string (`"-42.50"`), also inside the change log's old/new snapshots (stored there as agorot, shown as `amount`). Writes take `amount` as a JSON number or a string (`-42.5`, `"-42.50"`); it is read from its decimal digits, never through floating point, and more than two decimals is refused instead of rounded. A foreign-currency entry uses `currency` plus `foreign_amount` in that currency's units (`13.89` USD; whole yen), shown back as `foreign_currency.original_amount`. Storage stays exact integer agorot. `type` follows the category's kind, or the sign when there is no category.
 - Not exposed: repeating series, businesses/product tagging (read-only in the output), settings, import/export.
