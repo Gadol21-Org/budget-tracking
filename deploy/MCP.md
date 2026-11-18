@@ -17,10 +17,30 @@ Guards that remain: a request with an `Origin` header (a browser cross-site call
 
 | Tool | |
 |---|---|
-| `list_transactions` | `limit` required (1-100), `cursor`, `type` income/expense, `from`/`to` (day, inclusive), `category_id` |
-| `get_transaction`, `create_transaction`, `update_transaction`, `delete_transaction` | the same steps as the add/edit dialog (exchange rates, validation) |
+| `list_transactions` | `limit` required (1-100), `cursor`, `type` income/expense, `from`/`to` (day, inclusive), `category_id`, `detail` |
+| `summarize_transactions` | counts and totals instead of rows: `from`/`to`, `type`, `category_id`, `group_by` (`category` default, `month`, `category_month`) |
+| `get_transaction`, `create_transaction`, `update_transaction`, `delete_transaction` | the same steps as the add/edit dialog (exchange rates, validation); always full detail |
 | `list_operations_log` | `limit` required (1-100), `cursor`, `from`/`to` (UTC days), `kind`, `entity_id` |
-| `list_categories`, `list_payment_methods` | everything |
+| `list_categories` | every category, `detail` |
+| `list_payment_methods` | everything |
+
+## Compact output (the default for the two lists)
+
+`list_transactions` and `list_categories` answer in short text, because their size is what an assistant pays for on every step. `detail: "full"` gives the whole JSON instead (the same as `get_transaction` shows per transaction). In compact mode the reply has **no `structuredContent`** (it would only repeat the text).
+
+```
+Transactions, newest first: returned 2 of 812 matching. next_cursor: MjAyNi0xMS0wMnw5MDk5
+Columns: id|date|amount in shekels (expenses negative)|category id and path|note|extras
+12345|2026-11-02|-185.40|23 בית > מזון|שופרסל
+12346|2026-11-02|-50.00|23 בית > מזון|ארומה|foreign 13.89 USD (estimated rate)
+```
+
+- Amounts are **shekels** with two decimals, expenses negative (create/update still take signed agorot). Category is `<id> <path>`, empty when there is none. Notes have line breaks turned into spaces and `|` into `/`.
+- Extras, only when present, joined by `; `: `foreign <original amount> <currency>` (` (estimated rate)` while the day's rate is a stand-in), `business <name>` (its own tag, else its category's), `recurring`.
+- Left out: agorot and currency (ILS), type (the sign says it), payment method, source and its details, who created or changed it and when, the repeating-series id, the Paamonim sync state. All of it is in `get_transaction` or `detail: "full"`.
+- Paging is unchanged: pass `next_cursor` from the header; `none (no more)` ends it. An empty result is the header and the columns line only.
+- `list_categories`: `id|path (parent > child)|income or expense|extras` per line, extra `business <name>` when linked. Left out: `parent_id`, the Paamonim fields, `business_required`.
+- `summarize_transactions` prints a header with the count, the net total and the income and expense totals, then one line per group (`category path|count|total`, with the month first for `month` and `category_month`; months newest first, then biggest total). Transactions without a category are `(no category)`.
 
 Pages are keyed on `(date, id)` for transactions and on the entry id for the log, not on an offset, so something added or deleted between two calls cannot repeat or skip a row. Asking for no `limit`, or more than 100, is an error rather than a silent default.
 
@@ -30,5 +50,5 @@ Pages are keyed on `(date, id)` for transactions and on the entry id for the log
 - **Writes have the app's side effects.** They are mirrored to Paamonim (when that is on), appear in the Sheets export, and are recorded in the change log with author `mcp` (shown in the app as "עוזר AI (MCP)"), whatever Access header the request carries.
 - `list_transactions` first settles repeating charges that have come due, like the app's list; those entries are logged without an author.
 - `from`/`to` of the log are UTC days (entries are stamped in UTC); transactions' are the plain dates.
-- Amounts are exact integer agorot, signed (expenses negative); `amount` is the same as a decimal string. `type` follows the category's kind, or the sign when there is no category.
+- Amounts are exact integer agorot, signed (expenses negative) in the full JSON and in writes; `amount` is the same as a decimal string, and compact text shows shekels. `type` follows the category's kind, or the sign when there is no category.
 - Not exposed: repeating series, businesses/product tagging (read-only in the output), settings, import/export.
