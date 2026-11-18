@@ -5,7 +5,7 @@
 //!
 //! Auth: none of its own. The endpoint is meant to be reached only from inside the VM's Docker
 //! network (see `deploy/MCP.md`); on the public hostname it stays behind Cloudflare Access (no
-//! bypass). On by default; `MCP_ENABLED=0` turns it off (404, as if the route did not exist). As the
+//! bypass). As the
 //! only guard against a web page POSTing to it from a browser, a request carrying an `Origin`
 //! header is refused and the body must be sent as `application/json` (which makes a browser ask
 //! first). Whatever the request claims about itself (including a forged Access header), changes
@@ -23,51 +23,26 @@ use crate::storage::{
 };
 use crate::sumit::ReceiptRecord;
 use axum::body::Bytes;
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::NaiveDate;
 use serde_json::{json, Map, Value};
-use std::sync::Arc;
 
 /// Largest page either list will return; a larger `limit` is refused, not trimmed.
 pub(crate) const MAX_LIMIT: usize = 100;
 const LATEST_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub(crate) struct Config {
-    enabled: bool,
-}
-
-impl Config {
-    pub(crate) fn from_env() -> Config {
-        // On unless switched off with MCP_ENABLED=0 (or false).
-        let off = std::env::var("MCP_ENABLED").ok();
-        Config::new(!matches!(
-            off.as_deref().map(str::trim),
-            Some("0" | "false")
-        ))
-    }
-
-    pub(crate) fn new(enabled: bool) -> Config {
-        Config { enabled }
-    }
-}
-
 /// `POST /mcp`: one JSON-RPC message (or a batch) in, one JSON answer out.
 pub(crate) async fn handle(
-    Extension(cfg): Extension<Arc<Config>>,
     State(db): State<Db>,
     method: Method,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // Off looks like no such route.
-    if !cfg.enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
     if method != Method::POST {
         return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response();
     }

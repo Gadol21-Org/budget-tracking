@@ -6,7 +6,7 @@ Lets an AI assistant (Claude Desktop, Claude Code, any MCP client) read and edit
 
 The endpoint has **no login**: anyone who can reach it can read and change everything. So it is meant to be reached only from another container on the VM, never from the internet.
 
-1. It is on by default; `MCP_ENABLED=0` in the app's environment (production: the `BUDGET_ENV` secret) turns it off, and it then answers 404.
+1. Nothing to configure: it is always on.
 2. Put both containers on the shared Docker network `budget-internal`. `deploy/deploy.sh` creates it and attaches the app; add `--network budget-internal` to the other service's `docker run` (or a compose `networks:` entry with `external: true`).
 3. The other service calls `http://budget-tracking:3000/mcp` (the container's own port, by container name). Do **not** use `127.0.0.1:8082` from another container: that is its own loopback.
 4. **Do not add a Cloudflare Access bypass for `/mcp`.** On the public hostname it then stays behind Access like the rest of the app. A client on your own machine can reach it through `cloudflared access` or an SSH tunnel to `127.0.0.1:8082`.

@@ -2,6 +2,7 @@ use super::*;
 use crate::oplog::Logged;
 use crate::storage::NewTransaction;
 use crate::storage::Storage;
+use std::sync::Arc;
 
 async fn db() -> Db {
     Arc::new(Logged(Arc::new(crate::testdb::fresh().await)))
@@ -77,11 +78,10 @@ async fn protocol_basics() {
 }
 
 #[tokio::test]
-async fn endpoint_can_be_switched_off_and_refuses_browsers() {
+async fn endpoint_refuses_browsers() {
     let db = db().await;
-    let send = |enabled: bool, method: Method, content_type: Option<&str>, origin: Option<&str>| {
+    let send = |method: Method, content_type: Option<&str>, origin: Option<&str>| {
         let db = db.clone();
-        let cfg = Arc::new(Config::new(enabled));
         let mut h = HeaderMap::new();
         if let Some(c) = content_type {
             h.insert(header::CONTENT_TYPE, c.parse().unwrap());
@@ -91,7 +91,6 @@ async fn endpoint_can_be_switched_off_and_refuses_browsers() {
         }
         async move {
             handle(
-                Extension(cfg),
                 State(db),
                 method,
                 h,
@@ -102,29 +101,19 @@ async fn endpoint_can_be_switched_off_and_refuses_browsers() {
         }
     };
     let json = Some("application/json");
-    assert_eq!(send(false, Method::POST, json, None).await, 404);
-    assert_eq!(send(true, Method::POST, json, None).await, 200);
+    assert_eq!(send(Method::POST, json, None).await, 200);
     assert_eq!(
-        send(
-            true,
-            Method::POST,
-            Some("application/json; charset=utf-8"),
-            None
-        )
-        .await,
+        send(Method::POST, Some("application/json; charset=utf-8"), None).await,
         200
     );
-    assert_eq!(send(true, Method::GET, json, None).await, 405);
+    assert_eq!(send(Method::GET, json, None).await, 405);
     // A web page cannot drive it: no Origin, and no "simple" content types.
     assert_eq!(
-        send(true, Method::POST, json, Some("https://evil.example")).await,
+        send(Method::POST, json, Some("https://evil.example")).await,
         403
     );
-    assert_eq!(
-        send(true, Method::POST, Some("text/plain"), None).await,
-        415
-    );
-    assert_eq!(send(true, Method::POST, None, None).await, 415);
+    assert_eq!(send(Method::POST, Some("text/plain"), None).await, 415);
+    assert_eq!(send(Method::POST, None, None).await, 415);
 }
 
 #[tokio::test]
@@ -682,14 +671,4 @@ async fn categories_list_everything() {
     assert!(call(&db, "list_categories", json!({"limit": 1}))
         .await
         .is_err());
-}
-
-#[test]
-fn on_by_default_off_with_zero() {
-    let _g = crate::fx::ENV_LOCK.blocking_lock();
-    std::env::remove_var("MCP_ENABLED");
-    assert!(Config::from_env().enabled);
-    std::env::set_var("MCP_ENABLED", "0");
-    assert!(!Config::from_env().enabled);
-    std::env::remove_var("MCP_ENABLED");
 }

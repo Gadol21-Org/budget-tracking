@@ -28,7 +28,7 @@ Then watch the run with `actions_get` / `actions_list` until it succeeds, and gi
 
 Run the workflow with `reset` = true (`inputs={"reset":"true"}`). It deletes the staging volume and loads the sample data again ([`seed-staging.sh`](seed-staging.sh): categories, six months of transactions up to today, one repeating charge). Seeding only happens into an empty database, so a normal deploy never overwrites what was entered by hand.
 
-The MCP endpoint (`/mcp`, see `deploy/MCP.md`) is on in staging like everywhere (it is on by default). Like the rest of staging it has no login, so anyone who can reach the port can read and change the sample data.
+The MCP endpoint (`/mcp`, see `deploy/MCP.md`) is on in staging like everywhere. Like the rest of staging it has no login, so anyone who can reach the port can read and change the sample data.
 
 ## Tear down
 
