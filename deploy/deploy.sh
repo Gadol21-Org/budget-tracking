@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Runs on the VM: replaces the running budget tracker with the given image.
-#   budget-tracking  published on 127.0.0.1:8082 of the VM only
+#   budget-tracking  published on 127.0.0.1:8082 of the VM only, and on the Docker network
+#                    budget-internal, where other containers reach it as http://budget-tracking:3000
+#                    (including its /mcp endpoint, which has no login: see deploy/MCP.md)
 # The cloudflared service on the VM forwards a public hostname to that port.
 # It is not part of the deploy and keeps running.
 # Usage: deploy.sh <image>
@@ -11,6 +13,7 @@ dir="$HOME/budget-tracking"
 env_file="$dir/.env"
 name=budget-tracking
 host_port=8082
+network=budget-internal
 
 if [ ! -f "$env_file" ]; then
   echo "$env_file is missing; the workflow writes it from the BUDGET_ENV secret" >&2
@@ -20,6 +23,9 @@ fi
 # Pull before stopping anything, so the app is down only for the swap.
 docker pull "$image"
 
+# The private network other containers on this VM use to reach the app (made once).
+docker network inspect "$network" >/dev/null 2>&1 || docker network create "$network" >/dev/null
+
 # Bound to the loopback address, so it is reachable from the VM only, not from the internet.
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" \
@@ -27,6 +33,7 @@ docker run -d --name "$name" \
   --restart unless-stopped \
   --log-opt max-size=10m --log-opt max-file=3 \
   -p "127.0.0.1:$host_port:3000" \
+  --network "$network" \
   --env-file "$env_file" \
   "$image"
 

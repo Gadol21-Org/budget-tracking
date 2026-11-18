@@ -132,18 +132,45 @@ pub(crate) async fn resolve_body(
     ))
 }
 
+impl TxBody {
+    pub(crate) fn new(
+        date: String,
+        amount_agorot: Option<i64>,
+        category_id: Option<i64>,
+        payment_method_id: Option<i64>,
+        note: String,
+        currency: Option<String>,
+        orig_minor: Option<i64>,
+    ) -> Self {
+        Self {
+            date,
+            amount_agorot,
+            category_id,
+            payment_method_id,
+            note,
+            currency,
+            orig_minor,
+        }
+    }
+}
+
 pub(crate) async fn create_transaction(
     State(db): State<Db>,
     Json(b): Json<TxBody>,
 ) -> Result<Json<i64>, ApiError> {
-    let (t, fx) = resolve_body(&db, None, b).await?;
+    create(&db, b).await.map(Json)
+}
+
+/// The steps of the add dialog, shared with the MCP endpoint.
+pub(crate) async fn create(db: &Db, b: TxBody) -> Result<i64, ApiError> {
+    let (t, fx) = resolve_body(db, None, b).await?;
     let id = db.create_transaction(&t).await.map_err(internal)?;
     if let Some(mut f) = fx {
         f.transaction_id = id;
         db.set_tx_fx(id, Some(&f)).await.map_err(internal)?;
     }
-    trigger_mirror(&db);
-    Ok(Json(id))
+    trigger_mirror(db);
+    Ok(id)
 }
 
 /// Add a transaction on the server's own behalf (a mail that matched a rule): the same steps as
@@ -181,15 +208,21 @@ pub(crate) async fn update_transaction(
     Path(id): Path<i64>,
     Json(b): Json<TxBody>,
 ) -> Result<StatusCode, ApiError> {
-    let (t, fx) = resolve_body(&db, Some(id), b).await?;
+    update(&db, id, b).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The steps of the edit dialog, shared with the MCP endpoint.
+pub(crate) async fn update(db: &Db, id: i64, b: TxBody) -> Result<(), ApiError> {
+    let (t, fx) = resolve_body(db, Some(id), b).await?;
     db.update_transaction(id, &t).await.map_err(internal)?;
     let fx = fx.map(|mut f| {
         f.transaction_id = id;
         f
     });
     db.set_tx_fx(id, fx.as_ref()).await.map_err(internal)?;
-    trigger_mirror(&db);
-    Ok(StatusCode::NO_CONTENT)
+    trigger_mirror(db);
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -296,7 +329,13 @@ pub(crate) async fn delete_transaction(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    db.delete_transaction(id).await.map_err(internal)?;
-    trigger_mirror(&db);
+    delete(&db, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Shared with the MCP endpoint.
+pub(crate) async fn delete(db: &Db, id: i64) -> Result<(), ApiError> {
+    db.delete_transaction(id).await.map_err(internal)?;
+    trigger_mirror(db);
+    Ok(())
 }

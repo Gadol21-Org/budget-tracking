@@ -458,6 +458,23 @@ pub trait Storage: Send + Sync {
     ) -> anyhow::Result<Vec<LogEntry>> {
         Ok(Vec::new())
     }
+    /// Change-log entries matching a filter, newest first, one page (see [`LogFilter`]).
+    async fn list_log_filtered(
+        &self,
+        _f: &LogFilter,
+        _limit: usize,
+        _before_id: Option<i64>,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        Ok(Vec::new())
+    }
+    /// The Paamonim link of each given transaction (only those that have one).
+    async fn mirror_links(&self, _ids: &[i64]) -> anyhow::Result<Vec<MirrorLink>> {
+        Ok(Vec::new())
+    }
+    /// The email rows that made each given transaction, without the stored mail text.
+    async fn emails_for_transactions(&self, _ids: &[i64]) -> anyhow::Result<Vec<EmailSuggestion>> {
+        Ok(Vec::new())
+    }
     /// Distinct emails that appear on recorded changes, sorted.
     async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         Ok(Vec::new())

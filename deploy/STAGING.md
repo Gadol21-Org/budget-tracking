@@ -28,6 +28,8 @@ Then watch the run with `actions_get` / `actions_list` until it succeeds, and gi
 
 Run the workflow with `reset` = true (`inputs={"reset":"true"}`). It deletes the staging volume and loads the sample data again ([`seed-staging.sh`](seed-staging.sh): categories, six months of transactions up to today, one repeating charge). Seeding only happens into an empty database, so a normal deploy never overwrites what was entered by hand.
 
+The MCP endpoint (`/mcp`, see `deploy/MCP.md`) is on in staging like everywhere. Like the rest of staging it has no login, so anyone who can reach the port can read and change the sample data.
+
 ## Tear down
 
 Run the workflow with `teardown` = true (`inputs={"teardown":"true"}`). It skips the build and removes everything staging owns on the VM: the `budget-staging` and `budget-staging-mysql` containers, the `budget-staging-net` network, the `budget-staging-data` volume, the `staging-*` app images and the `mysql:8.4` image (the latter only if nothing else uses it). Everything is addressed by those exact names or the `staging-` tag prefix, so production (`budget-tracking`, its `:latest` images and its data) is never touched, and it is safe to run when staging is already down. Deploy again later to bring staging back (with fresh sample data). `teardown` wins if `reset` is also set.

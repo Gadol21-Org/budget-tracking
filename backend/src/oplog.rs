@@ -79,6 +79,14 @@ tokio::task_local! {
 /// so it can never be a real user's email.
 pub const SYNC_ACTOR: &str = "sumit-sync";
 
+/// The author recorded for changes made through the MCP endpoint (no `@`, like [`SYNC_ACTOR`]).
+pub const MCP_ACTOR: &str = "mcp";
+
+/// Run `f` with its changes recorded as made through MCP.
+pub async fn as_mcp<F: std::future::Future>(f: F) -> F::Output {
+    ACTOR.scope(Some(MCP_ACTOR.to_string()), f).await
+}
+
 /// Run `f` with its changes recorded as made by the Sumit sync.
 pub async fn as_sync<F: std::future::Future>(f: F) -> F::Output {
     ACTOR.scope(Some(SYNC_ACTOR.to_string()), f).await
@@ -677,6 +685,23 @@ impl Storage for Logged {
         before: &str,
     ) -> anyhow::Result<Vec<LogEntry>> {
         self.0.list_log_kind(kind, from, before).await
+    }
+    async fn list_log_filtered(
+        &self,
+        f: &crate::storage::LogFilter,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> anyhow::Result<Vec<LogEntry>> {
+        self.0.list_log_filtered(f, limit, before_id).await
+    }
+    async fn mirror_links(&self, ids: &[i64]) -> anyhow::Result<Vec<crate::storage::MirrorLink>> {
+        self.0.mirror_links(ids).await
+    }
+    async fn emails_for_transactions(
+        &self,
+        ids: &[i64],
+    ) -> anyhow::Result<Vec<crate::storage::EmailSuggestion>> {
+        self.0.emails_for_transactions(ids).await
     }
     async fn log_users(&self) -> anyhow::Result<Vec<String>> {
         self.0.log_users().await

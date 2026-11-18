@@ -1610,6 +1610,125 @@ impl Storage for MySqlStorage {
             .collect()
     }
 
+    async fn list_log_filtered(
+        &self,
+        f: &crate::storage::LogFilter,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> Result<Vec<LogEntry>> {
+        let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log WHERE id < ",
+        );
+        q.push_bind(before_id.unwrap_or(i64::MAX));
+        if let Some(from) = &f.from {
+            q.push(" AND at >= ").push_bind(from.clone());
+        }
+        if let Some(before) = &f.before {
+            q.push(" AND at < ").push_bind(before.clone());
+        }
+        if !f.kinds.is_empty() {
+            q.push(" AND kind IN (");
+            let mut sep = q.separated(", ");
+            for k in &f.kinds {
+                sep.push_bind(k.clone());
+            }
+            q.push(")");
+        }
+        if !f.entity_ids.is_empty() {
+            q.push(" AND entity_id IN (");
+            let mut sep = q.separated(", ");
+            for id in &f.entity_ids {
+                sep.push_bind(*id);
+            }
+            q.push(")");
+        }
+        q.push(" ORDER BY id DESC LIMIT ").push_bind(limit as i64);
+        let rows = q.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                let json = |col: &str| -> Result<Option<serde_json::Value>> {
+                    let s: Option<String> = r.try_get(col)?;
+                    Ok(s.and_then(|s| s.parse().ok()))
+                };
+                Ok(LogEntry {
+                    id: r.try_get("id")?,
+                    at: r.try_get("at")?,
+                    kind: r.try_get("kind")?,
+                    entity_id: r.try_get("entity_id")?,
+                    old: json("old_value")?,
+                    new: json("new_value")?,
+                    user_email: r.try_get("user_email")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn mirror_links(&self, ids: &[i64]) -> Result<Vec<crate::storage::MirrorLink>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT id, paamonim_line_id, mirror_date FROM transactions
+             WHERE paamonim_line_id IS NOT NULL AND id IN (",
+        );
+        let mut sep = q.separated(", ");
+        for id in ids {
+            sep.push_bind(*id);
+        }
+        q.push(")");
+        let rows = q.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok(crate::storage::MirrorLink {
+                    transaction_id: r.try_get("id")?,
+                    line_id: r.try_get("paamonim_line_id")?,
+                    mirror_date: r.try_get("mirror_date")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn emails_for_transactions(&self, ids: &[i64]) -> Result<Vec<EmailSuggestion>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut q = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT id, message_id, idx, status, received, sender, subject, date, amount_minor,
+                    currency, category_id, note, confidence, transaction_id, error,
+                    CAST(html IS NOT NULL AS SIGNED) AS has_html
+             FROM email_items WHERE status IN ('accepted', 'auto', 'added') AND transaction_id IN (",
+        );
+        let mut sep = q.separated(", ");
+        for id in ids {
+            sep.push_bind(*id);
+        }
+        q.push(")");
+        let rows = q.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok(EmailSuggestion {
+                    id: r.try_get("id")?,
+                    message_id: r.try_get("message_id")?,
+                    idx: r.try_get("idx")?,
+                    status: r.try_get("status")?,
+                    received: r.try_get("received")?,
+                    sender: r.try_get("sender")?,
+                    subject: r.try_get("subject")?,
+                    excerpt: String::new(),
+                    date: r.try_get("date")?,
+                    amount_minor: r.try_get("amount_minor")?,
+                    currency: r.try_get("currency")?,
+                    category_id: r.try_get("category_id")?,
+                    note: r.try_get("note")?,
+                    confidence: r.try_get("confidence")?,
+                    transaction_id: r.try_get("transaction_id")?,
+                    error: r.try_get("error")?,
+                    has_html: r.try_get::<i64, _>("has_html")? != 0,
+                })
+            })
+            .collect()
+    }
+
     async fn list_log_kind(&self, kind: &str, from: &str, before: &str) -> Result<Vec<LogEntry>> {
         let rows = sqlx::query(
             "SELECT id, at, kind, entity_id, old_value, new_value, user_email FROM change_log

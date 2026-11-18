@@ -369,3 +369,23 @@ pub struct NewEmailSuggestion {
     /// The transaction already made from it (status `auto`).
     pub transaction_id: Option<i64>,
 }
+
+/// Which change-log entries to list. Empty fields do not filter.
+#[derive(Debug, Default, Clone)]
+pub struct LogFilter {
+    /// Stamped at or after this UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`).
+    pub from: Option<String>,
+    /// Stamped before this UTC timestamp.
+    pub before: Option<String>,
+    pub kinds: Vec<String>,
+    pub entity_ids: Vec<i64>,
+}
+
+/// A transaction's line in Paamonim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorLink {
+    pub transaction_id: i64,
+    pub line_id: Option<String>,
+    /// The line's date in Paamonim, when linked.
+    pub mirror_date: Option<String>,
+}

@@ -2,6 +2,7 @@ mod businesses;
 mod categories;
 mod email;
 mod error;
+pub(crate) mod mcp;
 mod mirroring;
 mod repeating;
 mod sumit;
@@ -97,6 +98,9 @@ pub(crate) fn router(db: Db) -> Router {
 
 pub(crate) fn router_with(db: Db, email: Arc<crate::email::Service>) -> Router {
     Router::new()
+        // The MCP endpoint for AI assistants. No login of its own: reach it only over the VM's
+        // Docker network, never through a public bypass. Always on.
+        .route("/mcp", axum::routing::any(mcp::handle))
         .route(
             "/api/transactions",
             get(transactions::list_transactions).post(transactions::create_transaction),
