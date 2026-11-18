@@ -135,8 +135,8 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "budget-tracker", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Amounts are signed integer agorot: expenses negative. Lists need `limit` (1-100); \
-            continue with `next_cursor`."
+        "instructions": "Lists show shekels, expenses negative (create/update take signed agorot). \
+            Lists need `limit` (1-100); continue with `next_cursor`."
     })
 }
 
@@ -160,13 +160,15 @@ fn tool_definitions() -> Value {
             "note": {"type": "string"},
         })
     };
+    let detail = json!({"type": "string", "enum": ["compact", "full"], "description":
+        "compact (default): short text lines; full: all fields as JSON."});
     let create_props = tx_fields();
     let mut update_props = tx_fields();
     update_props["id"] = json!({"type": "integer"});
     json!([
         {
             "name": "list_transactions",
-            "description": "One page of transactions, newest first, with all stored metadata and source.",
+            "description": "One page of transactions, newest first. Compact: one line each (id, date, shekels, category, note, extras); use get_transaction or detail=full for all metadata and source.",
             "inputSchema": {"type": "object", "required": ["limit"], "additionalProperties": false,
                 "properties": {
                     "limit": limit.clone(),
@@ -176,6 +178,22 @@ fn tool_definitions() -> Value {
                     "from": date("From this day."),
                     "to": date("Up to this day."),
                     "category_id": {"type": "integer", "description": "Only this category."},
+                    "detail": detail.clone(),
+                }},
+            "annotations": {"readOnlyHint": true}
+        },
+        {
+            "name": "summarize_transactions",
+            "description": "Counts and totals (shekels) instead of rows, for questions like spending per category or month.",
+            "inputSchema": {"type": "object", "additionalProperties": false,
+                "properties": {
+                    "from": date("From this day."),
+                    "to": date("Up to this day."),
+                    "type": {"type": "string", "enum": ["income", "expense"], "description":
+                        "By category kind (by sign if uncategorised)."},
+                    "category_id": {"type": "integer", "description": "Only this category."},
+                    "group_by": {"type": "string", "enum": ["category", "month", "category_month"],
+                        "description": "Default category."},
                 }},
             "annotations": {"readOnlyHint": true}
         },
@@ -225,8 +243,9 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "list_categories",
-            "description": "All categories.",
-            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+            "description": "All categories, one line each.",
+            "inputSchema": {"type": "object", "additionalProperties": false,
+                "properties": {"detail": detail}},
             "annotations": {"readOnlyHint": true}
         },
         {
@@ -238,13 +257,36 @@ fn tool_definitions() -> Value {
     ])
 }
 
-/// A tool's answer: the data as JSON in both `structuredContent` and as text.
-fn ok(v: Value) -> Value {
-    json!({
-        "content": [{"type": "text", "text": serde_json::to_string(&v).unwrap_or_default()}],
-        "structuredContent": v,
-        "isError": false
-    })
+/// A tool's answer: text for the model, and (in full mode) the same data as structured JSON.
+struct Reply {
+    text: String,
+    structured: Option<Value>,
+}
+
+impl Reply {
+    /// Full detail: the data as JSON in both `structuredContent` and as text.
+    fn json(v: Value) -> Reply {
+        Reply {
+            text: serde_json::to_string(&v).unwrap_or_default(),
+            structured: Some(v),
+        }
+    }
+
+    /// Compact text only: no `structuredContent`, which would repeat it all.
+    fn text(text: String) -> Reply {
+        Reply {
+            text,
+            structured: None,
+        }
+    }
+}
+
+fn ok(r: Reply) -> Value {
+    let mut v = json!({"content": [{"type": "text", "text": r.text}], "isError": false});
+    if let Some(s) = r.structured {
+        v["structuredContent"] = s;
+    }
+    v
 }
 
 fn tool_error(m: &str) -> Value {
@@ -272,24 +314,22 @@ async fn call_tool(db: &Db, params: &Value) -> Value {
     }
 }
 
-async fn run_tool(db: &Db, name: &str, args: Map<String, Value>) -> Result<Value, String> {
+async fn run_tool(db: &Db, name: &str, args: Map<String, Value>) -> Result<Reply, String> {
     match name {
         "list_transactions" => list_transactions(db, args).await,
-        "get_transaction" => get_transaction(db, args).await,
-        "create_transaction" => create_transaction(db, args).await,
-        "update_transaction" => update_transaction(db, args).await,
-        "delete_transaction" => delete_transaction(db, args).await,
-        "list_operations_log" => list_operations_log(db, args).await,
-        "list_categories" => {
-            only_keys(&args, &[])?;
-            list_categories(db).await
-        }
+        "summarize_transactions" => summarize_transactions(db, args).await,
+        "get_transaction" => get_transaction(db, args).await.map(Reply::json),
+        "create_transaction" => create_transaction(db, args).await.map(Reply::json),
+        "update_transaction" => update_transaction(db, args).await.map(Reply::json),
+        "delete_transaction" => delete_transaction(db, args).await.map(Reply::json),
+        "list_operations_log" => list_operations_log(db, args).await.map(Reply::json),
+        "list_categories" => list_categories(db, args).await,
         "list_payment_methods" => {
             only_keys(&args, &[])?;
             let pms = db.list_payment_methods().await.map_err(|e| e.to_string())?;
-            Ok(
+            Ok(Reply::json(
                 json!({ "payment_methods": pms.iter().map(|p| json!({"id": p.id, "name": p.name})).collect::<Vec<_>>() }),
-            )
+            ))
         }
         _ => Err(format!("unknown tool {name:?}")),
     }
@@ -353,6 +393,23 @@ fn page_limit(a: &Map<String, Value>) -> Result<usize, String> {
     Ok(n as usize)
 }
 
+/// `detail`: `compact` (default, short text for the model) or `full` (all the JSON).
+fn full_detail(a: &Map<String, Value>) -> Result<bool, String> {
+    match string(a, "detail")?.as_deref() {
+        None | Some("compact") => Ok(false),
+        Some("full") => Ok(true),
+        Some(_) => Err("detail must be \"compact\" or \"full\"".into()),
+    }
+}
+
+/// Text that fits in one `|`-separated line.
+fn cell(s: &str) -> String {
+    s.replace('|', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn encode_cursor(parts: &str) -> String {
     URL_SAFE_NO_PAD.encode(parts)
 }
@@ -377,42 +434,70 @@ fn money(agorot: i64) -> String {
 
 // ---- categories -----------------------------------------------------------------------------
 
-fn category_path(cats: &[Category], c: &Category) -> String {
+fn category_path(cats: &[Category], c: &Category, sep: &str) -> String {
     match c.parent_id.and_then(|p| cats.iter().find(|x| x.id == p)) {
-        Some(p) => format!("{} › {}", p.name, c.name),
+        Some(p) => format!("{}{sep}{}", p.name, c.name),
         None => c.name.clone(),
     }
 }
 
-async fn list_categories(db: &Db) -> Result<Value, String> {
+async fn list_categories(db: &Db, a: Map<String, Value>) -> Result<Reply, String> {
+    only_keys(&a, &["detail"])?;
+    let full = full_detail(&a)?;
     let cats = db.list_categories().await.map_err(|e| e.to_string())?;
     let links = db.business_links().await.map_err(|e| e.to_string())?;
     let businesses = db.list_businesses().await.map_err(|e| e.to_string())?;
+    let biz_of = |c: &Category| {
+        links
+            .categories
+            .iter()
+            .find(|(cid, _)| *cid == c.id)
+            .map(|(_, b)| *b)
+    };
+    let biz_name = |b: i64| {
+        businesses
+            .iter()
+            .find(|x| x.id == b)
+            .map(|x| x.name.clone())
+    };
+    if !full {
+        let mut out = String::from(
+            "Categories. Columns: id|path (parent > child)|income or expense|extras\n",
+        );
+        for c in &cats {
+            out.push_str(&format!(
+                "{}|{}|{}",
+                c.id,
+                cell(&category_path(&cats, c, " > ")),
+                if c.is_income { "income" } else { "expense" }
+            ));
+            if let Some(name) = biz_of(c).and_then(biz_name) {
+                out.push_str(&format!("|business {}", cell(&name)));
+            }
+            out.push('\n');
+        }
+        return Ok(Reply::text(out));
+    }
     let items: Vec<Value> = cats
         .iter()
         .map(|c| {
-            let biz = links
-                .categories
-                .iter()
-                .find(|(cid, _)| *cid == c.id)
-                .map(|(_, b)| *b);
+            let biz = biz_of(c);
             json!({
                 "id": c.id,
                 "name": c.name,
-                "path": category_path(&cats, c),
+                "path": category_path(&cats, c, " › "),
                 "type": if c.is_income { "income" } else { "expense" },
                 "parent_id": c.parent_id,
                 "from_paamonim": c.from_paamonim,
                 "linked_to_paamonim_category_id": c.linked_to,
-                "business": biz.map(|b| json!({
-                    "id": b,
-                    "name": businesses.iter().find(|x| x.id == b).map(|x| x.name.clone()),
-                })),
+                "business": biz.map(|b| json!({"id": b, "name": biz_name(b)})),
                 "business_required": links.required.contains(&c.id),
             })
         })
         .collect();
-    Ok(json!({ "count": items.len(), "categories": items }))
+    Ok(Reply::json(
+        json!({ "count": items.len(), "categories": items }),
+    ))
 }
 
 // ---- transactions ---------------------------------------------------------------------------
@@ -424,23 +509,78 @@ fn is_income(cats: &[Category], t: &Transaction) -> bool {
     }
 }
 
-async fn list_transactions(db: &Db, a: Map<String, Value>) -> Result<Value, String> {
+/// Which transactions a list or a summary covers.
+struct TxFilter {
+    from: Option<String>,
+    to: Option<String>,
+    category: Option<i64>,
+    /// `income` or `expense`.
+    kind: Option<String>,
+}
+
+impl TxFilter {
+    fn parse(a: &Map<String, Value>) -> Result<TxFilter, String> {
+        let kind = string(a, "type")?;
+        if !matches!(kind.as_deref(), None | Some("income") | Some("expense")) {
+            return Err("type must be \"income\" or \"expense\"".into());
+        }
+        let (from, to) = (date(a, "from")?, date(a, "to")?);
+        if let (Some(f), Some(t)) = (from, to) {
+            if f > t {
+                return Err("from is after to".into());
+            }
+        }
+        let day = |d: NaiveDate| d.format("%Y-%m-%d").to_string();
+        Ok(TxFilter {
+            from: from.map(day),
+            to: to.map(day),
+            category: int(a, "category_id")?,
+            kind,
+        })
+    }
+
+    fn matches(&self, cats: &[Category], t: &Transaction) -> bool {
+        self.from.as_ref().is_none_or(|f| t.date >= *f)
+            && self.to.as_ref().is_none_or(|x| t.date <= *x)
+            && self.category.is_none_or(|c| t.category_id == Some(c))
+            && match self.kind.as_deref() {
+                Some("income") => is_income(cats, t),
+                Some(_) => !is_income(cats, t),
+                None => true,
+            }
+    }
+}
+
+/// The categories and the matching transactions, newest first (date, then id, descending).
+async fn matching(db: &Db, f: &TxFilter) -> Result<(Vec<Category>, Vec<Transaction>), String> {
+    // Make charges that came due real transactions first, like the app's own list does. Not
+    // attributed to MCP: it is the server's housekeeping, not this caller's change.
+    oplog::ACTOR
+        .scope(None, settle(db))
+        .await
+        .map_err(api_err)?;
+    let cats = db.list_categories().await.map_err(|e| e.to_string())?;
+    let all = db.list_transactions().await.map_err(|e| e.to_string())?;
+    let hits = all.into_iter().filter(|t| f.matches(&cats, t)).collect();
+    Ok((cats, hits))
+}
+
+async fn list_transactions(db: &Db, a: Map<String, Value>) -> Result<Reply, String> {
     only_keys(
         &a,
-        &["limit", "cursor", "type", "from", "to", "category_id"],
+        &[
+            "limit",
+            "cursor",
+            "type",
+            "from",
+            "to",
+            "category_id",
+            "detail",
+        ],
     )?;
     let limit = page_limit(&a)?;
-    let kind = string(&a, "type")?;
-    if !matches!(kind.as_deref(), None | Some("income") | Some("expense")) {
-        return Err("type must be \"income\" or \"expense\"".into());
-    }
-    let (from, to) = (date(&a, "from")?, date(&a, "to")?);
-    if let (Some(f), Some(t)) = (from, to) {
-        if f > t {
-            return Err("from is after to".into());
-        }
-    }
-    let category = int(&a, "category_id")?;
+    let full = full_detail(&a)?;
+    let filter = TxFilter::parse(&a)?;
     let after = match string(&a, "cursor")? {
         None => None,
         Some(c) => {
@@ -449,34 +589,12 @@ async fn list_transactions(db: &Db, a: Map<String, Value>) -> Result<Value, Stri
             Some((d.to_string(), id.parse::<i64>().map_err(|_| "bad cursor")?))
         }
     };
-    // Make charges that came due real transactions first, like the app's own list does. Not
-    // attributed to MCP: it is the server's housekeeping, not this caller's change.
-    oplog::ACTOR
-        .scope(None, settle(db))
-        .await
-        .map_err(api_err)?;
-    let cats = db.list_categories().await.map_err(|e| e.to_string())?;
-    let (fs, ts) = (
-        from.map(|d| d.format("%Y-%m-%d").to_string()),
-        to.map(|d| d.format("%Y-%m-%d").to_string()),
-    );
-    // Already newest first: date, then id, descending. Pages are keyed on (date, id) rather than
-    // an offset, so a transaction added or deleted between two calls cannot shift the pages.
-    let all = db.list_transactions().await.map_err(|e| e.to_string())?;
-    let matching: Vec<&Transaction> = all
+    let (cats, hits) = matching(db, &filter).await?;
+    let total = hits.len();
+    // Pages are keyed on (date, id) rather than an offset, so a transaction added or deleted
+    // between two calls cannot shift the pages.
+    let rest: Vec<&Transaction> = hits
         .iter()
-        .filter(|t| fs.as_ref().is_none_or(|f| t.date >= *f))
-        .filter(|t| ts.as_ref().is_none_or(|x| t.date <= *x))
-        .filter(|t| category.is_none_or(|c| t.category_id == Some(c)))
-        .filter(|t| match kind.as_deref() {
-            Some("income") => is_income(&cats, t),
-            Some(_) => !is_income(&cats, t),
-            None => true,
-        })
-        .collect();
-    let total = matching.len();
-    let rest: Vec<&Transaction> = matching
-        .into_iter()
         .filter(|t| {
             after
                 .as_ref()
@@ -488,15 +606,181 @@ async fn list_transactions(db: &Db, a: Map<String, Value>) -> Result<Value, Stri
         .then(|| page.last())
         .flatten()
         .map(|t| encode_cursor(&format!("{}|{}", t.date, t.id)));
+    if !full {
+        return Ok(Reply::text(
+            compact_transactions(db, &cats, &page, total, next.as_deref()).await?,
+        ));
+    }
     let items = describe(db, &page).await?;
-    Ok(json!({
+    Ok(Reply::json(json!({
         "transactions": items,
         "returned": page.len(),
         "total_matching": total,
         "limit": limit,
         "order": "date desc, id desc",
         "next_cursor": next,
-    }))
+    })))
+}
+
+/// One line per transaction with only what answers a question; `get_transaction` has the rest.
+async fn compact_transactions(
+    db: &Db,
+    cats: &[Category],
+    page: &[Transaction],
+    total: usize,
+    next: Option<&str>,
+) -> Result<String, String> {
+    let e = |e: anyhow::Error| e.to_string();
+    let fx = db.list_tx_fx().await.map_err(e)?;
+    let links = db.business_links().await.map_err(e)?;
+    let businesses = db.list_businesses().await.map_err(e)?;
+    let mut out = format!(
+        "Transactions, newest first: returned {} of {total} matching. next_cursor: {}\n\
+         Columns: id|date|amount in shekels (expenses negative)|category id and path|note|extras\n",
+        page.len(),
+        next.unwrap_or("none (no more)")
+    );
+    for t in page {
+        let cat = t
+            .category_id
+            .and_then(|id| cats.iter().find(|x| x.id == id));
+        let mut extras = Vec::new();
+        if let Some(f) = fx.iter().find(|f| f.transaction_id == t.id) {
+            let d = crate::fx::decimals(&f.currency);
+            let units = 10u64.pow(d);
+            let abs = f.orig_minor.unsigned_abs();
+            let amount = if d == 0 {
+                abs.to_string()
+            } else {
+                format!("{}.{:0w$}", abs / units, abs % units, w = d as usize)
+            };
+            extras.push(format!(
+                "foreign {amount} {}{}",
+                f.currency,
+                if f.estimated { " (estimated rate)" } else { "" }
+            ));
+        }
+        let biz = links
+            .transactions
+            .iter()
+            .find(|(tid, _)| *tid == t.id)
+            .map(|(_, b)| *b)
+            .or_else(|| business_via_category(&links, cats, cat));
+        if let Some(name) = biz.and_then(|b| businesses.iter().find(|x| x.id == b)) {
+            extras.push(format!("business {}", cell(&name.name)));
+        }
+        if t.recurring_series_id.is_some() {
+            extras.push("recurring".to_string());
+        }
+        out.push_str(&format!(
+            "{}|{}|{}|{}|{}",
+            t.id,
+            t.date,
+            money(t.amount_agorot),
+            cat.map(|c| format!("{} {}", c.id, cell(&category_path(cats, c, " > "))))
+                .unwrap_or_default(),
+            cell(&t.note),
+        ));
+        if !extras.is_empty() {
+            out.push('|');
+            out.push_str(&extras.join("; "));
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The business a category (or its parent) is linked to.
+fn business_via_category<'a>(
+    links: &crate::storage::BusinessLinks,
+    cats: &'a [Category],
+    mut cur: Option<&'a Category>,
+) -> Option<i64> {
+    while let Some(x) = cur {
+        if let Some((_, b)) = links.categories.iter().find(|(cid, _)| *cid == x.id) {
+            return Some(*b);
+        }
+        cur = x.parent_id.and_then(|p| cats.iter().find(|y| y.id == p));
+    }
+    None
+}
+
+/// Counts and totals instead of rows, for "how much did we spend on ..." questions.
+async fn summarize_transactions(db: &Db, a: Map<String, Value>) -> Result<Reply, String> {
+    only_keys(&a, &["from", "to", "type", "category_id", "group_by"])?;
+    let filter = TxFilter::parse(&a)?;
+    let group = string(&a, "group_by")?.unwrap_or_else(|| "category".into());
+    if !matches!(group.as_str(), "category" | "month" | "category_month") {
+        return Err("group_by must be category, month or category_month".into());
+    }
+    let (cats, hits) = matching(db, &filter).await?;
+    let label = |t: &Transaction| match t
+        .category_id
+        .and_then(|id| cats.iter().find(|c| c.id == id))
+    {
+        Some(c) => cell(&category_path(&cats, c, " > ")),
+        None => "(no category)".to_string(),
+    };
+    // (month, category) -> (count, total); an empty part when it is not a grouping key.
+    let mut groups: std::collections::BTreeMap<(String, String), (usize, i64)> = Default::default();
+    let (mut income, mut expense) = (0i64, 0i64);
+    for t in &hits {
+        let month = if group == "category" {
+            String::new()
+        } else {
+            t.date[..7].to_string()
+        };
+        let cat = if group == "month" {
+            String::new()
+        } else {
+            label(t)
+        };
+        let g = groups.entry((month, cat)).or_default();
+        g.0 += 1;
+        g.1 += t.amount_agorot;
+        if is_income(&cats, t) {
+            income += t.amount_agorot;
+        } else {
+            expense += t.amount_agorot;
+        }
+    }
+    // Months newest first, then the biggest totals first.
+    let mut rows: Vec<_> = groups.into_iter().collect();
+    rows.sort_by(|a, b| {
+        b.0 .0
+            .cmp(&a.0 .0)
+            .then(b.1 .1.abs().cmp(&a.1 .1.abs()))
+            .then(a.0 .1.cmp(&b.0 .1))
+    });
+    let range = match (&filter.from, &filter.to) {
+        (None, None) => "all dates".to_string(),
+        (f, t) => format!(
+            "{} to {}",
+            f.as_deref().unwrap_or("start"),
+            t.as_deref().unwrap_or("now")
+        ),
+    };
+    let columns = match group.as_str() {
+        "category" => "category path|count|total in shekels",
+        "month" => "month|count|total in shekels",
+        _ => "month|category path|count|total in shekels",
+    };
+    let mut out = format!(
+        "Summary, {range}: {} transactions, net total {} (income {}, expenses {}). Amounts in shekels, expenses negative.\nColumns: {columns}\n",
+        hits.len(),
+        money(income + expense),
+        money(income),
+        money(expense),
+    );
+    for ((month, cat), (count, total)) in rows {
+        let key = match group.as_str() {
+            "category" => cat,
+            "month" => month,
+            _ => format!("{month}|{cat}"),
+        };
+        out.push_str(&format!("{key}|{count}|{}\n", money(total)));
+    }
+    Ok(Reply::text(out))
 }
 
 async fn find_transaction(db: &Db, id: i64) -> Result<Transaction, String> {
@@ -798,7 +1082,7 @@ fn describe_one(t: &Transaction, c: &Context) -> Value {
         "currency": "ILS",
         "type": if is_income(&c.cats, t) { "income" } else { "expense" },
         "category": cat.map(|x| json!({
-            "id": x.id, "name": x.name, "path": category_path(&c.cats, x),
+            "id": x.id, "name": x.name, "path": category_path(&c.cats, x, " › "),
             "type": if x.is_income { "income" } else { "expense" },
         })),
         "payment_method": pm.map(|p| json!({"id": p.id, "name": p.name})),
