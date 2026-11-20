@@ -32,6 +32,9 @@ pub struct Mail {
     pub raw: std::sync::Arc<[u8]>,
 }
 
+/// The zone whose calendar day an email's date is read in.
+const LOCAL_TZ: chrono_tz::Tz = chrono_tz::Asia::Jerusalem;
+
 pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
     let msg = MessageParser::default()
         .parse(raw)
@@ -49,8 +52,11 @@ pub fn parse_raw(raw: &[u8]) -> Result<Mail> {
     let subject = msg.subject().unwrap_or("").to_string();
     let received = msg
         .date()
-        .map(|d| format!("{:04}-{:02}-{:02}", d.year, d.month, d.day))
-        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        .and_then(|d| chrono::DateTime::from_timestamp(d.to_timestamp(), 0))
+        .unwrap_or_else(chrono::Utc::now)
+        .with_timezone(&LOCAL_TZ)
+        .format("%Y-%m-%d")
+        .to_string();
     let text = collapse(&msg.body_text(0).unwrap_or_default());
     let text: String = text.chars().take(MAX_TEXT).collect();
     let html: String = msg
@@ -143,5 +149,28 @@ impl Mail {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_raw;
+
+    fn day(date: &str) -> String {
+        parse_raw(format!("From: a@b.c\r\nDate: {date}\r\n\r\nhi\r\n").as_bytes())
+            .unwrap()
+            .received
+    }
+
+    #[test]
+    fn the_email_date_is_read_as_a_calendar_day_in_israel() {
+        // 22:30 UTC on the 1st is 00:30 on the 2nd in Israel (winter, +0200).
+        assert_eq!(day("Sun, 01 Mar 2026 22:30:00 +0000"), "2026-03-02");
+        assert_eq!(day("Sun, 01 Mar 2026 21:30:00 +0000"), "2026-03-01");
+        // Early morning in Tokyo is still the previous day in Israel.
+        assert_eq!(day("Mon, 02 Mar 2026 06:00:00 +0900"), "2026-03-01");
+        // Summer time (+0300): 21:30 UTC on 1 July is 00:30 on the 2nd.
+        assert_eq!(day("Wed, 01 Jul 2026 21:30:00 +0000"), "2026-07-02");
+        assert_eq!(day("Mon, 02 Mar 2026 10:00:00 +0000"), "2026-03-02");
     }
 }

@@ -63,7 +63,7 @@ async fn gemini(State(w): State<W>, Json(b): Json<Value>) -> (StatusCode, Json<V
         return reply("not json at all".into());
     }
     let txs = if prompt.contains("receipt") || pdfs > 0 {
-        json!([{ "amount": 12.5, "currency": "ILS", "date": "2026-03-01", "note": "Corner shop", "category": "Food > Groceries", "confidence": if prompt.contains("sure") { "high" } else { "medium" } }])
+        json!([{ "amount": 12.5, "currency": "ILS", "note": "Corner shop", "category": "Food > Groceries", "confidence": if prompt.contains("sure") { "high" } else { "medium" } }])
     } else {
         json!([])
     };
@@ -159,7 +159,7 @@ async fn a_receipt_becomes_one_suggestion_and_is_handled_once() {
             p.date.as_str(),
             p.received.as_str()
         ),
-        (-1250, "ILS", "2026-03-01", "2026-03-02")
+        (-1250, "ILS", "2026-03-02", "2026-03-02")
     );
     assert_eq!(
         (p.sender.as_str(), p.subject.as_str(), p.message_id.as_str()),
