@@ -1,4 +1,5 @@
 use super::error::{internal, ApiError};
+use super::mirroring::trigger_mirror;
 use super::transactions::{resolve_body, TxBody};
 use super::{settle, today, Db};
 use crate::recurring;
@@ -91,6 +92,9 @@ pub(crate) async fn settle_recurring_month(
     recurring::settle_month(db.as_ref(), series_id, &month, &t, fx.as_ref())
         .await
         .map_err(recurring_error)?;
+    // The month is now an ordinary `pending` transaction: send it to Paamonim, or it waits
+    // (spinner and all) until some other change happens to trigger a mirror run.
+    trigger_mirror(&db);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -122,4 +126,49 @@ pub(crate) async fn cancel_recurring(
         .await
         .map_err(recurring_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oplog::Logged;
+    use crate::recurring::NewRecurring;
+    use std::sync::Arc;
+
+    /// Editing one month on its own leaves a `pending` transaction for the mirror to pick up
+    /// (the handler then triggers the mirror, like every other save).
+    #[tokio::test]
+    async fn editing_one_month_leaves_a_pending_line_for_the_mirror() {
+        let db: Db = Arc::new(Logged(Arc::new(crate::testdb::fresh().await)));
+        let month = today().format("%Y-%m").to_string();
+        let series = recurring::create(
+            db.as_ref(),
+            &NewRecurring {
+                start_month: month.clone(),
+                end_month: None,
+                day: 28,
+                amount_agorot: -50_000,
+                category_id: None,
+                payment_method_id: None,
+                note: String::new(),
+                currency: None,
+                orig_minor: None,
+            },
+        )
+        .await
+        .unwrap();
+        let t = crate::storage::NewTransaction {
+            date: today().format("%Y-%m-%d").to_string(),
+            amount_agorot: -40_000,
+            category_id: None,
+            payment_method_id: None,
+            note: "once".into(),
+        };
+        recurring::settle_month(db.as_ref(), series, &month, &t, None)
+            .await
+            .unwrap();
+        let pending = db.pending_mirrors().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].amount_agorot, -40_000);
+    }
 }
