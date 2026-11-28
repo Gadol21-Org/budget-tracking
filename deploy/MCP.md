@@ -11,6 +11,26 @@ The endpoint has **no login**: anyone who can reach it can read and change every
 3. The other service calls `http://budget-tracking:3000/mcp` (the container's own port, by container name). Do **not** use `127.0.0.1:8082` from another container: that is its own loopback.
 4. **Do not add a Cloudflare Access bypass for `/mcp`.** On the public hostname it then stays behind Access like the rest of the app. A client on your own machine can reach it through `cloudflared access` or an SSH tunnel to `127.0.0.1:8082`.
 
+## Reaching it from Claude Code on your own machine (Cloudflare Access service token)
+
+Claude Code speaks the same Streamable HTTP this endpoint implements (JSON answers, `202` for notifications, `405` for the optional `GET` stream, which clients accept), so no code change is needed. It only has to get past Access, and a command line client cannot do the browser login. Use a **service token** on a separate Access application that covers only `/mcp`, so the token can never reach the rest of the app. This is not a bypass: Access still checks the token on every request.
+
+1. Zero Trust > Access controls > Service credentials > Service tokens > **Create service token** (name e.g. `claude-code-mcp`, pick a duration). Copy the Client ID and Client Secret now; the secret is shown once.
+2. Zero Trust > Access controls > Applications > **Add an application** > Self-hosted. Destination: your hostname (e.g. `budget.example.com`) with path `mcp`. The more specific path takes priority over the existing whole-host application, which keeps its email policy for people.
+3. Add one policy to that application: Action **Service Auth**, Include > Service Token > the token from step 1. (A plain Allow policy does not accept tokens.) Do not add any other policy.
+4. Register it in Claude Code, keeping the secret out of files that get committed:
+
+```
+claude mcp add --transport http budget https://budget.example.com/mcp \
+  --header "CF-Access-Client-Id: <client id>" \
+  --header "CF-Access-Client-Secret: <client secret>"
+```
+
+   By default this is stored in your private local Claude Code config. Do not use `--scope project`, which writes it to `.mcp.json` in the repo.
+5. In Claude Code, `/mcp` should list `budget` as connected. To rotate: create a new token, update the policy, re-run `claude mcp add`, delete the old token.
+
+Anyone holding the token can read and change all transactions, so treat it like a password. A request through the token has no user email; changes are logged as `mcp` either way. Access's "Managed OAuth" is the alternative (browser sign-in, short-lived tokens, no stored secret), but it needs the MCP client to support OAuth resource indicators, applies to the whole application and turns its 302 into a 401, so the service token is the simpler and more predictable choice here.
+
 Guards that remain: a request with an `Origin` header (a browser cross-site call) is refused with 403 and a body that is not `application/json` with 415, so a web page cannot drive it even from a browser that can reach it. Staging (sample data only) has no Access in front of it, so there anyone who finds the port can use it.
 
 ## What it does
